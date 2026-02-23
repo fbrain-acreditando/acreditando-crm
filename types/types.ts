@@ -155,7 +155,7 @@ export interface Contact {
   clientCompanyId?: ClientCompanyId; // CRM company this contact belongs to
   name: string;
   role?: string;
-  email: string;
+  email?: string;
   phone: string;
   avatar?: string;
   lastInteraction?: string;

@@ -133,7 +133,6 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
             <input
-              required
               type="email"
               className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-primary-500"
               placeholder="ana@empresa.com"
@@ -147,6 +146,7 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
                 Telefone
               </label>
               <input
+                required
                 type="text"
                 className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-primary-500"
                 placeholder="+5511999999999"

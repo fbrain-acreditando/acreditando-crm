@@ -186,7 +186,7 @@ export const useContactsController = () => {
     const company = companies.find(c => c.id === contact.companyId);
     setFormData({
       name: contact.name,
-      email: contact.email,
+      email: contact.email || '',
       phone: contact.phone,
       role: contact.role || '',
       companyName: company?.name || '',

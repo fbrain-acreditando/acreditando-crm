@@ -159,6 +159,19 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
     }
   }, [isOpen, dealId]); // Depend on dealId to reset when switching deals
 
+  // Sync local edit state when deal data changes externally (e.g., Realtime update)
+  useEffect(() => {
+    if (deal && !isEditingTitle) {
+      setEditTitle(deal.title);
+    }
+  }, [deal?.title, isEditingTitle]);
+
+  useEffect(() => {
+    if (deal && !isEditingValue) {
+      setEditValue(deal.value.toString());
+    }
+  }, [deal?.value, isEditingValue]);
+
   // UX: preselect board's default product when opening the Products tab (non-invasive).
   useEffect(() => {
     if (!isOpen) return;
@@ -410,13 +423,13 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                   <h2
                     id={headingId}
                     onClick={() => {
-                      setEditTitle(deal.title);
+                      setEditTitle(editTitle || deal.title);
                       setIsEditingTitle(true);
                     }}
                     className="text-2xl font-bold text-slate-900 dark:text-white font-display leading-tight cursor-pointer hover:text-primary-600 dark:hover:text-primary-400 flex items-center gap-2 group transition-colors"
                     title="Clique para editar"
                   >
-                    {deal.title}
+                    {editTitle || deal.title}
                     <Pencil size={16} className="opacity-0 group-hover:opacity-50 text-slate-400" />
                   </h2>
                 )}
@@ -440,13 +453,13 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                 ) : (
                   <p
                     onClick={() => {
-                      setEditValue(deal.value.toString());
+                      setEditValue(editValue || deal.value.toString());
                       setIsEditingValue(true);
                     }}
                     className="text-lg text-primary-600 dark:text-primary-400 font-mono font-bold cursor-pointer hover:underline decoration-dashed underline-offset-4"
                     title="Clique para editar valor"
                   >
-                    ${deal.value.toLocaleString()}
+                    ${Number(editValue || deal.value).toLocaleString()}
                   </p>
                 )}
               </div>
@@ -627,7 +640,18 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                             );
                           })()}
                       </p>
-                      <p className="text-slate-500 text-xs">{deal.contactEmail}</p>
+                      {contact?.phone && (
+                        <p className="text-slate-500 text-xs flex items-center gap-1">
+                          <Phone size={11} />
+                          {contact.phone}
+                        </p>
+                      )}
+                      {deal.contactEmail && (
+                        <p className="text-slate-500 text-xs flex items-center gap-1">
+                          <Mail size={11} />
+                          {deal.contactEmail}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
