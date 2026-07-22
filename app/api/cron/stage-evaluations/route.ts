@@ -55,7 +55,9 @@ export async function GET(req: Request) {
     .lt('attempts', MAX_ATTEMPTS)
     .order('created_at', { ascending: true })
     .limit(BATCH_SIZE)
-    .select('id, organization_id, conversation_id, deal_id, message_id, message_text');
+    // created_at precisa estar no select: o PostgREST exige a coluna do .order() no
+    // returning de uma mutation (senão 42703 "column created_at does not exist").
+    .select('id, organization_id, conversation_id, deal_id, message_id, message_text, created_at');
 
   if (claimError) {
     console.error('[Cron:stage-evaluations] Failed to claim batch:', claimError);
