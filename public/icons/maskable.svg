@@ -7,8 +7,5 @@
   </defs>
   <!-- Maskable: keep important content within the safe zone -->
   <rect width="512" height="512" fill="url(#g)"/>
-  <circle cx="256" cy="256" r="180" fill="rgba(255,255,255,0.14)"/>
-  <path d="M206 184h100c12 0 22 10 22 22v100c0 12-10 22-22 22H206c-12 0-22-10-22-22V206c0-12 10-22 22-22z" fill="#ffffff"/>
-  <path d="M224 232h64M224 272h64M224 312h40" stroke="#0f172a" stroke-width="18" stroke-linecap="round" opacity="0.85"/>
+  <text x="256" y="340" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="320" fill="#ffffff">A</text>
 </svg>
-

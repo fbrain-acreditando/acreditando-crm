@@ -1,5 +1,5 @@
 /**
- * @fileoverview Biblioteca de acessibilidade para o NossoCRM.
+ * @fileoverview Biblioteca de acessibilidade para o Acreditando CRM.
  * 
  * Este módulo fornece componentes e hooks para implementar acessibilidade
  * seguindo as diretrizes WCAG 2.1 Level AA.

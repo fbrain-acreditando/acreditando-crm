@@ -1,4 +1,4 @@
-# NossoCRM — Relatório de Auditoria
+# Acreditando CRM — Relatório de Auditoria
 Data: 2026-04-17 | Branch: feature/004-goal-oriented-agent | Modo: completo
 
 ## Sumário Executivo

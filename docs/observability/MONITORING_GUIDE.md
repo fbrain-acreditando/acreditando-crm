@@ -1,6 +1,6 @@
 # Observability & Monitoring Guide
 
-NossoCRM — Structured Logging, Health Checks, and HITL Alerting
+Acreditando CRM — Structured Logging, Health Checks, and HITL Alerting
 
 **Date**: 2026-04-09  
 **Status**: Complete  
@@ -10,7 +10,7 @@ NossoCRM — Structured Logging, Health Checks, and HITL Alerting
 
 ## Overview
 
-This guide documents the observability infrastructure for NossoCRM:
+This guide documents the observability infrastructure for Acreditando CRM:
 
 1. **Structured Logging** — JSON-formatted logs for Vercel Logs parsing
 2. **Health Check Endpoint** — `GET /api/health` for availability monitoring

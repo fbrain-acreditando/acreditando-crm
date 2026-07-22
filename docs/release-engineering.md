@@ -1,6 +1,6 @@
-# Release Engineering — NossoCRM
+# Release Engineering — Acreditando CRM
 
-Complete guide to release management, versioning, and changelog automation for NossoCRM.
+Complete guide to release management, versioning, and changelog automation for Acreditando CRM.
 
 ## Quick Start
 
@@ -234,7 +234,7 @@ v1.2.3
 | MINOR | New features (backward compatible) | v1.0.0 → v1.1.0 |
 | PATCH | Bug fixes | v1.0.0 → v1.0.1 |
 
-### NossoCRM Strategy
+### Acreditando CRM Strategy
 
 Currently in **0.x.y** (development phase):
 

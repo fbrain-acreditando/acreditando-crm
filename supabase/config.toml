@@ -1,7 +1,7 @@
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
 # working directory name when running `supabase init`.
 # NossoCRM - CRM multi-tenant SaaS
-project_id = "crmia"
+project_id = "acreditandocrm"
 
 [api]
 enabled = true
@@ -51,9 +51,9 @@ file_size_limit = "50MiB"
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "https://crmia.vercel.app"
+site_url = "https://acreditandocrm.vercel.app"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://crmia.vercel.app/**", "http://localhost:3000/**"]
+additional_redirect_urls = ["https://acreditandocrm.vercel.app/**", "http://localhost:3000/**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # If disabled, the refresh token will never expire.

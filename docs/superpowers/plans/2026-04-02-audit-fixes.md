@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Corrigir todos os problemas identificados na auditoria de qualidade do NossoCRM em três domínios: TanStack Query, Supabase, e Next.js/React.
+**Goal:** Corrigir todos os problemas identificados na auditoria de qualidade do Acreditando CRM em três domínios: TanStack Query, Supabase, e Next.js/React.
 
 **Architecture:** Três domínios independentes executados sequencialmente. Cada domínio tem suas próprias tasks. Sem mudanças de feature — só correções de padrão e qualidade.
 
@@ -317,7 +317,7 @@ grep -rL "'use client'" app/\(protected\)/*/page.tsx app/\(protected\)/page.tsx 
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Dashboard | NossoCRM',
+  title: 'Dashboard | Acreditando CRM',
 };
 ```
 
@@ -332,26 +332,26 @@ export const metadata: Metadata = {
   Para cada page Server Component, adicionar no topo (após imports existentes):
   ```ts
   import type { Metadata } from 'next';
-  export const metadata: Metadata = { title: '<Nome> | NossoCRM' };
+  export const metadata: Metadata = { title: '<Nome> | Acreditando CRM' };
   ```
 
   Títulos por page:
   - `/` (redirect page) → não precisa
-  - `/dashboard` → `Dashboard | NossoCRM`
-  - `/boards` → `Funis | NossoCRM`
-  - `/contacts` → `Contatos | NossoCRM`
-  - `/activities` → `Atividades | NossoCRM`
-  - `/inbox` → `Inbox | NossoCRM`
-  - `/decisions` → `Decisões | NossoCRM`
-  - `/messaging` → `Mensagens | NossoCRM`
-  - `/reports` → `Relatórios | NossoCRM`
-  - `/pipeline` → `Pipeline | NossoCRM`
-  - `/profile` → `Perfil | NossoCRM`
-  - `/settings` → `Configurações | NossoCRM`
-  - `/settings/ai` → `IA | Configurações | NossoCRM`
-  - `/settings/integracoes` → `Integrações | NossoCRM`
-  - `/settings/products` → `Produtos | NossoCRM`
-  - `/ai` → `AI Hub | NossoCRM`
+  - `/dashboard` → `Dashboard | Acreditando CRM`
+  - `/boards` → `Funis | Acreditando CRM`
+  - `/contacts` → `Contatos | Acreditando CRM`
+  - `/activities` → `Atividades | Acreditando CRM`
+  - `/inbox` → `Inbox | Acreditando CRM`
+  - `/decisions` → `Decisões | Acreditando CRM`
+  - `/messaging` → `Mensagens | Acreditando CRM`
+  - `/reports` → `Relatórios | Acreditando CRM`
+  - `/pipeline` → `Pipeline | Acreditando CRM`
+  - `/profile` → `Perfil | Acreditando CRM`
+  - `/settings` → `Configurações | Acreditando CRM`
+  - `/settings/ai` → `IA | Configurações | Acreditando CRM`
+  - `/settings/integracoes` → `Integrações | Acreditando CRM`
+  - `/settings/products` → `Produtos | Acreditando CRM`
+  - `/ai` → `AI Hub | Acreditando CRM`
   - `/deals/[dealId]/cockpit` → usar `generateMetadata`
 
 - [ ] **Step 3: Pages com `'use client'` — pular ou criar wrapper**
