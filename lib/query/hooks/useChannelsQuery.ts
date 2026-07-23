@@ -237,26 +237,36 @@ export function useToggleChannelStatusMutation() {
     }: {
       channelId: string;
       connect: boolean;
-    }): Promise<MessagingChannel> => {
-      const { data, error } = await supabase
+    }): Promise<void> => {
+      if (connect) {
+        // Conectar = reconciliar com o estado REAL do provedor. Gravar apenas
+        // 'connecting' no banco (comportamento antigo) deixava um canal já
+        // conectado no servidor preso em "Conectando..." para sempre, pois o
+        // webhook connection.update só dispara em MUDANÇA de estado.
+        const res = await fetch(`/api/messaging/channels/${channelId}/sync-status`, {
+          method: 'POST',
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error ?? 'Falha ao conectar o canal');
+        }
+        return;
+      }
+
+      // Desconectar é uma ação local: marca o canal como offline no CRM.
+      const { error } = await supabase
         .from('messaging_channels')
         .update({
-          status: connect ? 'connecting' : 'disconnected',
+          status: 'disconnected',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', channelId)
-        .select('*')
-        .single();
+        .eq('id', channelId);
 
       if (error) throw error;
-
-      return transformChannel(data as DbMessagingChannel);
     },
-    onSettled: (data) => {
+    onSettled: (_data, _err, { channelId }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.messagingChannels.all });
-      if (data) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.messagingChannels.detail(data.id) });
-      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.messagingChannels.detail(channelId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.messagingChannels.connected() });
     },
   });
