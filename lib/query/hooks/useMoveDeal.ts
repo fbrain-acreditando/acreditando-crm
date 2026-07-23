@@ -209,6 +209,9 @@ export const useMoveDeal = () => {
               });
 
               if (!copyError) {
+                // O deal criado pela automação NÃO tem update otimista — sem esta
+                // reconciliação (targeted) ele só apareceria no board de destino após F5.
+                queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
                 await activitiesService.create({
                   dealId,
                   dealTitle: deal.title,
@@ -219,6 +222,7 @@ export const useMoveDeal = () => {
                   completed: true,
                   user: { name: 'Sistema', avatar: '' },
                 } as Omit<Activity, 'id' | 'createdAt'>);
+                queryClient.invalidateQueries({ queryKey: queryKeys.activities.all });
               }
             }
           } catch (err) {

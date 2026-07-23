@@ -189,6 +189,11 @@ export const useDealsByBoard = (boardId: string) => {
     // Filtrar por boardId no cliente (compartilha cache mas retorna só os deals do board)
     select: selectForBoard,
     staleTime: 2 * 60 * 1000, // 2 minutes (same as useDealsView)
+    // Sempre reconcilia com o banco ao (re)entrar no board. Sem isto, dentro do
+    // staleTime a lista fica "fresh" e NÃO refaz fetch no mount — cards criados/
+    // movidos enquanto o Realtime não estava montado "somem" até um F5. O Realtime
+    // cuida dos deltas ao vivo; este refetch garante a lista autoritativa no mount.
+    refetchOnMount: 'always',
     enabled: !authLoading && !!user && !!boardId && !boardId.startsWith('temp-'),
   });
 };
@@ -333,9 +338,12 @@ export const useCreateDeal = () => {
       }
     },
     onSettled: () => {
-      // NÃO fazer invalidateQueries para deals - Realtime gerencia a sincronização
-      // Isso evita race conditions onde o refetch sobrescreve o cache otimista
-      // Apenas atualiza stats do dashboard
+      // Rede de segurança (invalidação TARGETED em deals, não global): reconcilia
+      // com o banco mesmo se o Realtime não disparar (tabela sem publication, tela
+      // sem subscription). A mutationFn já concluiu no servidor, então o refetch
+      // traz o deal novo E enriquece os campos vazios do otimismo. deals.all cobre
+      // DEALS_VIEW_KEY + a lista crua (dashboard/activities) + o detalhe.
+      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.stats });
     },
   });
@@ -378,10 +386,10 @@ export const useUpdateDeal = () => {
         queryClient.setQueryData(DEALS_VIEW_KEY, context.previousDeals);
       }
     },
-    onSettled: (_data, _error, { id }) => {
-      // NÃO fazer invalidateQueries para deals - Realtime gerencia a sincronização
-      // Apenas invalidar o detalhe específico se necessário
-      queryClient.invalidateQueries({ queryKey: queryKeys.deals.detail(id) });
+    onSettled: () => {
+      // Rede de segurança (targeted): reconcilia deals com o banco (cobre view +
+      // lista + detalhe) mesmo se o Realtime não disparar.
+      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
     },
   });
 };
@@ -459,7 +467,8 @@ export const useUpdateDealStatus = () => {
       }
     },
     onSettled: () => {
-      // NÃO fazer invalidateQueries - Realtime gerencia a sincronização
+      // Rede de segurança (targeted): reconcilia deals com o banco (não depender só do Realtime).
+      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.stats });
     },
   });
@@ -496,8 +505,8 @@ export const useDeleteDeal = () => {
       }
     },
     onSettled: () => {
-      // NÃO fazer invalidateQueries para deals - Realtime gerencia a sincronização
-      // Apenas atualiza stats do dashboard
+      // Rede de segurança (targeted): reconcilia deals com o banco (não depender só do Realtime).
+      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.stats });
     },
   });

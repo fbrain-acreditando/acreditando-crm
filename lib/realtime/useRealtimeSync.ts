@@ -524,8 +524,16 @@ export function useRealtimeSync(
               queryClient.setQueryData<DealView[]>(
                 DEALS_VIEW_KEY,
                 (old) => {
-                  if (!old || !Array.isArray(old)) return old;
-                  
+                  if (!old || !Array.isArray(old)) {
+                    // Cache ainda não existe (ex.: INSERT chegou antes do 1º fetch do
+                    // board). Em vez de DESCARTAR o evento, agenda um refetch pra buscar
+                    // o deal novo — senão o card só apareceria após F5.
+                    Promise.resolve().then(() =>
+                      queryClient.invalidateQueries({ queryKey: DEALS_VIEW_KEY })
+                    );
+                    return old;
+                  }
+
                   // Check if deal already exists (by real ID)
                   const existingIndex = old.findIndex((d) => d.id === dealId);
                   if (existingIndex !== -1) {

@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect } from 'react'
 
 import { QueryProvider } from '@/lib/query'
+import RealtimeBridge from '@/components/RealtimeBridge'
 import { ToastProvider } from '@/context/ToastContext'
 import { ThemeProvider } from '@/context/ThemeContext'
 import { AuthProvider } from '@/context/AuthContext'
@@ -64,6 +65,8 @@ export default function ProtectedShell({
             <ToastProvider>
                 <ThemeProvider>
                     <AuthProvider>
+                        {/* Realtime global: TODAS as telas recebem push ao vivo, não só board/inbox. */}
+                        <RealtimeBridge />
                         <AIProvider>
                             <TooltipProvider delayDuration={200}>
                                 {shouldUseAppShell ? <Layout>{children}</Layout> : children}
