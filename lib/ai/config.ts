@@ -13,37 +13,55 @@ import { AI_DEFAULT_MODELS, AI_DEFAULT_PROVIDER } from './defaults';
 
 export type AIProvider = 'google';
 
-const ALLOWED_GOOGLE_MODELS = new Set([
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-pro',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-2.5-pro-preview-03-25',
-  'gemini-2.5-flash-preview-04-17',
-]);
+/**
+ * Formato válido de ID de modelo Google Gemini.
+ *
+ * Substitui a antiga lista branca fixa (`ALLOWED_GOOGLE_MODELS`), que congelava
+ * os nomes de modelo no código: quando o Google aposentava uma versão, o CRM
+ * caía no modelo padrão — que também acabava aposentado — e TODA a IA
+ * respondia HTTP 404 (`This model is no longer available`), sem que nenhuma
+ * configuração no painel pudesse corrigir.
+ *
+ * A lista real de modelos vem de `GET /api/ai/models`, que consulta a conta do
+ * cliente na hora. Aqui validamos apenas o FORMATO — o motivo pelo qual a lista
+ * branca existia: o ID é interpolado na URL da API do Google, então precisa ser
+ * blindado contra path traversal e injeção de caminho/query.
+ */
+const GOOGLE_MODEL_ID_PATTERN = /^gemini-[a-z0-9.-]+$/;
+const GOOGLE_MODEL_ID_MAX_LENGTH = 80;
+
+/**
+ * Valida o formato de um ID de modelo Google.
+ *
+ * @param modelId - ID do modelo a validar.
+ * @returns `true` se o ID for seguro para uso na URL da API.
+ */
+export const isValidGoogleModelId = (modelId: string): boolean =>
+    typeof modelId === 'string' &&
+    modelId.length > 0 &&
+    modelId.length <= GOOGLE_MODEL_ID_MAX_LENGTH &&
+    GOOGLE_MODEL_ID_PATTERN.test(modelId);
 
 /**
  * Cria e retorna uma instância do modelo de IA configurada.
  * 
- * Suporta múltiplos provedores com modelos padrão:
- * - Google: gemini-3-flash-preview
- * - OpenAI: gpt-4o
- * - Anthropic: claude-3-5-sonnet-20240620
- * 
+ * Provedor único: Google Gemini. O modelo vem de `organization_settings.ai_model`
+ * (escolhido pelo usuário na Central de I.A.); se estiver vazio ou em formato
+ * inválido, cai no padrão `AI_DEFAULT_MODELS.google`.
+ *
  * @param provider - Provedor de IA a ser utilizado.
  * @param apiKey - Chave de API do provedor.
  * @param modelId - ID do modelo específico (opcional, usa padrão se não informado).
  * @returns Instância configurada do modelo de IA.
- * @throws Error se a API key não for fornecida ou provedor não for suportado.
- * 
+ * @throws Error se a API key não for fornecida.
+ *
  * @example
  * ```typescript
- * // Usando Google Gemini
- * const model = getModel('google', 'sua-api-key', 'gemini-3-pro-preview');
- * 
- * // Usando OpenAI com modelo padrão
- * const model = getModel('openai', 'sua-api-key', '');
+ * // Modelo escolhido pelo usuário
+ * const model = getModel('google', 'sua-api-key', 'gemini-3-flash-preview');
+ *
+ * // Sem modelo → usa o padrão (alias -latest)
+ * const model = getModel('google', 'sua-api-key', '');
  * ```
  */
 export const getModel = (provider: AIProvider, apiKey: string, modelId: string) => {
@@ -51,7 +69,7 @@ export const getModel = (provider: AIProvider, apiKey: string, modelId: string) 
         throw new Error('API Key is missing');
     }
 
-    const resolvedModel = modelId && ALLOWED_GOOGLE_MODELS.has(modelId)
+    const resolvedModel = isValidGoogleModelId(modelId)
         ? modelId
         : AI_DEFAULT_MODELS.google;
 
