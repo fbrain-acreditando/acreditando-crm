@@ -95,3 +95,21 @@ enabled = false
 # portanto desabilitamos a verificação de JWT.
 [functions.webhook-in]
 verify_jwt = false
+
+# Webhooks de mensageria (WhatsApp/Instagram/Email). Os provedores (Evolution,
+# Z-API, Meta, Resend) chamam estes endpoints SEM um JWT do Supabase — enviam
+# apenas a própria apikey (validada dentro da função). Sem isto, o gateway do
+# Supabase rejeita toda entrega com 401 antes da função rodar, e nenhuma
+# mensagem recebida chega ao CRM. A autenticação real acontece na função,
+# comparando o header apikey/x-api-key com o segredo do canal.
+[functions.messaging-webhook-evolution]
+verify_jwt = false
+
+[functions.messaging-webhook-zapi]
+verify_jwt = false
+
+[functions.messaging-webhook-meta]
+verify_jwt = false
+
+[functions.messaging-webhook-resend]
+verify_jwt = false
