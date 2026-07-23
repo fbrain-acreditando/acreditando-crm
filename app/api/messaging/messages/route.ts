@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createStaticAdminClient } from '@/lib/supabase/staticAdminClient';
 // Import from main module to ensure providers are registered
@@ -120,15 +120,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fire-and-forget: send to provider without blocking the response.
-    // Uses createStaticAdminClient (service role, no request context needed)
-    // because the standard createClient depends on next/headers which is
-    // unavailable after the response has been sent.
+    // Envia ao provedor sem bloquear a resposta, mas via `after()` do Next.js.
+    //
+    // ⚠️ Antes isto era um `void (async () => {...})()` disparado após o return.
+    // No Vercel serverless a instância é congelada assim que a resposta sai, o
+    // que matava o envio no meio: a mensagem atualizava para 'queued' (1º await)
+    // e nunca chegava a chamar router.sendMessage -> ficava presa em 'queued',
+    // sem external_id e sem erro. `after()` garante que o Vercel mantenha a
+    // função viva até este trabalho terminar.
+    //
+    // Usa createStaticAdminClient (service role, sem contexto de request) porque
+    // o createClient padrão depende de next/headers, indisponível após a resposta.
     const router = getChannelRouter();
     const messageId = dbMessage.id;
     const channelId = channel.id;
 
-    void (async () => {
+    after(async () => {
       const supabaseAdmin = createStaticAdminClient();
       try {
         await supabaseAdmin
@@ -190,7 +197,7 @@ export async function POST(request: NextRequest) {
       } catch (err: unknown) {
         console.error('[messaging/messages] background send failed:', err instanceof Error ? err.message : err, err instanceof Error ? err.stack : '');
       }
-    })();
+    });
 
     // Respond immediately with pending message — UI updates via realtime
     return NextResponse.json(transformMessage(dbMessage as DbMessagingMessage));
