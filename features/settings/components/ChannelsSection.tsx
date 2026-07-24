@@ -109,9 +109,11 @@ function getSupabaseProjectRef(): string {
 
 const WEBHOOK_FUNCTION_MAP: Record<string, string> = {
   'z-api': 'messaging-webhook-zapi',
+  'evolution': 'messaging-webhook-evolution',
   'meta-cloud': 'messaging-webhook-meta',
   'meta': 'messaging-webhook-meta',
   'resend': 'messaging-webhook-resend',
+  'gptmaker': 'messaging-webhook-gptmaker',
 };
 
 interface WebhookField {
@@ -162,6 +164,23 @@ const WEBHOOK_CONFIGS: Record<string, {
     ],
     toggles: ['Inscreva-se no campo: messages'],
   },
+  'gptmaker': {
+    title: 'Webhook do GPT Maker (o CRM configura sozinho)',
+    where:
+      'Use o botão "Sincronizar" no card — o CRM registra a URL no agente via API. A URL real leva um segredo (?key=) que não é exibido aqui.',
+    docsUrl: 'https://developer.gptmaker.ai/api-reference/agents/webhooks',
+    fields: [
+      {
+        label: 'onFirstInteraction / onTransfer / onNewMessage',
+        description: 'Registrados automaticamente no agente pelo botão Sincronizar',
+        required: true,
+      },
+    ],
+    toggles: [
+      'Os webhooks do GPT Maker valem para o AGENTE inteiro — se ele atende outros canais, os eventos deles também chegam aqui.',
+      'Se preferir colar à mão no painel do GPT Maker, peça a URL completa com o segredo — sem o ?key= o CRM rejeita a entrega.',
+    ],
+  },
   'resend': {
     title: 'Configurar Webhook no Resend',
     where: 'Acesse resend.com → Dashboard → Webhooks → Add Webhook',
@@ -172,6 +191,124 @@ const WEBHOOK_CONFIGS: Record<string, {
     toggles: ['Selecione os eventos: email.sent, email.delivered, email.opened, email.bounced'],
   },
 };
+
+// =============================================================================
+// GPT MAKER — SINCRONIZAÇÃO
+// =============================================================================
+
+interface GptMakerSyncReport {
+  webhooks: { configured: boolean; url: string | null; error: string | null };
+  chats: { found: number; imported: number; skipped: number };
+  messages: { imported: number };
+  deals: { created: number };
+  errors: string[];
+  error?: string;
+}
+
+/**
+ * Registra os webhooks no agente do GPT Maker e importa o histórico recente.
+ *
+ * Existe porque, só com o webhook, o canal fica conectado e silencioso: a plataforma
+ * é orientada a evento, então conversa que já existia lá nunca apareceria — e a URL
+ * do webhook precisaria ser colada à mão no painel (com o `?key=`, fácil de perder).
+ * Como o CRM já tem o token e o agentId, ele faz as duas coisas sozinho.
+ */
+function GptMakerSyncPanel({ channelId }: { channelId: string }) {
+  const { addToast } = useToast();
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [report, setReport] = useState<GptMakerSyncReport | null>(null);
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    setReport(null);
+
+    try {
+      const response = await fetch(`/api/messaging/channels/${channelId}/gptmaker/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxChats: 20 }),
+      });
+
+      const data: GptMakerSyncReport = await response.json();
+      setReport(data);
+
+      if (!response.ok) {
+        addToast(data.error || 'Falha ao sincronizar', 'error');
+      } else if (data.chats.imported > 0 || data.messages.imported > 0) {
+        addToast(
+          `${data.chats.imported} conversa(s) e ${data.messages.imported} mensagem(ns) importadas`,
+          'success'
+        );
+      } else {
+        addToast('Sincronizado — nenhuma conversa nova encontrada', 'info');
+      }
+    } catch {
+      addToast('Erro de rede ao sincronizar', 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h5 className="text-xs font-semibold text-purple-800 dark:text-purple-200 flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5" />
+            Sincronizar com o GPT Maker
+          </h5>
+          <p className="text-[11px] text-purple-700 dark:text-purple-300 mt-1">
+            Registra os webhooks no agente e importa as conversas recentes. Sem isso o canal
+            fica conectado, mas nada chega.
+          </p>
+        </div>
+        <button
+          onClick={handleSync}
+          disabled={isSyncing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold flex-shrink-0
+            bg-purple-600 text-white hover:bg-purple-700 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={cn('w-3.5 h-3.5', isSyncing && 'animate-spin')} />
+          {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+        </button>
+      </div>
+
+      {report && (
+        <div className="text-[11px] space-y-1 pt-2 border-t border-purple-200 dark:border-purple-500/20">
+          <p className={report.webhooks.configured ? 'text-green-700 dark:text-green-300' : 'text-amber-700 dark:text-amber-300'}>
+            {report.webhooks.configured ? '✅' : '⚠️'} Webhooks:{' '}
+            {report.webhooks.configured
+              ? 'registrados no agente'
+              : report.webhooks.error || 'não registrados'}
+          </p>
+          <p className="text-purple-700 dark:text-purple-300">
+            📥 Conversas: {report.chats.imported} importadas de {report.chats.found} encontradas
+            {report.chats.skipped > 0 ? ` · ${report.chats.skipped} puladas` : ''}
+          </p>
+          <p className="text-purple-700 dark:text-purple-300">
+            💬 Mensagens: {report.messages.imported} importadas
+          </p>
+          {report.errors.length > 0 && (
+            <details className="text-red-700 dark:text-red-300">
+              <summary className="cursor-pointer">
+                {report.errors.length} erro(s) — ver detalhes
+              </summary>
+              <ul className="mt-1 space-y-0.5 pl-3">
+                {report.errors.slice(0, 8).map((err, idx) => (
+                  <li key={idx}>• {err}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <p className="text-slate-500 dark:text-slate-400 pt-1">
+            A importação não cria deals — o funil recebe os leads pelas mensagens novas, via
+            regra de Entrada de Leads.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function WebhookInfo({ channelId, provider, verifyToken }: { channelId: string; provider: string; verifyToken?: string }) {
   const { addToast } = useToast();
@@ -468,6 +605,12 @@ function ChannelCard({
           provider={channel.provider}
           verifyToken={(channel.settings?.verifyToken || channel.credentials?.verifyToken) as string | undefined}
         />
+
+        {/* GPT Maker: registra os webhooks no agente e importa o histórico.
+            Sem isto o canal fica conectado mas silencioso — o webhook precisaria ser
+            colado à mão, e conversa que já existia lá nunca apareceria (o webhook só
+            reage a mensagem nova). */}
+        {channel.provider === 'gptmaker' && <GptMakerSyncPanel channelId={channel.id} />}
 
         {/* Actions */}
         <div className="mt-4 flex items-center justify-between gap-2">
