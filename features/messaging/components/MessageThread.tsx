@@ -54,12 +54,26 @@ export function MessageThread({ conversationId, presenceStatus, onReply }: Messa
   const prevMessagesLengthRef = useRef(0);
   const isLoadingOlderRef = useRef(false);
 
-  // Flatten pages into single message array (chronological order).
+  // Flatten pages into single message array.
   // Filter out reaction messages — they are displayed as pills on the target
   // message bubble, not as standalone bubbles in the thread.
-  const messages = (data?.pages.flatMap((p) => p.messages) ?? []).filter(
-    (m) => m.contentType !== 'reaction',
-  );
+  //
+  // ORDENAÇÃO POR HORÁRIO REAL (sentAt), não por hora de inserção (createdAt):
+  // a paginação usa createdAt como cursor (estável e monotônico), mas o provedor
+  // pode entregar os webhooks FORA DE ORDEM. Ex.: o GPT Maker dispara um lote de
+  // mensagens no mesmo segundo e as entregas HTTP chegam embaralhadas por corrida
+  // de rede (uma chegou 3s atrasada), então createdAt reflete a corrida, não a
+  // conversa. `sentAt` vem do timestamp do próprio provedor → ordem determinística
+  // e igual em toda recarga. Array.sort é estável: empate no mesmo instante mantém
+  // a ordem de chegada como desempate.
+  const messages = (data?.pages.flatMap((p) => p.messages) ?? [])
+    .filter((m) => m.contentType !== 'reaction')
+    .sort((a, b) => {
+      const ta = Date.parse(a.sentAt ?? a.createdAt);
+      const tb = Date.parse(b.sentAt ?? b.createdAt);
+      if (Number.isNaN(ta) || Number.isNaN(tb) || ta === tb) return 0;
+      return ta - tb;
+    });
 
   // Scroll to bottom on new messages (not when loading older)
   useEffect(() => {
