@@ -10,7 +10,13 @@
 export { BaseChannelProvider } from './base.provider';
 
 // WhatsApp providers
-export { ZApiWhatsAppProvider, MetaCloudWhatsAppProvider, EvolutionWhatsAppProvider } from './whatsapp';
+export {
+  ZApiWhatsAppProvider,
+  MetaCloudWhatsAppProvider,
+  EvolutionWhatsAppProvider,
+  GptMakerWhatsAppProvider,
+  gptMakerDiscovery,
+} from './whatsapp';
 export type {
   ZApiCredentials,
   ZApiWebhookPayload,
@@ -18,6 +24,11 @@ export type {
   MetaCloudWebhookPayload,
   EvolutionCredentials,
   EvolutionWebhookPayload,
+  GptMakerCredentials,
+  GptMakerWebhookPayload,
+  GptMakerChannel,
+  GptMakerChat,
+  GptMakerMessage,
 } from './whatsapp';
 
 // Instagram providers
@@ -33,7 +44,12 @@ export type { ResendCredentials, ResendWebhookPayload } from './email';
 // =============================================================================
 
 import { registerProvider } from '../channel-factory';
-import { ZApiWhatsAppProvider, MetaCloudWhatsAppProvider, EvolutionWhatsAppProvider } from './whatsapp';
+import {
+  ZApiWhatsAppProvider,
+  MetaCloudWhatsAppProvider,
+  EvolutionWhatsAppProvider,
+  GptMakerWhatsAppProvider,
+} from './whatsapp';
 import { MetaInstagramProvider } from './instagram';
 import { ResendEmailProvider } from './email';
 
@@ -260,4 +276,62 @@ registerProvider({
     },
   ],
   features: ['media', 'read_receipts', 'qr_code'],
+});
+
+// Register GPT Maker provider
+//
+// ⚠️ Diferente dos outros: o GPT Maker é dono da conversa e responde com a IA dele.
+// Por isso NÃO declara 'read_receipts' (a API não devolve status de entrega) nem
+// 'templates'. A IA do CRM fica desligada neste canal — ver gptmaker.provider.ts.
+registerProvider({
+  channelType: 'whatsapp',
+  providerName: 'gptmaker',
+  constructor: GptMakerWhatsAppProvider,
+  displayName: 'GPT Maker',
+  description:
+    'WhatsApp atendido pelo agente de IA do GPT Maker (a IA do CRM fica desligada neste canal)',
+  configFields: [
+    {
+      key: 'apiToken',
+      label: 'Token da API',
+      type: 'password',
+      required: true,
+      placeholder: 'Bearer token do workspace',
+      helpText: 'Gere em app.gptmaker.ai/browse/developers. Vale para o workspace inteiro.',
+    },
+    {
+      key: 'workspaceId',
+      label: 'Workspace ID',
+      type: 'text',
+      required: true,
+      placeholder: 'ID do workspace',
+      helpText: 'Descoberto automaticamente a partir do token.',
+    },
+    {
+      key: 'agentId',
+      label: 'Agent ID',
+      type: 'text',
+      required: true,
+      placeholder: 'ID do agente',
+      helpText: 'O agente dono do canal — os webhooks são configurados por agente.',
+    },
+    {
+      key: 'gptmakerChannelId',
+      label: 'Channel ID (GPT Maker)',
+      type: 'text',
+      required: true,
+      placeholder: 'ID do canal dentro do GPT Maker',
+      helpText: 'Identifica qual canal da conta será espelhado no CRM.',
+    },
+    {
+      key: 'webhookSecret',
+      label: 'Webhook Secret',
+      type: 'password',
+      required: false,
+      placeholder: 'Gerado automaticamente',
+      helpText:
+        'O GPT Maker não assina os webhooks (sem HMAC). Este segredo viaja na URL e é a única defesa contra injeção de lead falso.',
+    },
+  ],
+  features: ['media'],
 });

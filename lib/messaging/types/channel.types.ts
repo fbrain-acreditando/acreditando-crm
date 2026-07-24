@@ -28,7 +28,7 @@ export type ChannelType =
  * Maps channel type to array of provider names.
  */
 export const CHANNEL_PROVIDERS: Record<ChannelType, string[]> = {
-  whatsapp: ['z-api', 'evolution', 'meta-cloud'],
+  whatsapp: ['z-api', 'evolution', 'meta-cloud', 'gptmaker'],
   instagram: ['meta'],
   email: ['smtp', 'resend'],
   sms: ['twilio', 'vonage'],
@@ -155,6 +155,15 @@ export interface ChannelSettings {
   /** Auto-reply when offline */
   autoReplyEnabled?: boolean;
   autoReplyMessage?: string;
+  /**
+   * Se a IA do CRM pode atender (responder) neste canal.
+   *
+   * Default: `true` para canais onde o CRM é o único cérebro.
+   * **`false` no canal GPT Maker** — lá quem atende é o agente da própria plataforma,
+   * e ligar as duas faria dois robôs responderem o mesmo lead.
+   * Virar esta flag é como se faz a migração GPT Maker → CRM.
+   */
+  crmAiEnabled?: boolean;
   /** Business hours (for auto-reply) */
   businessHours?: {
     enabled: boolean;

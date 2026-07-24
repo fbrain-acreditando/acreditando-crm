@@ -154,6 +154,63 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
       '4. Após salvar, configure o webhook apontando para a URL exibida',
     ],
   },
+  'whatsapp:gptmaker': {
+    name: 'GPT Maker',
+    description:
+      'WhatsApp atendido pelo agente de IA do GPT Maker. O CRM recebe as conversas e cria os deals — a IA do CRM fica desligada neste canal.',
+    official: false,
+    fields: [
+      {
+        key: 'apiToken',
+        label: 'Token da API',
+        type: 'password',
+        placeholder: 'Bearer token do workspace',
+        required: true,
+        helpText: 'Gere em app.gptmaker.ai/browse/developers. Vale para o workspace inteiro.',
+      },
+      {
+        key: 'workspaceId',
+        label: 'Workspace ID',
+        type: 'text',
+        placeholder: 'ID do workspace',
+        required: true,
+        helpText: 'Obtido em GET /v2/workspaces com o token acima.',
+      },
+      {
+        key: 'agentId',
+        label: 'Agent ID',
+        type: 'text',
+        placeholder: 'ID do agente',
+        required: true,
+        helpText: 'O agente dono do canal. Os webhooks do GPT Maker são configurados por agente, não por canal.',
+      },
+      {
+        key: 'gptmakerChannelId',
+        label: 'Channel ID (GPT Maker)',
+        type: 'text',
+        placeholder: 'ID do canal dentro do GPT Maker',
+        required: true,
+        helpText: 'Qual canal da conta será espelhado aqui. Veja em GET /v2/workspace/{id}/channels.',
+      },
+      {
+        key: 'webhookSecret',
+        label: 'Webhook Secret',
+        type: 'password',
+        placeholder: 'Gerado automaticamente',
+        required: false,
+        autoGenerate: true,
+        helpText:
+          'O GPT Maker não assina os webhooks. Este segredo viaja na URL e é a única defesa contra injeção de lead falso.',
+      },
+    ],
+    setupUrl: 'https://developer.gptmaker.ai/api-reference/introduction',
+    setupInstructions: [
+      '1. Acesse app.gptmaker.ai → Desenvolvedores e gere o token da API',
+      '2. Identifique o workspace, o agente e o canal que serão espelhados no CRM',
+      '3. Cole os dados abaixo',
+      '4. Depois de salvar, cole a URL de webhook exibida nos eventos do agente',
+    ],
+  },
   'whatsapp:meta-cloud': {
     name: 'Meta Cloud API',
     description: 'API oficial da Meta. Requer verificação de negócio e templates aprovados.',
@@ -825,6 +882,8 @@ interface CompleteStepProps {
   channelName: string;
   channelId: string | null;
   provider: string | null;
+  /** Só usado pelo GPT Maker, que não aceita header customizado no webhook. */
+  webhookSecret?: string;
   onClose: () => void;
 }
 
@@ -871,6 +930,17 @@ const WEBHOOK_INSTRUCTIONS: Record<string, { label: string; steps: string[]; doc
     ],
     docsUrl: 'https://doc.evolution-api.com/v2/pt/webhooks/webhook',
   },
+  'gptmaker': {
+    label: 'GPT Maker',
+    steps: [
+      'Acesse app.gptmaker.ai e abra o agente vinculado a este canal',
+      'Vá em Integrações → Webhooks (ou use PUT /v2/agent/{agentId}/webhooks)',
+      'Cole a URL abaixo — ela já inclui o segredo do canal, não remova a parte "?key="',
+      'Ative os eventos: onFirstInteraction, onTransfer e onNewMessage',
+      'Atenção: os webhooks valem para o AGENTE inteiro — se ele atende outros canais, os eventos deles também chegarão aqui',
+    ],
+    docsUrl: 'https://developer.gptmaker.ai/api-reference/agents/webhooks',
+  },
   'resend': {
     label: 'Resend',
     steps: [
@@ -883,7 +953,7 @@ const WEBHOOK_INSTRUCTIONS: Record<string, { label: string; steps: string[]; doc
   },
 };
 
-function getWebhookUrl(provider: string, channelId: string): string {
+function getWebhookUrl(provider: string, channelId: string, webhookSecret?: string): string {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const functionMap: Record<string, string> = {
     'z-api': 'messaging-webhook-zapi',
@@ -891,14 +961,23 @@ function getWebhookUrl(provider: string, channelId: string): string {
     'meta-cloud': 'messaging-webhook-meta',
     'meta': 'messaging-webhook-meta',
     'resend': 'messaging-webhook-resend',
+    'gptmaker': 'messaging-webhook-gptmaker',
   };
   const fn = functionMap[provider] || 'messaging-webhook-zapi';
-  return `${supabaseUrl}/functions/v1/${fn}/${channelId}`;
+  const base = `${supabaseUrl}/functions/v1/${fn}/${channelId}`;
+
+  // O GPT Maker só deixa configurar a URL do webhook — não aceita header customizado.
+  // O segredo do canal viaja na query string e é validado em tempo constante na função.
+  if (provider === 'gptmaker' && webhookSecret) {
+    return `${base}?key=${encodeURIComponent(webhookSecret)}`;
+  }
+
+  return base;
 }
 
-function CompleteStep({ channelName, channelId, provider, onClose }: CompleteStepProps) {
+function CompleteStep({ channelName, channelId, provider, webhookSecret, onClose }: CompleteStepProps) {
   const [copied, setCopied] = React.useState(false);
-  const webhookUrl = channelId && provider ? getWebhookUrl(provider, channelId) : null;
+  const webhookUrl = channelId && provider ? getWebhookUrl(provider, channelId, webhookSecret) : null;
   const instructions = provider ? WEBHOOK_INSTRUCTIONS[provider] : null;
 
   const handleCopy = async () => {
@@ -1081,6 +1160,15 @@ export function ChannelSetupWizard({
       setCredentials((prev) => ({ ...prev, verifyToken: generateVerifyToken() }));
     }
   }, [provider, credentials.verifyToken]);
+
+  // Auto-generate webhookSecret for GPT Maker.
+  // A plataforma não assina os webhooks (sem HMAC) — este segredo, que viaja na URL,
+  // é a única defesa contra alguém injetar lead falso no funil.
+  React.useEffect(() => {
+    if (provider === 'gptmaker' && !credentials.webhookSecret) {
+      setCredentials((prev) => ({ ...prev, webhookSecret: generateVerifyToken() }));
+    }
+  }, [provider, credentials.webhookSecret]);
 
   // Handlers
   const handleSelectType = (type: ChannelType, prov: string) => {
@@ -1270,7 +1358,13 @@ export function ChannelSetupWizard({
       )}
 
       {step === 'complete' && (
-        <CompleteStep channelName={channelName} channelId={createdChannelId} provider={provider} onClose={handleClose} />
+        <CompleteStep
+          channelName={channelName}
+          channelId={createdChannelId}
+          provider={provider}
+          webhookSecret={credentials.webhookSecret}
+          onClose={handleClose}
+        />
       )}
     </Modal>
   );

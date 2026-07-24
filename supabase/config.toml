@@ -113,3 +113,9 @@ verify_jwt = false
 
 [functions.messaging-webhook-resend]
 verify_jwt = false
+
+# GPT Maker: além de não mandar JWT do Supabase, a plataforma não permite configurar
+# headers customizados no webhook — só a URL. Por isso o segredo do canal é aceito
+# também na query string (?key=), validado dentro da função em tempo constante.
+[functions.messaging-webhook-gptmaker]
+verify_jwt = false
