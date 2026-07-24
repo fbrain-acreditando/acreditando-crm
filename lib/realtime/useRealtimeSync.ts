@@ -429,6 +429,17 @@ export function useRealtimeSync(
           if (payload.eventType === 'INSERT' && table === 'board_stages') {
             keys.forEach(key => pendingInvalidateOnlyRef.current.add(key));
             pendingBoardStagesInsertCountRef.current += 1;
+          } else if (payload.eventType === 'UPDATE' && table === 'deals') {
+            // 🐛 JUMP BACK FIX: um UPDATE de deals é aplicado DIRETO no cache abaixo
+            // (setQueryData guardado, ~:611). Se enfileirarmos deals.all aqui, ela fica
+            // "presa" na fila (o branch direto não flusha) e o PRÓXIMO flush — disparado
+            // pelo INSERT de activity "Moveu para X" que TODO move gera — refetcha o
+            // DEALS_VIEW_KEY com leitura stale e sobrescreve o otimismo: o card "volta"
+            // pra coluna de origem. Enfileiramos só dashboard.stats; deals fica com o
+            // setQueryData como fonte de verdade (design "delegar ao Realtime no move").
+            keys.forEach(key => {
+              if (key !== queryKeys.deals.all) pendingInvalidationsRef.current.add(key);
+            });
           } else {
             keys.forEach(key => pendingInvalidationsRef.current.add(key));
           }

@@ -189,14 +189,12 @@ export const useDealsByBoard = (boardId: string) => {
     // Filtrar por boardId no cliente (compartilha cache mas retorna só os deals do board)
     select: selectForBoard,
     staleTime: 2 * 60 * 1000, // 2 minutes (same as useDealsView)
-    // Reconcilia com o banco só quando faz sentido — NUNCA durante um move em curso.
-    // ⚠️ `'always'` causava JUMP BACK: um refetch disparado no meio do move resolvia
-    // com o status ANTIGO (pré-commit) e sobrescrevia o otimismo (o card voltava à
-    // coluna de origem; o F5 mostrava certo). Aqui refazemos só se a query nunca
-    // carregou (1º mount) OU foi invalidada (create/delete/update invalidam deals.all).
-    // Move NÃO invalida → sem refetch → sem jump back. Mudanças ao vivo (outra aba/
-    // usuário) chegam pelo Realtime global (RealtimeBridge); voltar à aba dispara o
-    // refetchOnWindowFocus (default global). Mesmo padrão do useBoards.
+    // Refetch só no 1º mount OU quando invalidado (create/delete invalidam deals.all).
+    // Um MOVE não deve disparar refetch de deals — o otimismo + o Realtime (setQueryData
+    // direto) são a fonte de verdade; um refetch aqui competiria com o otimismo e podia
+    // trazer leitura stale. Mudanças ao vivo (outra aba/usuário) chegam pelo Realtime
+    // global (RealtimeBridge). Mesmo padrão do useBoards. (Obs.: refetchOnWindowFocus é
+    // `false` no default global — não há reconciliação por foco de aba.)
     refetchOnMount: (query) => query.state.dataUpdatedAt === 0 || query.state.isInvalidated,
     enabled: !authLoading && !!user && !!boardId && !boardId.startsWith('temp-'),
   });
