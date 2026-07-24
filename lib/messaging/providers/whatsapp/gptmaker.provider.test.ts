@@ -338,7 +338,30 @@ describe('GptMakerWhatsAppProvider', () => {
       const body = JSON.parse(fetchMock.mock.calls[1][1].body);
       // Não pode atropelar integração de terceiro já existente no agente.
       expect(body.onCreateEvent).toBe('https://outro-sistema/hook');
-      expect(body.onTransfer).toBe('https://crm/hook');
+      expect(body.onTransfer).toBe('https://crm/hook?event=onTransfer');
+    });
+
+    it('marca cada evento na URL — o payload do GPT Maker não diz qual evento é', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{}' })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true }),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      await provider.configureWebhooks('https://crm/hook/uuid?key=segredo', [
+        'onNewMessage',
+        'onTransfer',
+      ]);
+
+      const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+      // Preserva o ?key= (única autenticação) e acrescenta o discriminador.
+      expect(body.onNewMessage).toBe('https://crm/hook/uuid?key=segredo&event=onNewMessage');
+      expect(body.onTransfer).toBe('https://crm/hook/uuid?key=segredo&event=onTransfer');
     });
   });
 

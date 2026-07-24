@@ -146,8 +146,11 @@ Deno.serve(async (req) => {
     return json(401, { error: "Segredo inválido" });
   }
 
-  const rawEvent = String(payload.event ?? payload.type ?? "");
-  const normalized = normalizeEvent(payload);
+  // O payload do GPT Maker NÃO traz o nome do evento — ele vem do `&event=` que o
+  // CRM coloca na URL ao registrar o webhook no agente. Sem isso, o parser deduz
+  // pela forma do payload (ver `classifyEvent`).
+  const rawEvent = url.searchParams.get("event") ?? "";
+  const normalized = normalizeEvent(payload, rawEvent);
   const externalEventId = generateStableEventId(normalized, channelId, rawEvent);
 
   // ---------------------------------------------------------------------------
@@ -157,7 +160,7 @@ Deno.serve(async (req) => {
     .from("messaging_webhook_events")
     .insert({
       channel_id: channelId,
-      event_type: rawEvent || "unknown",
+      event_type: rawEvent || normalized.kind,
       external_event_id: externalEventId,
       payload: payload as unknown as Record<string, unknown>,
       processed: false,
@@ -188,14 +191,22 @@ Deno.serve(async (req) => {
   // PROCESSAMENTO
   // ---------------------------------------------------------------------------
   try {
-    if (normalized.kind === "unknown" || !normalized.chatId) {
+    if (!normalized.chatId) {
       console.warn(
-        `[GPTMaker] Evento não reconhecido (event: "${rawEvent}", chatId: ${normalized.chatId}) — payload gravado para inspeção`
+        `[GPTMaker] Payload sem contextId (event: "${rawEvent}") — gravado para inspeção, nada processado`
       );
     } else if (normalized.kind === "transfer") {
       await handleTransfer(supabase, typedChannel, normalized);
-    } else {
+    } else if (normalized.kind === "interaction") {
+      // Início de atendimento: garante contato + conversa (+ deal pela regra de
+      // Entrada de Leads). NÃO insere mensagem — este evento não carrega uma.
+      await ensureConversation(supabase, typedChannel, normalized);
+    } else if (normalized.kind === "message") {
       await handleMessage(supabase, typedChannel, normalized);
+    } else {
+      console.warn(
+        `[GPTMaker] Evento não classificado (event: "${rawEvent}") — payload gravado para inspeção`
+      );
     }
 
     await supabase

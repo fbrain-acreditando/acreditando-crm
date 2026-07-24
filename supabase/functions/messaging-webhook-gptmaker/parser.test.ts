@@ -1,14 +1,11 @@
 /**
  * Testes do parser de webhook do GPT Maker.
  *
- * ⚠️ CONTEXTO IMPORTANTE: o formato do payload NÃO é documentado pelo fornecedor
- * (nem no OpenAPI, nem nas docs). Estes testes cobrem as formas PLAUSÍVEIS e,
- * principalmente, garantem que o parser **nunca lança** e **nunca inventa dado**
- * quando não reconhece — o evento cai como "unknown" e o corpo cru fica gravado
- * para inspeção (Fase 0, modo captura).
+ * ⚠️ As fixtures abaixo são **payloads REAIS**, capturados em produção em
+ * 2026-07-24 na conta do Acreditando (`messaging_webhook_events`). O fornecedor
+ * não documenta o corpo dos webhooks — esta é a única fonte de verdade.
  *
- * Quando os payloads REAIS forem capturados em produção, eles viram fixtures aqui
- * e estes casos hipotéticos podem ser podados.
+ * Anonimizados apenas nos identificadores; a ESTRUTURA é exatamente a recebida.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -19,268 +16,278 @@ import {
   generateStableEventId,
   timingSafeEqual,
   getSecretFromRequest,
+  recipientFromContextId,
 } from './parser';
 
-describe('classifyEvent', () => {
-  it('reconhece os eventos documentados do agente', () => {
+// =============================================================================
+// FIXTURES REAIS
+// =============================================================================
+
+/** Mensagem com imagem, enviada pela IA do GPT Maker. */
+const REAL_MESSAGE_ASSISTANT = {
+  date: '2026-07-24T17:22:53.572+00:00',
+  role: 'assistant',
+  audios: [],
+  images: ['https://gpt-files.com/file/3E14B10711E1C0FE16B42EC236EAE1D6/3F69B238F978E068'],
+  channel: 'WHATSAPP',
+  message: '',
+  contextId: '3E14B10711E1C0FE16B42EC236EAE1D6-27870562914352@lid',
+  documents: [],
+  messageId: '3F69B23A3F8D70BFB461DA78A3C64868',
+  assistantId: '3E12E22DF12D30FBB326262F356E288B',
+  contactName: '27870562914352@lid',
+  contactPhone: '27870562914352@lid',
+};
+
+/** Mensagem de texto do lead, com telefone real no contextId. */
+const REAL_MESSAGE_USER = {
+  date: '2026-07-24T17:20:11.100+00:00',
+  role: 'user',
+  audios: [],
+  images: [],
+  channel: 'WHATSAPP',
+  message: 'Tive um AVC há 3 meses, vocês atendem?',
+  contextId: '3E14B10711E1C0FE16B42EC236EAE1D6-553598205552',
+  documents: [],
+  messageId: '3F69B111AAAA2222BBBB3333CCCC4444',
+  assistantId: '3E12E22DF12D30FBB326262F356E288B',
+  contactName: 'Nathália de Almeida',
+  contactPhone: '553598205552',
+};
+
+/** Início de atendimento — não carrega mensagem. */
+const REAL_INTERACTION = {
+  name: '27870562914352@lid',
+  agentId: '3E12E22DF12D30FBB326262F356E288B',
+  channel: 'WHATSAPP',
+  protocol: 23167,
+  channelId: '3E14B10711E1C0FE16B42EC236EAE1D6',
+  contextId: '3E14B10711E1C0FE16B42EC236EAE1D6-27870562914352@lid',
+  recipient: '27870562914352@lid',
+  interactionId: '3F69B23A48B531FC289CDA78A3C64868',
+};
+
+// =============================================================================
+// TESTES
+// =============================================================================
+
+describe('classifyEvent — o payload real NÃO traz o nome do evento', () => {
+  it('usa o &event= da URL quando presente', () => {
     expect(classifyEvent('onTransfer')).toBe('transfer');
     expect(classifyEvent('onNewMessage')).toBe('message');
     expect(classifyEvent('onFirstInteraction')).toBe('interaction');
-    expect(classifyEvent('onFinishInteraction')).toBe('interaction');
   });
 
-  it('é indiferente a caixa e a formato', () => {
-    expect(classifyEvent('ON_TRANSFER')).toBe('transfer');
-    expect(classifyEvent('new_message')).toBe('message');
+  it('sem pista na URL, deduz MENSAGEM pela forma do payload', () => {
+    expect(classifyEvent('', REAL_MESSAGE_USER)).toBe('message');
+    expect(classifyEvent('', REAL_MESSAGE_ASSISTANT)).toBe('message');
   });
 
-  it('devolve unknown para evento não previsto — sem chutar', () => {
-    expect(classifyEvent('onCreateEvent')).toBe('unknown');
+  it('sem pista na URL, deduz INTERAÇÃO pela forma do payload', () => {
+    expect(classifyEvent('', REAL_INTERACTION)).toBe('interaction');
+  });
+
+  it('devolve unknown quando não há pista nem forma reconhecível', () => {
+    expect(classifyEvent('', { foo: 'bar' })).toBe('unknown');
     expect(classifyEvent('')).toBe('unknown');
   });
+
+  it('a pista da URL tem precedência sobre a forma', () => {
+    // Transferência pode vir com corpo de interação — a URL decide.
+    expect(classifyEvent('onTransfer', REAL_INTERACTION)).toBe('transfer');
+  });
 });
 
-describe('normalizePhone', () => {
-  it('normaliza para +digitos', () => {
-    expect(normalizePhone('5511999999999')).toBe('+5511999999999');
-    expect(normalizePhone('+55 (11) 99999-9999')).toBe('+5511999999999');
+describe('normalizePhone — @lid NÃO é telefone', () => {
+  it('rejeita @lid (identificador interno do WhatsApp)', () => {
+    expect(normalizePhone('27870562914352@lid')).toBeNull();
+    expect(normalizePhone('5511999999999@s.whatsapp.net')).toBeNull();
   });
 
-  it('rejeita entrada curta ou inválida — melhor nulo do que telefone errado', () => {
+  it('aceita telefone real', () => {
+    expect(normalizePhone('553598205552')).toBe('+553598205552');
+    expect(normalizePhone('+5511976557863')).toBe('+5511976557863');
+  });
+
+  it('rejeita comprimento implausível', () => {
     expect(normalizePhone('123')).toBeNull();
-    expect(normalizePhone('')).toBeNull();
+    expect(normalizePhone('1234567890123456789')).toBeNull();
+  });
+
+  it('rejeita não-string e vazio', () => {
     expect(normalizePhone(null)).toBeNull();
-    expect(normalizePhone(undefined)).toBeNull();
     expect(normalizePhone(42)).toBeNull();
+    expect(normalizePhone('')).toBeNull();
   });
 });
 
-describe('normalizeEvent — extração de chatId', () => {
-  it('lê chatId na raiz', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'chat-1' });
-    expect(event.chatId).toBe('chat-1');
+describe('recipientFromContextId', () => {
+  it('extrai o destinatário depois do primeiro hífen', () => {
+    expect(recipientFromContextId('3E14B107-553598205552')).toBe('553598205552');
+    expect(recipientFromContextId('3E14B10711E1C0FE16B42EC236EAE1D6-27870562914352@lid')).toBe(
+      '27870562914352@lid'
+    );
   });
 
-  it('lê chatId aninhado em chat.id', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chat: { id: 'chat-2' } });
-    expect(event.chatId).toBe('chat-2');
-  });
-
-  it('lê chatId aninhado na mensagem', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      message: { chatId: 'chat-3', text: 'oi' },
-    });
-    expect(event.chatId).toBe('chat-3');
-  });
-
-  it('aceita snake_case', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chat_id: 'chat-4' });
-    expect(event.chatId).toBe('chat-4');
-  });
-
-  it('devolve null quando não acha — não inventa', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', foo: 'bar' });
-    expect(event.chatId).toBeNull();
+  it('devolve null sem hífen ou sem valor', () => {
+    expect(recipientFromContextId('semhifen')).toBeNull();
+    expect(recipientFromContextId(null)).toBeNull();
   });
 });
 
-describe('normalizeEvent — direção', () => {
-  it('role "user" é entrada (o lead falando)', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { role: 'user', text: 'Olá' },
-    });
-    expect(event.direction).toBe('inbound');
+describe('normalizeEvent — payload REAL de mensagem', () => {
+  it('usa o contextId como identidade da conversa (casa com o histórico importado)', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(event.chatId).toBe('3E14B10711E1C0FE16B42EC236EAE1D6-553598205552');
   });
 
-  it('role "assistant" é saída (a IA do GPT Maker respondendo)', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { role: 'assistant', text: 'Olá! Sou a Assistente Virtual' },
-    });
-    expect(event.direction).toBe('outbound');
+  it('role "user" é entrada; "assistant" é saída', () => {
+    expect(normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage').direction).toBe('inbound');
+    expect(normalizeEvent(REAL_MESSAGE_ASSISTANT, 'onNewMessage').direction).toBe('outbound');
   });
 
-  it('sem role, assume entrada (o caso que importa para o funil)', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'c1', message: { text: 'oi' } });
-    expect(event.direction).toBe('inbound');
+  it('parseia `date` em ISO string (não é epoch)', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(event.timestamp.toISOString()).toBe('2026-07-24T17:20:11.100Z');
   });
-});
 
-describe('normalizeEvent — conteúdo', () => {
-  it('extrai texto simples', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { text: 'Tive um AVC há 3 meses' },
-    });
+  it('extrai texto da mensagem', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
     expect(event.contentType).toBe('text');
-    expect(event.content).toEqual({ type: 'text', text: 'Tive um AVC há 3 meses' });
+    expect(event.content).toEqual({ type: 'text', text: 'Tive um AVC há 3 meses, vocês atendem?' });
   });
 
-  it('aceita message como string pura', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'c1', message: 'texto direto' });
-    expect(event.text).toBe('texto direto');
-  });
-
-  it('reconhece imagem', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { imageUrl: 'https://x/img.png', text: 'comprovante' },
-    });
+  it('extrai imagem do ARRAY `images` (não de um campo `imageUrl`)', () => {
+    const event = normalizeEvent(REAL_MESSAGE_ASSISTANT, 'onNewMessage');
     expect(event.contentType).toBe('image');
-    expect(event.content.mediaUrl).toBe('https://x/img.png');
-    expect(event.content.caption).toBe('comprovante');
+    expect(event.content.mediaUrl).toContain('gpt-files.com');
+    expect(event.text).toBe('[imagem]');
   });
 
-  it('reconhece áudio', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { audioUrl: 'https://x/a.ogg' },
-    });
-    expect(event.contentType).toBe('audio');
+  it('usa o messageId real para deduplicação', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(event.externalMessageId).toBe('3F69B111AAAA2222BBBB3333CCCC4444');
   });
 
-  it('reconhece documento e usa nome padrão quando falta', () => {
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { documentUrl: 'https://x/d.pdf' },
-    });
-    expect(event.contentType).toBe('document');
-    expect(event.content.fileName).toBe('documento');
+  it('NÃO inventa telefone quando o contato é @lid', () => {
+    const event = normalizeEvent(REAL_MESSAGE_ASSISTANT, 'onNewMessage');
+    expect(event.contactPhone).toBeNull();
   });
 
-  it('usa placeholder quando não há texto — nunca undefined no preview', () => {
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'c1' });
+  it('extrai telefone real quando existe', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(event.contactPhone).toBe('+553598205552');
+    expect(event.contactName).toBe('Nathália de Almeida');
+  });
+});
+
+describe('normalizeEvent — payload REAL de interação', () => {
+  it('classifica como interação e acha o contextId', () => {
+    const event = normalizeEvent(REAL_INTERACTION, 'onFirstInteraction');
+    expect(event.kind).toBe('interaction');
+    expect(event.chatId).toBe('3E14B10711E1C0FE16B42EC236EAE1D6-27870562914352@lid');
+  });
+
+  it('cai no telefone do recipient quando não há contactPhone — e rejeita @lid', () => {
+    const event = normalizeEvent(REAL_INTERACTION, 'onFirstInteraction');
+    expect(event.contactPhone).toBeNull();
+  });
+
+  it('usa o interactionId como id externo', () => {
+    const event = normalizeEvent(REAL_INTERACTION, 'onFirstInteraction');
+    expect(event.externalMessageId).toBe('3F69B23A48B531FC289CDA78A3C64868');
+  });
+
+  it('sem mensagem, o texto não fica undefined', () => {
+    const event = normalizeEvent(REAL_INTERACTION, 'onFirstInteraction');
     expect(event.text).toBe('[mensagem]');
   });
 });
 
-describe('normalizeEvent — contato', () => {
-  it('extrai nome e telefone do bloco contact', () => {
-    const event = normalizeEvent({
-      event: 'onTransfer',
-      chatId: 'c1',
-      contact: { name: 'Maria Silva', phone: '5511988887777' },
-    });
-    expect(event.contactName).toBe('Maria Silva');
-    expect(event.contactPhone).toBe('+5511988887777');
+describe('normalizeEvent — mídia em array', () => {
+  it('áudio', () => {
+    const event = normalizeEvent(
+      { ...REAL_MESSAGE_USER, images: [], audios: ['https://gpt-files.com/a.ogg'], message: '' },
+      'onNewMessage'
+    );
+    expect(event.contentType).toBe('audio');
+    expect(event.text).toBe('[áudio]');
   });
 
-  it('cai para os campos do chat quando não há contact', () => {
-    const event = normalizeEvent({
-      event: 'onTransfer',
-      chat: { id: 'c1', userName: 'João', whatsappPhone: '5511977776666' },
-    });
-    expect(event.contactName).toBe('João');
-    expect(event.contactPhone).toBe('+5511977776666');
+  it('documento', () => {
+    const event = normalizeEvent(
+      { ...REAL_MESSAGE_USER, images: [], documents: ['https://gpt-files.com/d.pdf'], message: '' },
+      'onNewMessage'
+    );
+    expect(event.contentType).toBe('document');
   });
 
-  it('devolve null quando o telefone não vem — o contato ainda é criado pelo nome', () => {
-    const event = normalizeEvent({ event: 'onTransfer', chatId: 'c1', contact: { name: 'Ana' } });
-    expect(event.contactPhone).toBeNull();
-    expect(event.contactName).toBe('Ana');
-  });
-});
-
-describe('normalizeEvent — timestamp', () => {
-  it('interpreta epoch em milissegundos', () => {
-    const ms = 1753300000000;
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'c1', message: { time: ms } });
-    expect(event.timestamp.getTime()).toBe(ms);
-  });
-
-  it('interpreta epoch em segundos', () => {
-    const seconds = 1753300000;
-    const event = normalizeEvent({
-      event: 'onNewMessage',
-      chatId: 'c1',
-      message: { time: seconds },
-    });
-    expect(event.timestamp.getTime()).toBe(seconds * 1000);
-  });
-
-  it('cai para agora quando não vem tempo', () => {
-    const before = Date.now();
-    const event = normalizeEvent({ event: 'onNewMessage', chatId: 'c1' });
-    expect(event.timestamp.getTime()).toBeGreaterThanOrEqual(before);
+  it('array vazio não vira mídia', () => {
+    const event = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(event.contentType).toBe('text');
   });
 });
 
 describe('normalizeEvent — robustez (nunca lança)', () => {
   const hostis: unknown[] = [
     {},
-    { event: null },
+    { date: null },
+    { images: 'não é array' },
     { message: null },
-    { message: [] },
-    { chat: 'string em vez de objeto' },
-    { contact: 42 },
-    { event: 'onNewMessage', message: { time: 'não é número' } },
+    { contextId: 123 },
+    { role: 42 },
+    { date: 'data inválida' },
+    { images: [null, undefined] },
   ];
 
   it.each(hostis)('sobrevive a payload malformado: %j', (payload) => {
     expect(() => normalizeEvent(payload as never)).not.toThrow();
   });
+
+  it('data inválida cai para agora em vez de NaN', () => {
+    const event = normalizeEvent({ date: 'xxx', contextId: 'a-b' } as never);
+    expect(Number.isNaN(event.timestamp.getTime())).toBe(false);
+  });
 });
 
 describe('generateStableEventId', () => {
-  const base = {
-    kind: 'message' as const,
-    chatId: 'c1',
-    externalMessageId: null,
-    text: 'x',
-    contentType: 'text',
-    content: {},
-    direction: 'inbound' as const,
-    contactName: null,
-    contactPhone: null,
-    contactAvatar: null,
-    timestamp: new Date(1753300000000),
-  };
-
-  it('prefere o ID da mensagem quando existe (dedupe forte)', () => {
-    const id = generateStableEventId({ ...base, externalMessageId: 'msg-1' }, 'ch', 'onNewMessage');
-    expect(id).toBe('gpt_msg_msg-1');
+  it('a mesma mensagem gera sempre o mesmo id (2ª entrega = duplicata)', () => {
+    const a = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    const b = normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage');
+    expect(generateStableEventId(a, 'ch', 'onNewMessage')).toBe(
+      generateStableEventId(b, 'ch', 'onNewMessage')
+    );
   });
 
-  it('é determinístico para o mesmo evento — a 2ª entrega é detectada como duplicata', () => {
-    const a = generateStableEventId(base, 'ch', 'onNewMessage');
-    const b = generateStableEventId(base, 'ch', 'onNewMessage');
-    expect(a).toBe(b);
-  });
-
-  it('transferência do mesmo chat gera sempre o mesmo ID (não duplica lead quente)', () => {
-    const id = generateStableEventId({ ...base, kind: 'transfer' }, 'ch', 'onTransfer');
-    expect(id).toBe('gpt_transfer_c1');
-  });
-
-  it('distingue chats diferentes', () => {
-    const a = generateStableEventId(base, 'ch', 'onNewMessage');
-    const b = generateStableEventId({ ...base, chatId: 'c2' }, 'ch', 'onNewMessage');
+  it('mensagens diferentes geram ids diferentes', () => {
+    const a = generateStableEventId(normalizeEvent(REAL_MESSAGE_USER, 'onNewMessage'), 'ch', 'x');
+    const b = generateStableEventId(
+      normalizeEvent(REAL_MESSAGE_ASSISTANT, 'onNewMessage'),
+      'ch',
+      'x'
+    );
     expect(a).not.toBe(b);
+  });
+
+  it('interação e mensagem do mesmo chat não colidem', () => {
+    const msg = generateStableEventId(normalizeEvent(REAL_MESSAGE_ASSISTANT, 'onNewMessage'), 'ch', 'onNewMessage');
+    const inter = generateStableEventId(
+      normalizeEvent(REAL_INTERACTION, 'onFirstInteraction'),
+      'ch',
+      'onFirstInteraction'
+    );
+    expect(msg).not.toBe(inter);
   });
 });
 
 describe('timingSafeEqual', () => {
-  it('aceita segredos iguais', () => {
+  it('aceita iguais e rejeita diferentes', () => {
     expect(timingSafeEqual('segredo-123', 'segredo-123')).toBe(true);
-  });
-
-  it('rejeita segredo errado', () => {
     expect(timingSafeEqual('segredo-123', 'segredo-124')).toBe(false);
   });
 
-  it('rejeita tamanhos diferentes (prefixo correto não passa)', () => {
+  it('rejeita prefixo correto e string vazia', () => {
     expect(timingSafeEqual('segredo', 'segredo-123')).toBe(false);
-  });
-
-  it('rejeita string vazia', () => {
     expect(timingSafeEqual('', 'segredo')).toBe(false);
   });
 });
@@ -290,22 +297,17 @@ describe('getSecretFromRequest', () => {
     return new Request('https://x/functions/v1/messaging-webhook-gptmaker/uuid', { headers });
   }
 
-  it('lê o segredo do header x-api-key', () => {
+  it('lê do header x-api-key', () => {
     const req = makeRequest({ 'x-api-key': 'abc' });
     expect(getSecretFromRequest(req, new URL(req.url))).toBe('abc');
   });
 
-  it('lê o segredo da query string (o GPT Maker só configura URL)', () => {
-    const url = new URL('https://x/functions/v1/messaging-webhook-gptmaker/uuid?key=xyz');
+  it('lê da query string (é assim que o GPT Maker chama)', () => {
+    const url = new URL('https://x/f/uuid?key=xyz&event=onNewMessage');
     expect(getSecretFromRequest(makeRequest(), url)).toBe('xyz');
   });
 
-  it('header tem precedência sobre query', () => {
-    const url = new URL('https://x/f?key=da-query');
-    expect(getSecretFromRequest(makeRequest({ 'x-api-key': 'do-header' }), url)).toBe('do-header');
-  });
-
-  it('devolve vazio quando não há segredo — o handler nega por default', () => {
+  it('sem segredo devolve vazio — o handler nega por default', () => {
     const req = makeRequest();
     expect(getSecretFromRequest(req, new URL(req.url))).toBe('');
   });

@@ -479,8 +479,15 @@ export class GptMakerWhatsAppProvider extends BaseChannelProvider {
         `/v2/agent/${encodeURIComponent(this.agentId)}/webhooks`
       ).catch(() => ({}) as Record<string, string>);
 
+      // O payload do GPT Maker não diz qual evento é — ele chega "anônimo".
+      // Por isso cada evento ganha a MESMA URL com um `&event=` diferente:
+      // é assim que a edge function sabe se aquilo é mensagem, transferência
+      // ou início de atendimento. Sem isso, sobra só a dedução pela forma do JSON.
+      const separator = webhookUrl.includes("?") ? "&" : "?";
       const body: Record<string, string> = { ...current };
-      for (const event of events) body[event] = webhookUrl;
+      for (const event of events) {
+        body[event] = `${webhookUrl}${separator}event=${encodeURIComponent(event)}`;
+      }
 
       await this.request('PUT', `/v2/agent/${encodeURIComponent(this.agentId)}/webhooks`, body);
       return { success: true };
