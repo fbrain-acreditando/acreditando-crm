@@ -1010,8 +1010,9 @@ async function autoCreateDeal(
 
     console.log(`[Webhook] Auto-created deal: ${newDeal.id} for contact ${params.contactId}`);
 
-    // Registrar activity para o usuário entender que o lead veio do canal de mensagens
-    const sourceLabel = (params.source || "whatsapp") === "instagram" ? "Instagram" : "WhatsApp";
+    // Registrar activity para o usuário entender que o lead veio do canal de mensagens.
+    // Reusa o `sourceLabel` declarado acima — redeclarar aqui é SyntaxError (mesmo
+    // escopo de bloco) e derruba a função inteira no boot, não só este trecho.
     await supabase.from("deal_activities").insert({
       deal_id: newDeal.id,
       organization_id: params.organizationId,
