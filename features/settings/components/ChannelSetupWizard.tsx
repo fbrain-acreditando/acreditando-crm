@@ -474,6 +474,280 @@ function SelectStep({ onSelect }: SelectStepProps) {
 // STEP: CREDENTIALS
 // =============================================================================
 
+// =============================================================================
+// GPT MAKER — DESCOBERTA AUTOMÁTICA
+// =============================================================================
+
+/**
+ * Campos que o painel de descoberta preenche sozinho — não são digitados à mão.
+ * Ficam fora da renderização genérica de credenciais.
+ */
+const GPTMAKER_DISCOVERED_FIELDS = ['apiToken', 'workspaceId', 'agentId', 'gptmakerChannelId'];
+
+interface DiscoveredWorkspace {
+  id: string;
+  name: string;
+}
+
+interface DiscoveredChannel {
+  id: string;
+  name: string;
+  type: string;
+  connected: boolean;
+  username: string | null;
+  agentId: string | null;
+  agentName: string | null;
+}
+
+interface GptMakerDiscoveryPanelProps {
+  credentials: Record<string, string>;
+  channelName: string;
+  onCredentialsChange: (key: string, value: string) => void;
+  onNameChange: (value: string) => void;
+  onIdentifierChange: (value: string) => void;
+}
+
+/**
+ * Cola o token → o CRM consulta a conta → o admin escolhe o canal numa lista.
+ *
+ * Sem isto, seria preciso garimpar 4 IDs no painel do GPT Maker (workspace, agente,
+ * canal) e digitá-los na mão. Escolher o canal preenche o resto: o agente vem do
+ * próprio canal, e o telefone e o nome são sugeridos a partir dele.
+ *
+ * O token trafega para o servidor apenas para essa consulta; só é gravado quando o
+ * canal é criado de fato.
+ */
+function GptMakerDiscoveryPanel({
+  credentials,
+  channelName,
+  onCredentialsChange,
+  onNameChange,
+  onIdentifierChange,
+}: GptMakerDiscoveryPanelProps) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<DiscoveredWorkspace[]>([]);
+  const [channels, setChannels] = useState<DiscoveredChannel[]>([]);
+  const [agents, setAgents] = useState<DiscoveredWorkspace[]>([]);
+
+  const apiToken = credentials.apiToken || '';
+  const workspaceId = credentials.workspaceId || '';
+  const selectedChannelId = credentials.gptmakerChannelId || '';
+
+  async function callDiscovery(payload: { apiToken: string; workspaceId?: string }) {
+    const response = await fetch('/api/messaging/gptmaker/discovery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Falha ao consultar o GPT Maker');
+    return data;
+  }
+
+  async function loadChannelsFor(wsId: string) {
+    const data = await callDiscovery({ apiToken, workspaceId: wsId });
+    setChannels(data.channels || []);
+    setAgents(data.agents || []);
+    onCredentialsChange('workspaceId', wsId);
+  }
+
+  const handleConnect = async () => {
+    if (!apiToken.trim()) {
+      setError('Cole o token da API primeiro.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setChannels([]);
+
+    try {
+      const data = await callDiscovery({ apiToken });
+      const found: DiscoveredWorkspace[] = data.workspaces || [];
+      setWorkspaces(found);
+
+      if (found.length === 0) {
+        setError('Nenhum workspace encontrado para este token.');
+        return;
+      }
+
+      // Caso comum: uma conta, um workspace — pula a escolha.
+      if (found.length === 1) {
+        await loadChannelsFor(found[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao consultar o GPT Maker');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSelectWorkspace = async (wsId: string) => {
+    onCredentialsChange('workspaceId', wsId);
+    setChannels([]);
+    if (!wsId) return;
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      await loadChannelsFor(wsId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao listar canais');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /** Escolher o canal preenche agente, telefone e nome de uma vez. */
+  const handleSelectChannel = (channelId: string) => {
+    onCredentialsChange('gptmakerChannelId', channelId);
+
+    const channel = channels.find((c) => c.id === channelId);
+    if (!channel) return;
+
+    if (channel.agentId) onCredentialsChange('agentId', channel.agentId);
+    if (channel.username) onIdentifierChange(channel.username);
+    if (!channelName.trim()) onNameChange(channel.name);
+  };
+
+  return (
+    <div className="space-y-4 p-4 rounded-xl border border-dashed border-slate-300 dark:border-white/15">
+      <div className="flex items-center gap-2">
+        <Key className="w-4 h-4 text-primary-600" />
+        <h4 className="text-sm font-semibold text-slate-900 dark:text-white">
+          Conectar à conta do GPT Maker
+        </h4>
+      </div>
+
+      {/* Token */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          Token da API <span className="text-red-500">*</span>
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={apiToken}
+            onChange={(e) => onCredentialsChange('apiToken', e.target.value)}
+            placeholder="Cole aqui o token do workspace"
+            className="flex-1 px-4 py-2.5 bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl
+              focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-white"
+          />
+          <button
+            type="button"
+            onClick={handleConnect}
+            disabled={isLoading || !apiToken.trim()}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold
+              bg-primary-600 text-white hover:bg-primary-700 transition-colors disabled:opacity-50"
+          >
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+            Buscar
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Gere em app.gptmaker.ai → Desenvolvedores. O token não aparece em nenhum log.
+        </p>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20">
+          <AlertCircle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+        </div>
+      )}
+
+      {/* Workspace — só aparece quando há mais de um */}
+      {workspaces.length > 1 && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            Workspace <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={workspaceId}
+            onChange={(e) => handleSelectWorkspace(e.target.value)}
+            disabled={isLoading}
+            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl
+              focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-white disabled:opacity-50"
+          >
+            <option value="">Selecione...</option>
+            {workspaces.map((ws) => (
+              <option key={ws.id} value={ws.id}>
+                {ws.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Canal */}
+      {channels.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            Canal <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={selectedChannelId}
+            onChange={(e) => handleSelectChannel(e.target.value)}
+            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl
+              focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-white"
+          >
+            <option value="">Selecione o canal...</option>
+            {channels.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                {channel.name} · {channel.type}
+                {channel.username ? ` · ${channel.username}` : ''}
+                {channel.connected ? '' : ' (desconectado)'}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Escolher o canal preenche o agente, o telefone e o nome automaticamente.
+          </p>
+        </div>
+      )}
+
+      {/* Agente — só aparece se o canal escolhido não tiver agente vinculado.
+          Sem agente não há onde configurar o webhook (eles vivem no agente). */}
+      {selectedChannelId && !credentials.agentId && agents.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            Agente <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={credentials.agentId || ''}
+            onChange={(e) => onCredentialsChange('agentId', e.target.value)}
+            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded-xl
+              focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-white"
+          >
+            <option value="">Selecione o agente...</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Este canal não tem agente vinculado no GPT Maker. Escolha qual agente receberá
+            os webhooks.
+          </p>
+        </div>
+      )}
+
+      {selectedChannelId && credentials.agentId && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20">
+          <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-green-700 dark:text-green-300">
+            Canal identificado. Quem atende continua sendo a IA do GPT Maker — a IA do CRM
+            fica desligada neste canal.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface CredentialsStepProps {
   channelType: ChannelType;
   provider: string;
@@ -639,9 +913,22 @@ function CredentialsStep({
         )}
       </div>
 
+      {/* GPT Maker: descoberta automática — o admin só cola o token e escolhe o canal */}
+      {provider === 'gptmaker' && (
+        <GptMakerDiscoveryPanel
+          credentials={credentials}
+          onCredentialsChange={onCredentialsChange}
+          onNameChange={onNameChange}
+          onIdentifierChange={onIdentifierChange}
+          channelName={channelName}
+        />
+      )}
+
       {/* Credential Fields */}
       <div className="space-y-4">
-        {config.fields.map((field) => (
+        {config.fields
+          .filter((field) => !(provider === 'gptmaker' && GPTMAKER_DISCOVERED_FIELDS.includes(field.key)))
+          .map((field) => (
           <div key={field.key} className="space-y-2">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
               {field.label}
