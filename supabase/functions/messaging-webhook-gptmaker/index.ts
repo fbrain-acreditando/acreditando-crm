@@ -278,7 +278,7 @@ async function handleMessage(
   });
 
   if (msgErr) {
-    if (!msgErr.message.toLowerCase().includes("duplicate")) throw msgErr;
+    if (!isDuplicateError(msgErr)) throw toError("Falha ao inserir mensagem", msgErr);
     console.log(`[GPTMaker] Duplicate message ignored: ${externalMessageId}`);
     return;
   }
@@ -351,8 +351,52 @@ async function handleTransfer(
 // =============================================================================
 
 /**
+ * Erros do PostgREST são objetos simples, **não instâncias de `Error`**. Jogá-los
+ * direto no `throw` faz o `catch` do handler cair no fallback e gravar "Unknown
+ * error" — que foi exatamente o que escondeu a primeira falha real em produção.
+ * Sempre embrulhar antes de propagar.
+ */
+function toError(prefix: string, err: { message?: string; code?: string } | null): Error {
+  const detail = err?.message ?? "sem detalhe";
+  const code = err?.code ? ` [${err.code}]` : "";
+  return new Error(`${prefix}: ${detail}${code}`);
+}
+
+function isDuplicateError(err: { message?: string; code?: string } | null): boolean {
+  if (!err) return false;
+  // 23505 = unique_violation
+  if (err.code === "23505") return true;
+  return (err.message ?? "").toLowerCase().includes("duplicate");
+}
+
+async function findConversation(
+  supabase: ReturnType<typeof createClient>,
+  channelId: string,
+  chatId: string
+): Promise<{ conversationId: string; contactId: string | null } | null> {
+  const { data, error } = await supabase
+    .from("messaging_conversations")
+    .select("id, contact_id")
+    .eq("channel_id", channelId)
+    .eq("external_contact_id", chatId)
+    .maybeSingle();
+
+  if (error) throw toError("Falha ao buscar conversa", error);
+  if (!data) return null;
+
+  return { conversationId: data.id, contactId: data.contact_id };
+}
+
+/**
  * Garante conversa + contato (+ deal, se houver routing rule).
- * Idempotente: chamada por qualquer evento, cria só na primeira vez.
+ *
+ * ⚠️ **Precisa aguentar corrida.** O GPT Maker dispara `onNewMessage` e
+ * `onFirstInteraction` quase juntos (observado: 137 ms de diferença) para o
+ * mesmo contato novo. As duas entregas chegam concorrentes, as duas não acham
+ * conversa e as duas tentam inserir — uma ganha, a outra bate na constraint.
+ * Antes, a perdedora estourava e **a mensagem do cliente era perdida**; só a
+ * resposta da IA aparecia. Agora a perdedora relê e segue com a conversa da
+ * vencedora.
  */
 async function ensureConversation(
   supabase: ReturnType<typeof createClient>,
@@ -361,18 +405,8 @@ async function ensureConversation(
 ): Promise<{ conversationId: string; contactId: string | null }> {
   const chatId = event.chatId!;
 
-  const { data: existingConv, error: convFindErr } = await supabase
-    .from("messaging_conversations")
-    .select("id, contact_id")
-    .eq("channel_id", channel.id)
-    .eq("external_contact_id", chatId)
-    .maybeSingle();
-
-  if (convFindErr) throw convFindErr;
-
-  if (existingConv) {
-    return { conversationId: existingConv.id, contactId: existingConv.contact_id };
-  }
+  const existing = await findConversation(supabase, channel.id, chatId);
+  if (existing) return existing;
 
   const contactId = await findOrCreateContact(supabase, channel, event);
 
@@ -399,7 +433,17 @@ async function ensureConversation(
     .select("id")
     .single();
 
-  if (convCreateErr) throw convCreateErr;
+  if (convCreateErr) {
+    // Perdemos a corrida para outra entrega do mesmo contato: relê e segue.
+    if (isDuplicateError(convCreateErr)) {
+      const raced = await findConversation(supabase, channel.id, chatId);
+      if (raced) {
+        console.log(`[GPTMaker] Conversa criada em paralelo, reusando: ${raced.conversationId}`);
+        return raced;
+      }
+    }
+    throw toError("Falha ao criar conversa", convCreateErr);
+  }
 
   const conversationId = newConv.id;
 
@@ -442,7 +486,7 @@ async function findOrCreateContact(
 
     if (lookupErr) {
       console.error("[GPTMaker] Error looking up contact:", lookupErr);
-      throw lookupErr;
+      throw toError("Falha ao buscar contato", lookupErr);
     }
 
     if (existing) return existing.id;
@@ -460,6 +504,20 @@ async function findOrCreateContact(
     .single();
 
   if (createErr) {
+    // Mesma corrida da conversa: duas entregas simultâneas podem criar o mesmo
+    // contato. Se perdemos, relê em vez de deixar a conversa sem contato.
+    if (isDuplicateError(createErr) && phone) {
+      const { data: raced } = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("organization_id", channel.organization_id)
+        .eq("phone", phone)
+        .is("deleted_at", null)
+        .order("created_at")
+        .limit(1)
+        .maybeSingle();
+      if (raced) return raced.id;
+    }
     console.error("[GPTMaker] Error auto-creating contact:", createErr);
     return null;
   }
