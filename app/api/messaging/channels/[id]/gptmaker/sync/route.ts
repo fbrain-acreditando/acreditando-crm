@@ -119,6 +119,7 @@ export async function POST(req: Request, { params }: RouteParams) {
     chats: { found: 0, imported: 0, skipped: 0 },
     messages: { imported: 0 },
     deals: { created: 0 },
+    avatars: { updated: 0 },
     errors: [] as string[],
   };
 
@@ -175,17 +176,39 @@ export async function POST(req: Request, { params }: RouteParams) {
 
         const phone = normalizePhone(chat.whatsappPhone ?? chat.recipient);
         const displayName = chatDisplayName(chat, phone);
+        // Foto de perfil do WhatsApp — vem só na listagem de chats, nunca no webhook.
+        // ⚠️ URL do pps.whatsapp.net é temporária/assinada: expira. Por isso a
+        // re-sincronização atualiza a foto das conversas já existentes também.
+        const avatar =
+          (chat.picture as string | undefined) ??
+          (chat.userPicture as string | undefined) ??
+          (chat.avatar as string | undefined) ??
+          null;
 
         // --- Conversa (identidade = chatId do GPT Maker) ---
         const { data: existingConv } = await supabase
           .from('messaging_conversations')
-          .select('id, contact_id')
+          .select('id, contact_id, external_contact_avatar')
           .eq('channel_id', channelId)
           .eq('external_contact_id', chat.id)
           .maybeSingle();
 
         let conversationId = existingConv?.id as string | undefined;
         let contactId = existingConv?.contact_id as string | null | undefined;
+
+        // Conversa já existe: atualiza a foto (a URL antiga pode ter expirado)
+        // e propaga para o contato. Sem isto, re-sincronizar nunca traria o avatar
+        // das 20 conversas importadas antes deste recurso existir.
+        if (conversationId && avatar && avatar !== existingConv?.external_contact_avatar) {
+          await supabase
+            .from('messaging_conversations')
+            .update({ external_contact_avatar: avatar })
+            .eq('id', conversationId);
+          if (contactId) {
+            await supabase.from('contacts').update({ avatar }).eq('id', contactId);
+          }
+          report.avatars.updated++;
+        }
 
         if (!conversationId) {
           // --- Contato (reusa por telefone; não duplica) ---
@@ -210,6 +233,7 @@ export async function POST(req: Request, { params }: RouteParams) {
                 name: displayName,
                 phone,
                 source: 'whatsapp',
+                avatar,
               })
               .select('id')
               .single();
@@ -229,6 +253,7 @@ export async function POST(req: Request, { params }: RouteParams) {
               business_unit_id: channel.business_unit_id,
               external_contact_id: chat.id,
               external_contact_name: displayName,
+              external_contact_avatar: avatar,
               contact_id: contactId,
               status: chat.finished ? 'resolved' : 'open',
               priority: chat.humanTalk ? 'high' : 'normal',

@@ -115,7 +115,10 @@ export interface GptMakerChat {
   userId?: string | null;
   whatsappPhone?: string;
   recipient?: string;
+  /** Foto de perfil do WhatsApp (URL pps.whatsapp.net, temporária). */
   picture?: string;
+  userPicture?: string | null;
+  avatar?: string | null;
   /** true = atendimento está com humano (IA pausada) */
   humanTalk?: boolean;
   finished?: boolean;

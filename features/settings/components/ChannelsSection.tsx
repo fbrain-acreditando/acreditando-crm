@@ -201,6 +201,7 @@ interface GptMakerSyncReport {
   chats: { found: number; imported: number; skipped: number };
   messages: { imported: number };
   deals: { created: number };
+  avatars?: { updated: number };
   errors: string[];
   error?: string;
 }
@@ -288,6 +289,11 @@ function GptMakerSyncPanel({ channelId }: { channelId: string }) {
           <p className="text-purple-700 dark:text-purple-300">
             💬 Mensagens: {report.messages.imported} importadas
           </p>
+          {report.avatars && report.avatars.updated > 0 && (
+            <p className="text-purple-700 dark:text-purple-300">
+              🖼️ Fotos de perfil: {report.avatars.updated} atualizadas
+            </p>
+          )}
           {report.errors.length > 0 && (
             <details className="text-red-700 dark:text-red-300">
               <summary className="cursor-pointer">
