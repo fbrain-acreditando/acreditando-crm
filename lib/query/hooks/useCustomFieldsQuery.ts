@@ -57,10 +57,32 @@ export const useCreateCustomField = () => {
     }) => {
       const { data, error } = await customFieldsService.create(input);
       if (error) throw error;
-      return data!;
+      return { field: data!, entityType: input.entityType || DEFAULT_ENTITY };
+    },
+    // A lista é atualizada pelo próprio resultado da mutation (convenção do repo:
+    // `setQueryData` antes de invalidate). Assim o campo novo aparece na hora,
+    // sem depender de um refetch — que era o sintoma relatado em 27/07 (o campo
+    // só aparecia depois do F5). A invalidação em `onSettled` fica como rede.
+    onSuccess: ({ field, entityType }) => {
+      queryClient.setQueryData<CustomFieldDefinition[]>(
+        queryKeys.customFields.byEntity(entityType),
+        (old) => {
+          const list = old ?? [];
+          if (list.some(f => f.id === field.id)) return list;
+          return [...list, field];
+        }
+      );
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.customFields.all });
+      // `refetchType: 'none'` de propósito: marca como obsoleto SEM refetchar
+      // agora. Um refetch imediato sobrescreveria o `setQueryData` acima com a
+      // leitura anterior — foi assim que o otimismo se perdeu no bug de mover
+      // card (24/07). A revalidação acontece na próxima montagem, o que cobre
+      // alteração feita por outro usuário.
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.customFields.all,
+        refetchType: 'none',
+      });
     },
   });
 };
@@ -80,8 +102,32 @@ export const useUpdateCustomField = () => {
       if (error) throw error;
       return { id, updates };
     },
+    onSuccess: ({ id, updates }) => {
+      queryClient.setQueryData<CustomFieldDefinition[]>(
+        queryKeys.customFields.byEntity(DEFAULT_ENTITY),
+        (old) =>
+          (old ?? []).map(f => {
+            if (f.id !== id) return f;
+            const next: CustomFieldDefinition = { ...f };
+            if (updates.label !== undefined) next.label = updates.label;
+            if (updates.type !== undefined) next.type = updates.type;
+            // Espelha a regra do serviço: fora de `select` não há opções.
+            if (updates.type !== undefined && updates.type !== 'select') delete next.options;
+            else if (updates.options !== undefined) next.options = updates.options;
+            return next;
+          })
+      );
+    },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.customFields.all });
+      // `refetchType: 'none'` de propósito: marca como obsoleto SEM refetchar
+      // agora. Um refetch imediato sobrescreveria o `setQueryData` acima com a
+      // leitura anterior — foi assim que o otimismo se perdeu no bug de mover
+      // card (24/07). A revalidação acontece na próxima montagem, o que cobre
+      // alteração feita por outro usuário.
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.customFields.all,
+        refetchType: 'none',
+      });
     },
   });
 };
@@ -95,8 +141,22 @@ export const useDeleteCustomField = () => {
       if (error) throw error;
       return id;
     },
+    onSuccess: (id) => {
+      queryClient.setQueryData<CustomFieldDefinition[]>(
+        queryKeys.customFields.byEntity(DEFAULT_ENTITY),
+        (old) => (old ?? []).filter(f => f.id !== id)
+      );
+    },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.customFields.all });
+      // `refetchType: 'none'` de propósito: marca como obsoleto SEM refetchar
+      // agora. Um refetch imediato sobrescreveria o `setQueryData` acima com a
+      // leitura anterior — foi assim que o otimismo se perdeu no bug de mover
+      // card (24/07). A revalidação acontece na próxima montagem, o que cobre
+      // alteração feita por outro usuário.
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.customFields.all,
+        refetchType: 'none',
+      });
     },
   });
 };
