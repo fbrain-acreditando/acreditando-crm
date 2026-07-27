@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { PenTool, Pencil, Check, Plus, Tag, Trash2 } from 'lucide-react';
 import { SettingsSection } from './SettingsSection';
 import { CustomFieldDefinition, CustomFieldType } from '@/types';
 import { Button } from '@/components/ui/button';
 import { InputField, SelectField } from '@/components/ui/FormField';
+import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 
 interface CustomFieldsManagerProps {
   customFieldDefinitions: CustomFieldDefinition[];
@@ -66,6 +67,16 @@ export const CustomFieldsManager: React.FC<CustomFieldsManagerProps> = ({
   onSaveField,
   onRemoveField
 }) => {
+  // Guarda o campo escolhido até a confirmação. Apagar definição é destrutivo e
+  // não tem desfazer — o clique na lixeira abre a pergunta, nunca executa direto.
+  const [fieldToDelete, setFieldToDelete] = useState<CustomFieldDefinition | null>(null);
+
+  const confirmDelete = () => {
+    if (!fieldToDelete) return;
+    onRemoveField(fieldToDelete.id);
+    setFieldToDelete(null);
+  };
+
   return (
     <SettingsSection title="Campos Personalizados" icon={PenTool}>
       <p className="text-sm text-slate-600 dark:text-slate-300 mb-4 leading-relaxed">
@@ -171,7 +182,7 @@ export const CustomFieldsManager: React.FC<CustomFieldsManagerProps> = ({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => onRemoveField(field.id)}
+                onClick={() => setFieldToDelete(field)}
                 title="Remover campo"
                 className="text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
               >
@@ -184,6 +195,27 @@ export const CustomFieldsManager: React.FC<CustomFieldsManagerProps> = ({
           <p className="text-center text-slate-500 text-sm py-4 italic">Nenhum campo personalizado criado.</p>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={!!fieldToDelete}
+        onClose={() => setFieldToDelete(null)}
+        onConfirm={confirmDelete}
+        title="Remover este campo personalizado?"
+        message={
+          <div className="space-y-2">
+            <p>
+              O campo <b>{fieldToDelete?.label}</b> deixa de aparecer no card dos negócios.
+            </p>
+            <p>
+              O que já foi preenchido <b>não é apagado</b> — fica guardado, mas some da tela.
+              Recriar um campo com o mesmo nome traz os valores de volta.
+            </p>
+          </div>
+        }
+        confirmText="Sim, remover"
+        cancelText="Cancelar"
+        variant="danger"
+      />
     </SettingsSection>
   );
 };
