@@ -471,12 +471,12 @@ export class GptMakerWhatsAppProvider extends BaseChannelProvider {
    */
   async configureWebhooks(
     webhookUrl: string,
-    events: string[] = ['onNewMessage', 'onFirstInteraction', 'onTransfer']
-  ): Promise<{ success: boolean; error?: string }> {
+    events: string[] = ['onNewMessage', 'onFirstInteraction', 'onTransfer'],
+    options: { overwriteExternal?: boolean } = {}
+  ): Promise<{ success: boolean; error?: string; skipped?: Array<{ event: string; url: string }> }> {
     this.ensureInitialized();
 
     try {
-      // Preserva os webhooks já configurados que não são nossos.
       const current = await this.request<Record<string, string>>(
         'GET',
         `/v2/agent/${encodeURIComponent(this.agentId)}/webhooks`
@@ -486,14 +486,26 @@ export class GptMakerWhatsAppProvider extends BaseChannelProvider {
       // Por isso cada evento ganha a MESMA URL com um `&event=` diferente:
       // é assim que a edge function sabe se aquilo é mensagem, transferência
       // ou início de atendimento. Sem isso, sobra só a dedução pela forma do JSON.
-      const separator = webhookUrl.includes("?") ? "&" : "?";
+      const separator = webhookUrl.includes('?') ? '&' : '?';
       const body: Record<string, string> = { ...current };
+      const skipped: Array<{ event: string; url: string }> = [];
+
       for (const event of events) {
+        // ⚠️ Um evento pode já estar apontando para OUTRO sistema — no
+        // Acreditando, o `onTransfer` apontava para um fluxo do N8N. Sobrescrever
+        // sem olhar derruba essa automação em silêncio: o webhook do fornecedor
+        // aceita a troca e ninguém percebe até o alerta parar de chegar.
+        // Só substituímos o que já é nosso, salvo pedido explícito.
+        const existing = current[event];
+        if (existing && !options.overwriteExternal && !isSameHost(existing, webhookUrl)) {
+          skipped.push({ event, url: existing });
+          continue;
+        }
         body[event] = `${webhookUrl}${separator}event=${encodeURIComponent(event)}`;
       }
 
       await this.request('PUT', `/v2/agent/${encodeURIComponent(this.agentId)}/webhooks`, body);
-      return { success: true };
+      return { success: true, ...(skipped.length > 0 ? { skipped } : {}) };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' };
     }
@@ -659,5 +671,20 @@ export const gptMakerDiscovery = {
     );
   },
 };
+
+/**
+ * Duas URLs apontam para o mesmo destino?
+ *
+ * Comparação por host (o `?key=` e o `&event=` mudam entre registros nossos).
+ * URL inválida conta como "de terceiro" — na dúvida, preserva em vez de
+ * atropelar.
+ */
+export function isSameHost(a: string, b: string): boolean {
+  try {
+    return new URL(a).host === new URL(b).host;
+  } catch {
+    return false;
+  }
+}
 
 export { GPTMAKER_API_BASE, GPTMAKER_CHANNEL_TYPE_MAP };

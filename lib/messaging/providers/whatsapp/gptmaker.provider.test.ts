@@ -363,6 +363,90 @@ describe('GptMakerWhatsAppProvider', () => {
       expect(body.onNewMessage).toBe('https://crm/hook/uuid?key=segredo&event=onNewMessage');
       expect(body.onTransfer).toBe('https://crm/hook/uuid?key=segredo&event=onTransfer');
     });
+
+    /**
+     * Incidente de 27/07: no Acreditando o `onTransfer` apontava para um fluxo do
+     * N8N que avisava a Fernanda quando a IA passava o lead para humano. Como
+     * `onTransfer` está na lista padrão, um "Sincronizar" o substituiria pela URL
+     * do CRM — e o aviso simplesmente pararia, sem erro e sem log.
+     */
+    it('NÃO atropela evento da lista que aponta para outro sistema', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ onTransfer: 'https://n8n.exemplo.com/webhook/aviso' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true }),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      const result = await provider.configureWebhooks('https://crm/hook?key=s', [
+        'onNewMessage',
+        'onTransfer',
+      ]);
+
+      const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(body.onTransfer).toBe('https://n8n.exemplo.com/webhook/aviso');
+      expect(body.onNewMessage).toBe('https://crm/hook?key=s&event=onNewMessage');
+      // E avisa, em vez de fingir que fez tudo.
+      expect(result.skipped).toEqual([
+        { event: 'onTransfer', url: 'https://n8n.exemplo.com/webhook/aviso' },
+      ]);
+    });
+
+    it('atualiza normalmente quando a URL existente já é nossa', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ onTransfer: 'https://crm/hook?key=antigo' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true }),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      const result = await provider.configureWebhooks('https://crm/hook?key=novo', ['onTransfer']);
+
+      const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(body.onTransfer).toBe('https://crm/hook?key=novo&event=onTransfer');
+      expect(result.skipped).toBeUndefined();
+    });
+
+    it('com overwriteExternal, substitui mesmo apontando para fora', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ onTransfer: 'https://n8n.exemplo.com/webhook/aviso' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true }),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      await provider.configureWebhooks('https://crm/hook?key=s', ['onTransfer'], {
+        overwriteExternal: true,
+      });
+
+      const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(body.onTransfer).toBe('https://crm/hook?key=s&event=onTransfer');
+    });
   });
 
   describe('registro no factory', () => {
