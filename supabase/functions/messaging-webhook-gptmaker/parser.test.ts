@@ -67,6 +67,21 @@ const REAL_INTERACTION = {
   interactionId: '3F69B23A48B531FC289CDA78A3C64868',
 };
 
+/**
+ * Transferência REAL, capturada em 2026-07-27 pelo Filipe (webhook de teste no
+ * N8N). Note a ausência de `messageId`, `role`, `interactionId` e `protocol` —
+ * é isso que exige uma regra própria de classificação.
+ */
+const REAL_TRANSFER = {
+  summary: null,
+  agentId: '3E12E22DF12D30FBB326262F356E288B',
+  name: 'Filipe Costa',
+  recipient: '5512997534278',
+  channel: 'WHATSAPP',
+  contextId: '3E14B10711E1C0FE16B42EC236EAE1D6-5512997534278',
+  channelId: '3E14B10711E1C0FE16B42EC236EAE1D6',
+};
+
 // =============================================================================
 // TESTES
 // =============================================================================
@@ -87,9 +102,29 @@ describe('classifyEvent — o payload real NÃO traz o nome do evento', () => {
     expect(classifyEvent('', REAL_INTERACTION)).toBe('interaction');
   });
 
+  it('sem pista na URL, deduz TRANSFERÊNCIA pela forma do payload', () => {
+    // Payload real capturado em 2026-07-27. Antes desta regra ele caía em
+    // `unknown` e a transferência — o evento mais valioso do canal — era
+    // descartada em silêncio.
+    expect(classifyEvent('', REAL_TRANSFER)).toBe('transfer');
+  });
+
+  it('summary null ainda conta como transferência (a chave é a presença)', () => {
+    expect(REAL_TRANSFER.summary).toBeNull();
+    expect(classifyEvent('', { ...REAL_TRANSFER, summary: 'Lead qualificado' })).toBe('transfer');
+  });
+
+  it('não confunde transferência com interação', () => {
+    // Os dois têm contextId/recipient/name; o que separa é summary × protocol.
+    expect(classifyEvent('', REAL_INTERACTION)).toBe('interaction');
+    expect(classifyEvent('', REAL_TRANSFER)).toBe('transfer');
+  });
+
   it('devolve unknown quando não há pista nem forma reconhecível', () => {
     expect(classifyEvent('', { foo: 'bar' })).toBe('unknown');
     expect(classifyEvent('')).toBe('unknown');
+    // contextId sozinho não basta — sem summary não dá para afirmar transferência.
+    expect(classifyEvent('', { contextId: 'abc-123' })).toBe('unknown');
   });
 
   it('a pista da URL tem precedência sobre a forma', () => {

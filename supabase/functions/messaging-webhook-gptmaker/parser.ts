@@ -24,6 +24,22 @@
  * }
  * ```
  *
+ * **Transferência** (onTransfer) — capturado em 2026-07-27:
+ * ```json
+ * {
+ *   "summary": null,                           // resumo da conversa pela IA (pode vir null)
+ *   "agentId": "3E12E22DF12D30FBB326262F356E288B",
+ *   "name": "Filipe Costa",
+ *   "recipient": "5512997534278",
+ *   "channel": "WHATSAPP",
+ *   "contextId": "<channelId>-<recipient>",    // ← identidade da conversa
+ *   "channelId": "3E14B10711E1C0FE16B42EC236EAE1D6"
+ * }
+ * ```
+ * ⚠️ Repare no que ele NÃO tem: `messageId`, `role`, `interactionId`, `protocol`.
+ * Sem uma regra própria, a inferência por forma o classificaria como `unknown`
+ * e a transferência — o evento mais valioso do canal — seria descartada calada.
+ *
  * **Interação** (onFirstInteraction / onStartInteraction):
  * ```json
  * {
@@ -74,6 +90,9 @@ export interface GptMakerPayload {
   protocol?: number;
   interactionId?: string;
   recipient?: string;
+  // Transferência (onTransfer) — `summary` é o resumo da conversa feito pela IA.
+  // Pode vir `null`, por isso o discriminador é a PRESENÇA da chave, não o valor.
+  summary?: string | null;
   // Comuns
   contextId?: string;
   channelId?: string;
@@ -188,6 +207,11 @@ export function classifyEvent(eventHint: string, payload?: GptMakerPayload): Nor
   if (payload) {
     if (payload.messageId || typeof payload.role === "string") return "message";
     if (payload.interactionId || payload.protocol !== undefined) return "interaction";
+    // Transferência: não tem messageId, role, interactionId nem protocol. O que
+    // a distingue é `summary` (resumo da conversa) junto de `contextId`. Sem esta
+    // regra, o evento mais valioso do canal virava `unknown` e era descartado.
+    // Formato confirmado em 2026-07-27 — ver cabeçalho do arquivo.
+    if ("summary" in payload && payload.contextId !== undefined) return "transfer";
   }
 
   return "unknown";
