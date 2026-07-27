@@ -344,6 +344,96 @@ async function handleTransfer(
   }
 
   console.log(`[GPTMaker] Transferência registrada — conversa ${conversationId} marcada como alta prioridade`);
+
+  // A transferência é o momento em que a IA do fornecedor TERMINOU de perguntar:
+  // a conversa está completa e o lead qualificado. É o instante certo para ler
+  // tudo de uma vez e preencher os campos — e é uma chamada de modelo por lead,
+  // não uma por mensagem.
+  await triggerCustomFieldsExtraction(supabase, channel, conversationId);
+}
+
+/**
+ * Dispara a extração dos campos personalizados no app Next.
+ *
+ * Não confundir com `/api/messaging/ai/process`: aquilo aciona a IA de
+ * atendimento do CRM, que neste canal fica desligada de propósito (quem
+ * responde é o agente do GPT Maker). Esta rota só LÊ a conversa e preenche
+ * campo vazio — não manda mensagem nenhuma para o lead.
+ *
+ * Falha aqui nunca derruba o webhook: o retorno 200 para o fornecedor é mais
+ * importante que a extração, que pode ser refeita depois.
+ */
+async function triggerCustomFieldsExtraction(
+  supabase: ReturnType<typeof createClient>,
+  channel: ChannelRow,
+  conversationId: string
+): Promise<void> {
+  try {
+    const appUrl = Deno.env.get("APP_URL") ?? Deno.env.get("CRM_APP_URL");
+    const internalSecret = Deno.env.get("INTERNAL_API_SECRET");
+
+    if (!appUrl || !internalSecret) {
+      console.log("[GPTMaker] APP_URL/INTERNAL_API_SECRET ausentes — extração de campos ignorada");
+      return;
+    }
+
+    // ATENÇÃO: `deals` NÃO tem `conversation_id` — o elo entre conversa e deal
+    // é o CONTATO (`autoCreateDeal` grava `contact_id`). Buscar por
+    // `conversation_id` falharia silenciosamente.
+    const { data: conv, error: convErr } = await supabase
+      .from("messaging_conversations")
+      .select("contact_id")
+      .eq("id", conversationId)
+      .maybeSingle();
+
+    if (convErr || !conv?.contact_id) {
+      console.log(`[GPTMaker] Conversa ${conversationId} sem contato — extração ignorada`);
+      return;
+    }
+
+    // Um contato pode ter mais de um deal; o mais recente é o desta conversa.
+    const { data: deal, error: dealErr } = await supabase
+      .from("deals")
+      .select("id")
+      .eq("contact_id", conv.contact_id)
+      .eq("organization_id", channel.organization_id)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (dealErr) {
+      console.error("[GPTMaker] Falha ao localizar deal para extração:", dealErr);
+      return;
+    }
+
+    if (!deal?.id) {
+      console.log(`[GPTMaker] Contato ${conv.contact_id} sem deal — extração de campos ignorada`);
+      return;
+    }
+
+    const response = await fetch(`${appUrl}/api/messaging/ai/extract-fields`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": internalSecret,
+      },
+      body: JSON.stringify({
+        conversationId,
+        organizationId: channel.organization_id,
+        dealId: deal.id,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`[GPTMaker] Extração de campos respondeu ${response.status}`);
+      return;
+    }
+
+    console.log(`[GPTMaker] Extração de campos disparada para o deal ${deal.id}`);
+  } catch (error) {
+    console.error("[GPTMaker] Erro ao disparar extração de campos (não fatal):", error);
+  }
 }
 
 // =============================================================================
