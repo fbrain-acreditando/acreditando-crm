@@ -20,6 +20,7 @@ import { useRealtimeSyncKanban } from '@/lib/realtime/useRealtimeSync';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLifecycleStages } from '@/lib/query/hooks/useLifecycleStagesQuery';
+import { useCustomFields } from '@/lib/query/hooks/useCustomFieldsQuery';
 import { useAI } from '@/context/AIContext';
 
 /**
@@ -265,8 +266,8 @@ export const useBoardsController = () => {
   // Enable realtime sync for Kanban
   useRealtimeSyncKanban();
 
-  // Custom field definitions (TODO: migrate to query)
-  const customFieldDefinitions: CustomFieldDefinition[] = [];
+  // Custom field definitions (Supabase — `custom_field_definitions`)
+  const { data: customFieldDefinitions = [] as CustomFieldDefinition[] } = useCustomFields('deal');
 
   //View State
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');

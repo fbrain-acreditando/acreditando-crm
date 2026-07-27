@@ -2,9 +2,15 @@ import { useState } from 'react';
 import { useToast } from '@/context/ToastContext';
 import { CustomFieldDefinition, CustomFieldType } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import {
+  useCustomFields,
+  useCreateCustomField,
+  useUpdateCustomField,
+  useDeleteCustomField,
+} from '@/lib/query/hooks';
 
-// TODO: Migrate customFieldDefinitions and tags to Supabase
-// For now, using local state as placeholder
+// Campos personalizados vivem em `custom_field_definitions` (Supabase).
+// TODO: migrar `tags` para o Supabase também — segue em localStorage.
 /**
  * Hook React `useSettingsController` que encapsula uma lógica reutilizável.
  * @returns {{ defaultRoute: string; setDefaultRoute: Dispatch<SetStateAction<string>>; customFieldDefinitions: CustomFieldDefinition[]; newFieldLabel: string; ... 14 more ...; removeTag: (tag: string) => void; }} Retorna um valor do tipo `{ defaultRoute: string; setDefaultRoute: Dispatch<SetStateAction<string>>; customFieldDefinitions: CustomFieldDefinition[]; newFieldLabel: string; ... 14 more ...; removeTag: (tag: string) => void; }`.
@@ -15,10 +21,11 @@ export const useSettingsController = () => {
   // General Settings
   const [defaultRoute, setDefaultRoute] = usePersistedState<string>('crm_default_route', '/boards');
 
-  // Custom Fields State (local - TODO: migrate to Supabase)
-  const [customFieldDefinitions, setCustomFieldDefinitions] = usePersistedState<
-    CustomFieldDefinition[]
-  >('crm_custom_fields', []);
+  // Custom Fields — persistidos no Supabase (`custom_field_definitions`)
+  const { data: customFieldDefinitions = [] } = useCustomFields('deal');
+  const createCustomField = useCreateCustomField();
+  const updateCustomField = useUpdateCustomField();
+  const deleteCustomField = useDeleteCustomField();
   const [newFieldLabel, setNewFieldLabel] = useState('');
   const [newFieldType, setNewFieldType] = useState<CustomFieldType>('text');
   const [newFieldOptions, setNewFieldOptions] = useState('');
@@ -43,7 +50,7 @@ export const useSettingsController = () => {
     setNewFieldOptions('');
   };
 
-  const handleSaveField = () => {
+  const handleSaveField = async () => {
     if (!newFieldLabel.trim()) return;
 
     const optionsArray =
@@ -54,44 +61,45 @@ export const useSettingsController = () => {
           .filter(opt => opt !== '')
         : undefined;
 
-    if (editingId) {
-      // UPDATE EXISTING
-      setCustomFieldDefinitions(prev =>
-        prev.map(f =>
-          f.id === editingId
-            ? { ...f, label: newFieldLabel, type: newFieldType, options: optionsArray }
-            : f
-        )
+    try {
+      if (editingId) {
+        // A `key` não é alterada aqui de propósito: ela é o vínculo com os
+        // valores já gravados em `deals.custom_fields`.
+        await updateCustomField.mutateAsync({
+          id: editingId,
+          updates: { label: newFieldLabel, type: newFieldType, options: optionsArray ?? [] },
+        });
+        addToast('Campo personalizado atualizado com sucesso!', 'success');
+        cancelEditingField();
+      } else {
+        await createCustomField.mutateAsync({
+          label: newFieldLabel,
+          type: newFieldType,
+          options: optionsArray,
+          entityType: 'deal',
+        });
+        addToast('Campo personalizado criado com sucesso!', 'success');
+        setNewFieldLabel('');
+        setNewFieldOptions('');
+      }
+    } catch (error) {
+      addToast(
+        `Não foi possível salvar o campo: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
+        'error'
       );
-      addToast('Campo personalizado atualizado com sucesso!', 'success');
-      cancelEditingField();
-    } else {
-      // CREATE NEW
-      const key = newFieldLabel
-        .toLowerCase()
-        .replace(/(?:^\w|[A-Z]|\b\w)/g, (word, index) =>
-          index === 0 ? word.toLowerCase() : word.toUpperCase()
-        )
-        .replace(/\s+/g, '');
-
-      const newField: CustomFieldDefinition = {
-        id: crypto.randomUUID(),
-        key,
-        label: newFieldLabel,
-        type: newFieldType,
-        options: optionsArray,
-      };
-
-      setCustomFieldDefinitions(prev => [...prev, newField]);
-      addToast('Campo personalizado criado com sucesso!', 'success');
-      setNewFieldLabel('');
-      setNewFieldOptions('');
     }
   };
 
-  const handleRemoveField = (id: string) => {
-    setCustomFieldDefinitions(prev => prev.filter(f => f.id !== id));
-    addToast('Campo personalizado removido.', 'info');
+  const handleRemoveField = async (id: string) => {
+    try {
+      await deleteCustomField.mutateAsync(id);
+      addToast('Campo personalizado removido.', 'info');
+    } catch (error) {
+      addToast(
+        `Não foi possível remover o campo: ${error instanceof Error ? error.message : 'erro desconhecido'}`,
+        'error'
+      );
+    }
   };
 
   // Tags Logic

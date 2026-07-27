@@ -240,6 +240,14 @@ export {
   useDeleteProduct,
 } from './useProductsQuery';
 
+// Custom field definitions
+export {
+  useCustomFields,
+  useCreateCustomField,
+  useUpdateCustomField,
+  useDeleteCustomField,
+} from './useCustomFieldsQuery';
+
 // Org Settings (user prefs + org AI config)
 export {
   useOrgSettings,

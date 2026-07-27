@@ -15,6 +15,7 @@ import {
 } from '@/lib/query/hooks';
 import { useUIState } from '@/store/uiState';
 import { useActiveProducts } from '@/lib/query/hooks/useProductsQuery';
+import { useCustomFields } from '@/lib/query/hooks/useCustomFieldsQuery';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
@@ -108,7 +109,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   const updateActivity = (id: string, updates: Partial<import('@/types').Activity>) => updateActivityMutation.mutateAsync({ id, updates });
   const deleteActivity = (id: string) => deleteActivityMutation.mutateAsync(id);
   const { data: products = [] } = useActiveProducts();
-  const customFieldDefinitions: import('@/types').CustomFieldDefinition[] = [];
+  const { data: customFieldDefinitions = [] } = useCustomFields('deal');
   const { profile } = useAuth();
   const { addToast } = useToast();
   const router = useRouter();

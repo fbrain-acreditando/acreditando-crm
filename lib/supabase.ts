@@ -7,6 +7,7 @@ export { contactsService, companiesService } from './supabase/contacts';
 export { dealsService } from './supabase/deals';
 export { activitiesService } from './supabase/activities';
 export { productsService } from './supabase/products';
+export { customFieldsService, deriveFieldKey } from './supabase/customFields';
 export { settingsService, lifecycleStagesService } from './supabase/settings';
 
 // Re-export Realtime hooks

@@ -223,6 +223,15 @@ export const queryKeys = {
     products: createQueryKeys('products'),
 
     /**
+     * Custom field definitions query keys.
+     * Escopo por entidade (`deal`, `contact`, ...) — o board e o modal de deal
+     * consomem `byEntity('deal')`.
+     */
+    customFields: createExtendedQueryKeys('customFields', base => ({
+        byEntity: (entityType: string) => [...base.all, 'entity', entityType] as const,
+    })),
+
+    /**
      * Org-level + user settings query keys.
      */
     orgSettings: createQueryKeys('orgSettings'),
