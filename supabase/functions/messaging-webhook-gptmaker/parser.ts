@@ -306,6 +306,27 @@ export function normalizeEvent(payload: GptMakerPayload, eventHint = ""): Normal
   };
 }
 
+/**
+ * Janela de deduplicação da transferência, em milissegundos.
+ *
+ * A transferência é o único evento que **não traz `date`** no payload — o
+ * `timestamp` dela é a hora de chegada aqui. Isso cria um dilema:
+ *
+ * - id só com o `contextId` → a **retransferência é engolida para sempre**
+ *   (lead que volta semanas depois e é passado de novo nunca reprocessa);
+ * - id com o timestamp cru → **cada retry do fornecedor vira um evento novo**,
+ *   porque a hora de chegada muda a cada entrega.
+ *
+ * A janela resolve os dois: entregas dentro do mesmo balde de 5 min colapsam
+ * num id só (retry deduplicado), e uma transferência posterior cai em balde
+ * diferente (reprocessa). Os limites — retry que cruza a fronteira do balde
+ * duplica; retransferência dentro de 5 min é engolida — são aceitos: o
+ * fornecedor responde 200 mesmo em erro de processamento, então retry só
+ * acontece em timeout de rede, e transferir o mesmo lead duas vezes em 5
+ * minutos é operacionalmente indistinguível de um retry.
+ */
+export const TRANSFER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
 /** ID estável do evento, para deduplicação. */
 export function generateStableEventId(
   event: NormalizedEvent,
@@ -313,7 +334,10 @@ export function generateStableEventId(
   rawEvent: string
 ): string {
   if (event.externalMessageId) return `gpt_${event.kind}_${event.externalMessageId}`;
-  if (event.kind === "transfer" && event.chatId) return `gpt_transfer_${event.chatId}`;
+  if (event.kind === "transfer" && event.chatId) {
+    const bucket = Math.floor(event.timestamp.getTime() / TRANSFER_DEDUPE_WINDOW_MS);
+    return `gpt_transfer_${event.chatId}_${bucket}`;
+  }
   if (event.chatId) {
     return `gpt_${rawEvent || "event"}_${event.chatId}_${event.timestamp.getTime()}`;
   }

@@ -8,7 +8,7 @@
  * Anonimizados apenas nos identificadores; a ESTRUTURA é exatamente a recebida.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   normalizeEvent,
   normalizePhone,
@@ -17,6 +17,7 @@ import {
   timingSafeEqual,
   getSecretFromRequest,
   recipientFromContextId,
+  TRANSFER_DEDUPE_WINDOW_MS,
 } from './parser';
 
 // =============================================================================
@@ -312,6 +313,59 @@ describe('generateStableEventId', () => {
       'onFirstInteraction'
     );
     expect(msg).not.toBe(inter);
+  });
+});
+
+/**
+ * A transferência é o único evento sem `date` no payload: o timestamp é a hora
+ * de chegada. Por isso o id usa uma JANELA (ver TRANSFER_DEDUPE_WINDOW_MS) —
+ * sem ela, ou a retransferência era engolida para sempre, ou todo retry do
+ * fornecedor virava um evento novo.
+ *
+ * Os testes fixam o relógio num instante alinhado ao balde, para que os deslocamentos
+ * abaixo não dependam de onde a hora real cai dentro da janela.
+ */
+describe('generateStableEventId — transferência (janela de dedupe)', () => {
+  /** 10:00:00Z é múltiplo exato de 5 min: começo de balde. */
+  const BASE = Date.UTC(2026, 6, 28, 10, 0, 0);
+
+  const transferIdAt = (offsetMs: number, payload = REAL_TRANSFER) => {
+    vi.setSystemTime(new Date(BASE + offsetMs));
+    return generateStableEventId(normalizeEvent(payload, 'onTransfer'), 'ch', 'onTransfer');
+  };
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('retry do fornecedor no mesmo instante é duplicata', () => {
+    expect(transferIdAt(0)).toBe(transferIdAt(0));
+  });
+
+  it('retry 90s depois ainda é duplicata (mesma janela)', () => {
+    expect(transferIdAt(0)).toBe(transferIdAt(90_000));
+  });
+
+  it('RETRANSFERÊNCIA dias depois gera id novo — antes era engolida em silêncio', () => {
+    const primeira = transferIdAt(0);
+    const semanasDepois = transferIdAt(21 * 24 * 60 * 60 * 1000);
+    expect(semanasDepois).not.toBe(primeira);
+  });
+
+  it('duas transferências separadas por mais que a janela reprocessam', () => {
+    expect(transferIdAt(0)).not.toBe(transferIdAt(TRANSFER_DEDUPE_WINDOW_MS + 1000));
+  });
+
+  it('conversas diferentes na mesma janela não colidem', () => {
+    const outraConversa = {
+      ...REAL_TRANSFER,
+      contextId: '3E14B10711E1C0FE16B42EC236EAE1D6-553598205552',
+      recipient: '553598205552',
+    };
+    expect(transferIdAt(0)).not.toBe(transferIdAt(0, outraConversa));
+  });
+
+  it('o id continua carregando o contextId (rastreável no audit log)', () => {
+    expect(transferIdAt(0)).toContain(REAL_TRANSFER.contextId);
   });
 });
 
