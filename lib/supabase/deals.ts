@@ -284,8 +284,61 @@ export const dealsService = {
   },
 
   /**
+   * Devolve o ID do deal MAIS RECENTE de um contato — ou `null` se não houver.
+   *
+   * Serve à navegação conversa → card. Não existe FK entre `deals` e
+   * `messaging_conversations`: o elo é o CONTATO (`deals.contact_id` e
+   * `messaging_conversations.contact_id` apontam ambos para `contacts.id`).
+   *
+   * ⚠️ Um contato pode ter MAIS DE UM deal (não há `UNIQUE` em `contact_id`),
+   * então "o deal desta conversa" é uma escolha, não um fato. O critério aqui —
+   * mais recente por `created_at`, ignorando deletados — é **o mesmo** usado pela
+   * edge function ao religar a extração de campos
+   * (`messaging-webhook-gptmaker/index.ts:394-403`). Manter os dois idênticos é
+   * deliberado: se divergirem, a extração preenche um deal e a navegação abre
+   * outro, e ninguém percebe.
+   *
+   * @param contactId - ID do contato.
+   * @returns Promise com o ID do deal mais recente, `null` se o contato não tem deal, ou erro.
+   */
+  async getLatestIdByContact(contactId: string): Promise<{ data: string | null; error: Error | null }> {
+    try {
+      if (!supabase) {
+        return { data: null, error: new Error('Supabase não configurado') };
+      }
+
+      const safeContactId = sanitizeUUID(contactId);
+      if (!safeContactId) {
+        return { data: null, error: new Error('contactId inválido') };
+      }
+
+      // Defense-in-depth: filtra por organização além do RLS.
+      const orgId = await getCurrentOrganizationId();
+
+      let query = supabase
+        .from('deals')
+        .select('id')
+        .eq('contact_id', safeContactId)
+        .is('deleted_at', null);
+
+      if (orgId) query = query.eq('organization_id', orgId);
+
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) return { data: null, error };
+
+      return { data: (data as { id: string } | null)?.id ?? null, error: null };
+    } catch (e) {
+      return { data: null, error: e as Error };
+    }
+  },
+
+  /**
    * Busca um deal específico pelo ID.
-   * 
+   *
    * @param id - ID do deal.
    * @returns Promise com o deal ou erro.
    */

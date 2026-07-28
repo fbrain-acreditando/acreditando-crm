@@ -1,13 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MessageSquare, User, CheckCircle, MoreVertical, LinkIcon, Trash2, RotateCcw, Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { sanitizeUrl } from '@/lib/utils/sanitize';
 import { supabase } from '@/lib/supabase';
+import { dealsService } from '@/lib/supabase/deals';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/context/ToastContext';
 import { ConversationList } from './components/ConversationList';
 import { MessageThread } from './components/MessageThread';
 import { MessageInput } from './components/MessageInput';
@@ -26,6 +28,7 @@ import {
   addPendingDeletion,
   removePendingDeletion,
 } from '@/lib/query/hooks/useConversationsQuery';
+import { useConversationsByContact } from '@/lib/query/hooks/useMessagingConversationsQuery';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,8 +50,12 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
   const router = useRouter();
   const searchParams = useSearchParams();
   const conversationIdParam = searchParams.get('id');
+  // Chegada vinda do card do lead (DealDetailModal → "Mensagem"): não sabemos a
+  // conversa, só o contato. Resolvido no efeito abaixo.
+  const contactIdParam = searchParams.get('contactId');
   const queryClient = useQueryClient();
   const { profile } = useAuth();
+  const { addToast } = useToast();
   const { getPresence } = useContactPresence();
 
   const [selectedConversationId, setSelectedConversationId] = useState<string | undefined>(
@@ -104,6 +111,49 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
 
     deleteConversation(idToDelete);
   }, [selectedConversationId, deleteConversation, router, queryClient]);
+
+  // ---------------------------------------------------------------------------
+  // CARD DO LEAD → CONVERSA
+  // ---------------------------------------------------------------------------
+  // Chegando por `/messaging?contactId=<id>` (botão "Mensagem" do card), abre a
+  // conversa MAIS RECENTE daquele contato — mesmo critério de desempate que a
+  // navegação inversa e a extração de campos usam, já que um contato pode ter
+  // conversa em mais de um canal.
+  //
+  // Antes o card mandava `?newConversation=true&contactId=...`, e nada aqui lia
+  // esses parâmetros: o clique caía na tela vazia e parecia não ter funcionado.
+  const { data: contactConversations, isLoading: isResolvingContact } =
+    useConversationsByContact(contactIdParam || undefined);
+
+  // Guarda contra disparar o aviso duas vezes antes de o `replace` da URL propagar.
+  const resolvedContactRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!contactIdParam || selectedConversationId) return;
+    if (isResolvingContact || !contactConversations) return;
+    if (resolvedContactRef.current === contactIdParam) return;
+
+    resolvedContactRef.current = contactIdParam;
+
+    // `useConversationsByContact` já ordena por `last_message_at desc`.
+    const latest = contactConversations[0];
+
+    if (latest) {
+      setSelectedConversationId(latest.id);
+      router.replace(`/messaging?id=${latest.id}`, { scroll: false });
+      return;
+    }
+
+    addToast('Este lead ainda não tem conversa de WhatsApp registrada.', 'info');
+    router.replace('/messaging', { scroll: false });
+  }, [
+    contactIdParam,
+    selectedConversationId,
+    contactConversations,
+    isResolvingContact,
+    router,
+    addToast,
+  ]);
 
   // Clear URL if conversation was deleted or not found
   useEffect(() => {
@@ -169,9 +219,28 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
   }, [router]);
 
   // View deals for contact
-  const handleViewDeals = useCallback((contactId: string) => {
-    router.push(`/boards?contact=${contactId}`);
-  }, [router]);
+  //
+  // Navega para o CARD do lead no funil. `/boards` sabe abrir um deal específico
+  // via `?deal=<id>` (useBoardsController), mas não existe FK conversa→deal: é
+  // preciso resolver contato → deal antes de navegar. Antes daqui saía
+  // `?contact=<id>`, parâmetro que ninguém lê — o clique levava ao board genérico
+  // e parecia não ter feito nada.
+  const handleViewDeals = useCallback(async (contactId: string) => {
+    const { data: dealId, error } = await dealsService.getLatestIdByContact(contactId);
+
+    if (error) {
+      console.error('[MessagingPage] Falha ao localizar o card do contato:', error);
+      addToast('Não foi possível abrir o card deste lead. Tente novamente.', 'warning');
+      return;
+    }
+
+    if (!dealId) {
+      addToast('Este contato ainda não tem card no funil.', 'info');
+      return;
+    }
+
+    router.push(`/boards?deal=${dealId}`);
+  }, [router, addToast]);
 
   return (
     <div className="h-[calc(100vh-4rem)] flex">

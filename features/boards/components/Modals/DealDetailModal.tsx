@@ -681,23 +681,29 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                       </p>
                       <p className="text-slate-500 text-xs">{deal.contactEmail}</p>
                     </div>
-                    {/* Send Message Button */}
-                    {contact?.phone && (
+                    {/* Abrir a conversa deste lead.
+                        Basta ter contato: o telefone deixou de ser pré-requisito
+                        porque o vínculo com a conversa é o `contact_id`, e o
+                        parser recusa `@lid` como telefone — lead vindo por `@lid`
+                        tem conversa e ficava sem o botão. */}
+                    {contact?.id && (
                       <button
                         type="button"
                         onClick={() => {
-                          // Navigate to messaging with contact info for new conversation
-                          const params = new URLSearchParams({
-                            newConversation: 'true',
-                            contactId: contact.id,
-                            contactName: contact.name || '',
-                            contactPhone: contact.phone || '',
-                          });
-                          router.push(`/messaging?${params.toString()}`);
+                          // Abre a conversa deste lead. `/messaging` resolve
+                          // contato → conversa mais recente (um contato pode ter
+                          // conversa em mais de um canal).
+                          //
+                          // ⚠️ Antes daqui saía `newConversation=true` + nome e
+                          // telefone, parâmetros que a página de mensagens nunca
+                          // leu — o botão navegava para a tela vazia. Criar
+                          // conversa onde não existe ainda não é suportado: nesse
+                          // caso a página avisa em vez de fingir que funcionou.
+                          router.push(`/messaging?contactId=${encodeURIComponent(contact.id)}`);
                           onClose();
                         }}
                         className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 hover:bg-green-100 dark:hover:bg-green-500/20 rounded-lg transition-colors"
-                        title="Enviar mensagem via WhatsApp"
+                        title="Abrir conversa de WhatsApp deste lead"
                       >
                         <MessageSquare size={14} />
                         <span className="hidden sm:inline">Mensagem</span>
