@@ -353,12 +353,24 @@ export function useMarkConversationRead() {
 
   return useMutation({
     mutationFn: async (conversationId: string) => {
-      const { error } = await supabase
+      // `.select('id')` não é decoração: sem ele o PostgREST devolve sucesso
+      // mesmo quando a RLS filtra a linha e NENHUMA é atualizada. A policy de
+      // UPDATE de `messaging_conversations` exige admin ou pertencer ao
+      // business unit da conversa (migration 20260205100000, linhas 322-341) —
+      // um usuário fora dessa condição teria a baixa engolida em silêncio e o
+      // badge continuaria aceso sem nenhum erro na tela.
+      const { data, error } = await supabase
         .from('messaging_conversations')
         .update({ unread_count: 0 })
-        .eq('id', conversationId);
+        .eq('id', conversationId)
+        .select('id');
 
       if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error(
+          `Não foi possível marcar a conversa ${conversationId} como lida: nenhuma linha foi atualizada (provável bloqueio de permissão/RLS).`
+        );
+      }
       return conversationId;
     },
     onMutate: async (conversationId) => {
@@ -366,16 +378,44 @@ export function useMarkConversationRead() {
         queryKey: queryKeys.messagingConversations.all,
       });
 
-      // Optimistically set unread to 0
+      // Optimistically set unread to 0.
+      //
+      // ⚠️ `messagingConversations.all` é um filtro por PREFIXO: ele casa com a
+      // lista (array), com `detail(id)` (objeto) e com `unreadCount()` (número).
+      // Sem a guarda de array, `old.map` estourava nos dois últimos — e como um
+      // erro dentro de `onMutate` impede o TanStack de executar a `mutationFn`
+      // (query-core 5.x, mutation.js: onMutate é aguardado antes do retryer),
+      // a baixa NUNCA chegava ao banco e o badge nunca zerava.
       queryClient.setQueriesData(
         { queryKey: queryKeys.messagingConversations.all },
-        (old: ConversationView[] | undefined) => {
-          if (!old) return old;
-          return old.map((conv) =>
+        (old: unknown) => {
+          if (!Array.isArray(old)) return old;
+          return (old as ConversationView[]).map((conv) =>
             conv.id === conversationId ? { ...conv, unreadCount: 0 } : conv
           );
         }
       );
+
+      // O detalhe é cache separado (objeto) e é dele que sai o `unreadCount > 0`
+      // que autoriza esta mutation na MessagingPage. Zerar aqui evita o efeito
+      // redisparar em laço enquanto o refetch não chega.
+      queryClient.setQueryData(
+        queryKeys.messagingConversations.detail(conversationId),
+        (old: ConversationView | null | undefined) => {
+          if (!old) return old;
+          return { ...old, unreadCount: 0 };
+        }
+      );
+    },
+    onError: (error, conversationId) => {
+      // Esta mutation é chamada por `mutate` (fire-and-forget) num efeito: sem
+      // este log, qualquer falha some — foi exatamente assim que o bug do badge
+      // ficou invisível. O refetch do `onSettled` devolve o valor real do banco,
+      // então não há otimismo pendurado para reverter aqui.
+      console.error('[markConversationRead] falha ao marcar como lida', {
+        conversationId,
+        error,
+      });
     },
     onSettled: () => {
       // Skip conversations-list invalidation while a delete is in-progress.

@@ -163,11 +163,24 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
     }
   }, [selectedConversationId, selectedConversation, isConversationLoading, router]);
 
-  // Mark as read when opening a conversation
+  // Mark as read when opening a conversation.
+  //
+  // Guarda anti-laço: se a baixa falhar (ex.: bloqueio de RLS), o refetch do
+  // `onSettled` traz o `unreadCount` original, gera um novo objeto
+  // `selectedConversation` e este efeito redispararia sem parar. A chave inclui
+  // o contador de propósito — mensagem NOVA numa conversa já aberta muda a
+  // chave e volta a marcar como lida.
+  const markedReadRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (selectedConversationId && selectedConversation && selectedConversation.unreadCount > 0) {
-      markAsRead(selectedConversationId);
-    }
+    if (!selectedConversationId || !selectedConversation) return;
+    if (selectedConversation.unreadCount <= 0) return;
+
+    const attemptKey = `${selectedConversationId}:${selectedConversation.unreadCount}`;
+    if (markedReadRef.current === attemptKey) return;
+    markedReadRef.current = attemptKey;
+
+    markAsRead(selectedConversationId);
   }, [selectedConversationId, selectedConversation, markAsRead]);
 
 
