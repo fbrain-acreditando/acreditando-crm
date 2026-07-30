@@ -230,7 +230,12 @@ function extractTextContent(content: Record<string, unknown>): string {
   }
 
   if (content.type === 'image') return '[Imagem]';
-  if (content.type === 'audio') return '[Áudio]';
+  // Ver customFields.service.ts: transcrição do provedor vale como texto.
+  if (content.type === 'audio') {
+    return typeof content.transcription === 'string' && content.transcription.trim()
+      ? content.transcription
+      : '[Áudio]';
+  }
   if (content.type === 'video') return '[Vídeo]';
   if (content.type === 'document') {
     return `[Documento: ${content.filename || 'arquivo'}]`;

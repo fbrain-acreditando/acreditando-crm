@@ -292,6 +292,15 @@ export interface AudioContent {
   fileName?: string;
   fileSize?: number;
   duration?: number; // seconds
+  /**
+   * Transcrição do áudio, quando o provedor entrega.
+   *
+   * Hoje só o GPT Maker entrega — no campo `midiaContent` de
+   * `GET /v2/chat/{chatId}/messages`, para áudio recebido E enviado. O webhook
+   * NÃO traz esse texto (auditados 358 eventos de áudio: o campo `message` vem
+   * vazio em 100% deles), por isso a transcrição é buscada na API.
+   */
+  transcription?: string;
 }
 
 /**

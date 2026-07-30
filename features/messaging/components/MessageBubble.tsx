@@ -267,7 +267,24 @@ const MessageContent = memo(function MessageContent({ message }: { message: Mess
 
     case 'audio': {
       const audioContent = content as AudioContent;
-      return <AudioPlayer content={audioContent} isOutbound={isOutbound} />;
+      // Mesmo padrão do `case 'image'` acima: mídia + o texto que a acompanha.
+      // A transcrição vem do próprio provedor (GPT Maker) — ver AudioContent.
+      return (
+        <div className="space-y-1">
+          <AudioPlayer content={audioContent} isOutbound={isOutbound} />
+          {audioContent.transcription && (
+            <p
+              className={cn(
+                'whitespace-pre-wrap break-words text-sm italic',
+                isOutbound ? 'opacity-80' : 'opacity-75'
+              )}
+              title="Transcrição do áudio"
+            >
+              {audioContent.transcription}
+            </p>
+          )}
+        </div>
+      );
     }
 
     case 'video':

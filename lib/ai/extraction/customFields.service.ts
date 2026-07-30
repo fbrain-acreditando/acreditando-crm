@@ -295,7 +295,13 @@ function extractTextContent(content: Record<string, unknown>): string {
   if (typeof content === 'string') return content;
   if (content?.text && typeof content.text === 'string') return content.text;
   if (content?.type === 'image') return '[Imagem]';
-  if (content?.type === 'audio') return '[Áudio]';
+  // Áudio transcrito pelo provedor (GPT Maker) entra como texto de verdade — sem
+  // isto, lead que responde falando nunca qualifica, e sem erro nenhum.
+  if (content?.type === 'audio') {
+    return typeof content.transcription === 'string' && content.transcription.trim()
+      ? content.transcription
+      : '[Áudio]';
+  }
   if (content?.type === 'video') return '[Vídeo]';
   if (content?.type === 'document') return '[Documento]';
   return '[Mensagem]';

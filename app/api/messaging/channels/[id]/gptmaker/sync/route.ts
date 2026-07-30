@@ -117,7 +117,7 @@ export async function POST(req: Request, { params }: RouteParams) {
   const report = {
     webhooks: { configured: false, url: null as string | null, error: null as string | null },
     chats: { found: 0, imported: 0, skipped: 0 },
-    messages: { imported: 0 },
+    messages: { imported: 0, transcriptionsFilled: 0 },
     deals: { created: 0 },
     avatars: { updated: 0 },
     errors: [] as string[],
@@ -369,7 +369,16 @@ export async function POST(req: Request, { params }: RouteParams) {
             content = { type: 'image', mediaUrl: message.imageUrl, caption: message.text };
           } else if (message.audioUrl) {
             contentType = 'audio';
-            content = { type: 'audio', mediaUrl: message.audioUrl };
+            // `midiaContent` é a transcrição que o GPT Maker já produz — vale
+            // para áudio recebido e enviado. O webhook não a entrega; esta API é
+            // a única fonte. Campo estava declarado no provider e nunca lido.
+            content = {
+              type: 'audio',
+              mediaUrl: message.audioUrl,
+              ...(message.midiaContent?.trim()
+                ? { transcription: message.midiaContent.trim() }
+                : {}),
+            };
           } else if (message.documentUrl) {
             contentType = 'document';
             content = {
@@ -403,11 +412,41 @@ export async function POST(req: Request, { params }: RouteParams) {
             report.messages.imported++;
           } else if (!msgErr.message.toLowerCase().includes('duplicate')) {
             report.errors.push(`Mensagem ${externalId}: ${msgErr.message}`);
+          } else if (contentType === 'audio' && content.transcription) {
+            // Mensagem JÁ existe (o insert acima é ignorado por duplicidade), mas
+            // agora temos a transcrição e ela não estava lá. Sem este update, todo
+            // o histórico de áudio ficaria para sempre sem texto — e os áudios que
+            // chegaram pelo webhook antes de o fornecedor transcrever também.
+            const { error: updErr } = await supabase
+              .from('messaging_messages')
+              .update({
+                content,
+                metadata: {
+                  gptmaker_chat_id: chat.id,
+                  gptmaker_message_id: message.id,
+                  source: 'gptmaker',
+                  transcription_backfilled: true,
+                },
+              })
+              .eq('external_id', externalId)
+              .eq('conversation_id', conversationId)
+              .is('content->>transcription', null);
+
+            if (updErr) {
+              report.errors.push(`Transcrição ${externalId}: ${updErr.message}`);
+            } else {
+              report.messages.transcriptionsFilled =
+                (report.messages.transcriptionsFilled ?? 0) + 1;
+            }
           }
 
           if (!lastTimestamp || timestamp > lastTimestamp) {
             lastTimestamp = timestamp;
-            lastPreview = (message.text || '[mensagem]').slice(0, 100);
+            lastPreview = (
+              (contentType === 'audio' && typeof content.transcription === 'string'
+                ? content.transcription
+                : message.text) || '[mensagem]'
+            ).slice(0, 100);
             lastDirection = direction;
           }
         }

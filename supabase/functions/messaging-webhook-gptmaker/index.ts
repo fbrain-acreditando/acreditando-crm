@@ -44,6 +44,10 @@ import {
   type NormalizedEvent,
 } from "./parser.ts";
 
+// A transcrição de áudio também vive em módulo separado, pela mesma razão: a
+// decisão (achar o `midiaContent` da mensagem certa) é pura e testável.
+import { fetchAudioTranscription } from "./transcription.ts";
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -260,12 +264,36 @@ async function handleMessage(
   const externalMessageId =
     event.externalMessageId ?? `gptmaker:${chatId}:${event.timestamp.getTime()}`;
 
+  // O webhook NÃO traz a transcrição do áudio (auditados 358 eventos: `audios` é
+  // array de URLs e `message` vem vazio em 100% deles). O texto existe do lado do
+  // fornecedor, em `midiaContent` de GET /v2/chat/{chatId}/messages — por isso a
+  // busca é aqui, e vale tanto para o áudio recebido quanto para o enviado.
+  let content = event.content;
+  let preview = event.text;
+  let transcriptionPending = false;
+
+  if (event.contentType === "audio") {
+    const transcription = await fetchAudioTranscription(
+      channel.credentials?.apiToken,
+      chatId,
+      event.externalMessageId
+    );
+    if (transcription) {
+      content = { ...content, transcription };
+      preview = transcription;
+    } else {
+      // Pode ser só demora do fornecedor para transcrever. A mensagem NUNCA
+      // deixa de ser gravada por isso; o sync preenche depois (ver AC2/AC3).
+      transcriptionPending = true;
+    }
+  }
+
   const { error: msgErr } = await supabase.from("messaging_messages").insert({
     conversation_id: conversationId,
     external_id: externalMessageId,
     direction: event.direction,
     content_type: event.contentType,
-    content: event.content,
+    content,
     // A API não expõe status de entrega — não prometemos "delivered"/"read".
     status: "sent",
     sent_at: event.timestamp.toISOString(),
@@ -274,6 +302,7 @@ async function handleMessage(
       gptmaker_chat_id: chatId,
       gptmaker_message_id: event.externalMessageId,
       source: "gptmaker",
+      ...(transcriptionPending ? { transcription_pending: true } : {}),
     },
   });
 
@@ -287,7 +316,7 @@ async function handleMessage(
     .from("messaging_conversations")
     .update({
       last_message_at: event.timestamp.toISOString(),
-      last_message_preview: event.text.slice(0, 100),
+      last_message_preview: preview.slice(0, 100),
       last_message_direction: event.direction,
       ...(event.direction === "inbound" ? { status: "open" } : {}),
     })
