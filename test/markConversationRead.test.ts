@@ -24,6 +24,13 @@ const updateCalls: UpdateCall[] = [];
 let affectedRows: { id: string }[] = [{ id: 'conv-1' }];
 let updateError: { message: string } | null = null;
 
+/**
+ * Portão opcional: quando definido, a resposta do UPDATE só resolve depois que
+ * o teste liberar. É o que permite reproduzir a corrida — escrever o valor
+ * antigo no cache DEPOIS do otimismo e ANTES da confirmação do banco.
+ */
+let updateGate: Promise<void> | null = null;
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     from: (table: string) => ({
@@ -31,7 +38,10 @@ vi.mock('@/lib/supabase', () => ({
         eq: (_column: string, id: string) => {
           updateCalls.push({ table, values, id });
           return {
-            select: async () => ({ data: affectedRows, error: updateError }),
+            select: async () => {
+              if (updateGate) await updateGate;
+              return { data: affectedRows, error: updateError };
+            },
           };
         },
       }),
@@ -77,6 +87,7 @@ beforeEach(() => {
   updateCalls.length = 0;
   affectedRows = [{ id: 'conv-1' }];
   updateError = null;
+  updateGate = null;
 });
 
 describe('useMarkConversationRead', () => {
@@ -150,6 +161,61 @@ describe('useMarkConversationRead', () => {
     expect(consoleSpy).toHaveBeenCalled();
 
     consoleSpy.mockRestore();
+  });
+
+  /**
+   * Regressão do sintoma relatado em 30/07, depois do primeiro fix: "some e
+   * aparece de novo; só some de vez quando clico em outra conversa".
+   *
+   * Causa: um refetch que leu o banco ANTES do commit resolve DEPOIS do zero
+   * otimista e devolve o valor antigo ao cache. A baixa confirmada pelo banco
+   * tem que vencer esse atropelo — por isso o `onSuccess` reafirma o zero em vez
+   * de confiar num refetch.
+   */
+  it('mantém o badge zerado mesmo se um fetch pré-commit devolver o valor antigo', async () => {
+    // Segura a resposta do UPDATE para poder escrever no cache exatamente na
+    // janela da corrida: depois do zero otimista, antes da confirmação.
+    let liberarUpdate!: () => void;
+    updateGate = new Promise<void>((resolve) => {
+      liberarUpdate = resolve;
+    });
+
+    const queryClient = makeClient();
+    seedCaches(queryClient);
+
+    const { result } = renderHook(() => useMarkConversationRead(), {
+      wrapper: wrapperFor(queryClient),
+    });
+
+    result.current.mutate('conv-1');
+
+    // Espera o onMutate ter rodado (o otimismo já zerou) e a mutationFn ter
+    // começado — só então simulamos o refetch atrasado chegando com o valor
+    // velho e sobrescrevendo a lista inteira.
+    await waitFor(() => expect(updateCalls).toHaveLength(1));
+
+    queryClient.setQueryData(queryKeys.messagingConversations.filtered({}), [
+      { id: 'conv-1', unreadCount: 3 },
+      { id: 'conv-2', unreadCount: 1 },
+    ]);
+    queryClient.setQueryData(queryKeys.messagingConversations.detail('conv-1'), {
+      id: 'conv-1',
+      unreadCount: 3,
+    });
+
+    liberarUpdate();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const list = queryClient.getQueryData<Array<{ id: string; unreadCount: number }>>(
+      queryKeys.messagingConversations.filtered({})
+    );
+    expect(list?.find((c) => c.id === 'conv-1')?.unreadCount).toBe(0);
+
+    const detail = queryClient.getQueryData<{ id: string; unreadCount: number }>(
+      queryKeys.messagingConversations.detail('conv-1')
+    );
+    expect(detail?.unreadCount).toBe(0);
   });
 
   it('propaga erro do PostgREST', async () => {

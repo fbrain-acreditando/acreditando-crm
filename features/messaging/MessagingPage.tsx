@@ -42,6 +42,14 @@ import { queryKeys } from '@/lib/query';
 import { useContactPresence } from '@/lib/messaging/hooks/useContactPresence';
 import type { ConversationView } from '@/lib/messaging/types';
 
+/**
+ * Quantas vezes tentamos dar baixa nas não lidas para o MESMO par
+ * (conversa, contador) antes de desistir. Mais de uma porque um refetch que leu
+ * o banco antes do commit pode devolver o valor antigo ao cache; limitado porque
+ * o efeito redispara a cada novo objeto de conversa e sem teto viraria laço.
+ */
+const MAX_MARK_READ_ATTEMPTS = 3;
+
 interface MessagingPageProps {
   initialConversationId?: string;
 }
@@ -165,21 +173,29 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
 
   // Mark as read when opening a conversation.
   //
-  // Guarda anti-laço: se a baixa falhar (ex.: bloqueio de RLS), o refetch do
-  // `onSettled` traz o `unreadCount` original, gera um novo objeto
-  // `selectedConversation` e este efeito redispararia sem parar. A chave inclui
-  // o contador de propósito — mensagem NOVA numa conversa já aberta muda a
-  // chave e volta a marcar como lida.
-  const markedReadRef = useRef<string | null>(null);
+  // Guarda anti-laço COM auto-cura.
+  //
+  // Sem guarda nenhuma, uma baixa que não "cola" faz este efeito redisparar
+  // indefinidamente. Mas a primeira versão desta guarda (permitir UMA tentativa
+  // por chave) criou o bug relatado em 30/07: o badge sumia e voltava, porque um
+  // refetch pré-commit devolvia o valor antigo ao cache e a segunda tentativa
+  // ficava BLOQUEADA — o contador voltava para o mesmo número, e o mesmo número
+  // significava "já tentei". Bug barulhento trocado por bug silencioso.
+  //
+  // Agora são até 3 tentativas por chave: o sistema se cura de uma corrida e
+  // ainda assim para de bater. A chave inclui o contador de propósito — mensagem
+  // NOVA numa conversa aberta muda a chave e libera novas tentativas.
+  const markReadAttemptsRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (!selectedConversationId || !selectedConversation) return;
     if (selectedConversation.unreadCount <= 0) return;
 
     const attemptKey = `${selectedConversationId}:${selectedConversation.unreadCount}`;
-    if (markedReadRef.current === attemptKey) return;
-    markedReadRef.current = attemptKey;
+    const attempts = markReadAttemptsRef.current.get(attemptKey) ?? 0;
+    if (attempts >= MAX_MARK_READ_ATTEMPTS) return;
 
+    markReadAttemptsRef.current.set(attemptKey, attempts + 1);
     markAsRead(selectedConversationId);
   }, [selectedConversationId, selectedConversation, markAsRead]);
 

@@ -407,6 +407,28 @@ export function useMarkConversationRead() {
         }
       );
     },
+    onSuccess: (conversationId) => {
+      // Escrita AUTORITATIVA, não otimista: o `.select('id')` já confirmou que a
+      // linha foi gravada com 0, então o cache pode ser afirmado com certeza.
+      //
+      // Isso existe por causa de uma corrida real (relatada em 30/07: "some e
+      // aparece de novo"): um refetch iniciado ANTES do commit — pelo clique, por
+      // um evento de realtime ou por qualquer outra invalidação do prefixo — lê o
+      // `unread_count` velho e, ao resolver, sobrescreve o zero otimista. Reescrever
+      // aqui, depois da confirmação do banco, fecha essa janela sem depender de
+      // mais um round-trip.
+      const zero = (old: unknown) => {
+        if (!Array.isArray(old)) return old;
+        return (old as ConversationView[]).map((conv) =>
+          conv.id === conversationId ? { ...conv, unreadCount: 0 } : conv
+        );
+      };
+      queryClient.setQueriesData({ queryKey: queryKeys.messagingConversations.all }, zero);
+      queryClient.setQueryData(
+        queryKeys.messagingConversations.detail(conversationId),
+        (old: ConversationView | null | undefined) => (old ? { ...old, unreadCount: 0 } : old)
+      );
+    },
     onError: (error, conversationId) => {
       // Esta mutation é chamada por `mutate` (fire-and-forget) num efeito: sem
       // este log, qualquer falha some — foi exatamente assim que o bug do badge
@@ -423,10 +445,18 @@ export function useMarkConversationRead() {
       // triggers a refetch that can return the conversation from DB before it's
       // fully deleted, causing it to flash back into the list.
       if (pendingDeletionIds.size === 0) {
+        // `refetchType: 'none'` — marca stale SEM disparar refetch imediato. O
+        // valor correto já foi escrito no `onSuccess`; um refetch aqui só criaria
+        // outra chance de a leitura competir com o que acabamos de afirmar. Mesmo
+        // remédio do commit `a24301a` (campos personalizados), onde o invalidate
+        // do `onSettled` atropelava o `setQueryData`.
         queryClient.invalidateQueries({
           queryKey: queryKeys.messagingConversations.all,
+          refetchType: 'none',
         });
       }
+      // O contador do menu é agregado no servidor (count de conversas com
+      // unread > 0) — esse precisa mesmo de ida ao banco, e aqui já é pós-commit.
       queryClient.invalidateQueries({
         queryKey: queryKeys.messagingConversations.unreadCount(),
       });
