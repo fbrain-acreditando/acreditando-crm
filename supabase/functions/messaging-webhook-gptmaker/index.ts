@@ -48,6 +48,10 @@ import {
 // decisão (achar o `midiaContent` da mensagem certa) é pura e testável.
 import { fetchAudioTranscription } from "./transcription.ts";
 
+// Mover o card na transferência tem casos de borda que precisam de teste e não
+// precisam de banco (não regredir, empate de ordem, board diferente).
+import { decideStageMove } from "./stage-move.ts";
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -374,6 +378,11 @@ async function handleTransfer(
 
   console.log(`[GPTMaker] Transferência registrada — conversa ${conversationId} marcada como alta prioridade`);
 
+  // O card anda ANTES da extração: a extração faz chamada de modelo e pode
+  // demorar, enquanto mover o card é uma escrita curta — e é o que a Fernanda vê
+  // no board. As duas são independentes; nenhuma pode derrubar a outra.
+  await moveDealOnTransfer(supabase, channel, conversationId);
+
   // A transferência é o momento em que a IA do fornecedor TERMINOU de perguntar:
   // a conversa está completa e o lead qualificado. É o instante certo para ler
   // tudo de uma vez e preencher os campos — e é uma chamada de modelo por lead,
@@ -406,38 +415,10 @@ async function triggerCustomFieldsExtraction(
       return;
     }
 
-    // ATENÇÃO: `deals` NÃO tem `conversation_id` — o elo entre conversa e deal
-    // é o CONTATO (`autoCreateDeal` grava `contact_id`). Buscar por
-    // `conversation_id` falharia silenciosamente.
-    const { data: conv, error: convErr } = await supabase
-      .from("messaging_conversations")
-      .select("contact_id")
-      .eq("id", conversationId)
-      .maybeSingle();
+    const deal = await resolveDealForConversation(supabase, channel, conversationId);
 
-    if (convErr || !conv?.contact_id) {
-      console.log(`[GPTMaker] Conversa ${conversationId} sem contato — extração ignorada`);
-      return;
-    }
-
-    // Um contato pode ter mais de um deal; o mais recente é o desta conversa.
-    const { data: deal, error: dealErr } = await supabase
-      .from("deals")
-      .select("id")
-      .eq("contact_id", conv.contact_id)
-      .eq("organization_id", channel.organization_id)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (dealErr) {
-      console.error("[GPTMaker] Falha ao localizar deal para extração:", dealErr);
-      return;
-    }
-
-    if (!deal?.id) {
-      console.log(`[GPTMaker] Contato ${conv.contact_id} sem deal — extração de campos ignorada`);
+    if (!deal) {
+      console.log(`[GPTMaker] Sem deal para a conversa ${conversationId} — extração ignorada`);
       return;
     }
 
@@ -462,6 +443,199 @@ async function triggerCustomFieldsExtraction(
     console.log(`[GPTMaker] Extração de campos disparada para o deal ${deal.id}`);
   } catch (error) {
     console.error("[GPTMaker] Erro ao disparar extração de campos (não fatal):", error);
+  }
+}
+
+/**
+ * Resolve o deal de uma conversa. **Fonte única do critério** — usada pela
+ * extração de campos e pelo movimento de estágio.
+ *
+ * ATENÇÃO: `deals` NÃO tem `conversation_id` — o elo entre conversa e deal é o
+ * CONTATO (`autoCreateDeal` grava `contact_id`). Buscar por `conversation_id`
+ * falharia silenciosamente.
+ *
+ * Um contato pode ter vários deals e não há `UNIQUE` em lado nenhum, então "o
+ * deal desta conversa" é ESCOLHA, não fato. O critério (mais recente, não
+ * deletado, da org) é o mesmo de `dealsService.getLatestIdByContact`. Se os
+ * consumidores divergirem, um preenche um card e o outro move outro — e nada
+ * acusa erro. Por isso existe uma função só.
+ */
+async function resolveDealForConversation(
+  supabase: ReturnType<typeof createClient>,
+  channel: ChannelRow,
+  conversationId: string
+): Promise<{ id: string; stage_id: string | null; board_id: string | null; contact_id: string | null } | null> {
+  const { data: conv, error: convErr } = await supabase
+    .from("messaging_conversations")
+    .select("contact_id")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (convErr || !conv?.contact_id) {
+    console.log(`[GPTMaker] Conversa ${conversationId} sem contato`);
+    return null;
+  }
+
+  const { data: deal, error: dealErr } = await supabase
+    .from("deals")
+    .select("id, stage_id, board_id, contact_id")
+    .eq("contact_id", conv.contact_id)
+    .eq("organization_id", channel.organization_id)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (dealErr) {
+    console.error("[GPTMaker] Falha ao localizar deal:", dealErr);
+    return null;
+  }
+
+  if (!deal?.id) {
+    console.log(`[GPTMaker] Contato ${conv.contact_id} sem deal`);
+    return null;
+  }
+
+  return deal as { id: string; stage_id: string | null; board_id: string | null; contact_id: string | null };
+}
+
+/**
+ * Move o card para o estágio de "transferido para humano" (ex.: "Em
+ * qualificação"), configurado em `lead_routing_rules.transfer_stage_id`.
+ *
+ * Nunca derruba o webhook nem impede a extração: o 200 para o fornecedor e o
+ * registro da mensagem valem mais que o movimento, que pode ser refeito na mão.
+ */
+async function moveDealOnTransfer(
+  supabase: ReturnType<typeof createClient>,
+  channel: ChannelRow,
+  conversationId: string
+): Promise<void> {
+  try {
+    const rule = await getTransferRoutingRule(supabase, channel.id);
+
+    // Automação desligada para este canal — sai antes de tocar em `deals`.
+    if (!rule?.transferStageId) return;
+
+    const deal = await resolveDealForConversation(supabase, channel, conversationId);
+    if (!deal) return;
+
+    // Lê os dois estágios de uma vez: precisamos da `order` de ambos para
+    // garantir que o card só ande para frente.
+    const stageIds = [rule.transferStageId, deal.stage_id].filter(Boolean) as string[];
+    const { data: stages, error: stagesErr } = await supabase
+      .from("board_stages")
+      .select('id, name, "order", board_id')
+      .in("id", stageIds);
+
+    if (stagesErr) {
+      console.error("[GPTMaker] Falha ao ler estágios:", stagesErr);
+      return;
+    }
+
+    const rows = (stages ?? []) as Array<{ id: string; name: string; order: number; board_id: string }>;
+    const target = rows.find((s) => s.id === rule.transferStageId);
+    const current = rows.find((s) => s.id === deal.stage_id);
+
+    const decision = decideStageMove({
+      currentStageId: deal.stage_id,
+      currentStageOrder: current?.order ?? null,
+      transferStageId: rule.transferStageId,
+      transferStageOrder: target?.order ?? null,
+      dealBoardId: deal.board_id,
+      ruleBoardId: rule.boardId,
+    });
+
+    if (!decision.move) {
+      console.log(
+        `[GPTMaker] Card do deal ${deal.id} não movido na transferência — motivo: ${decision.reason}`
+      );
+      return;
+    }
+
+    const { data: moved, error: moveErr } = await supabase
+      .from("deals")
+      .update({ stage_id: rule.transferStageId })
+      .eq("id", deal.id)
+      .select("id");
+
+    // Rule 7 dentro do código: o PostgREST devolve sucesso mesmo quando a RLS
+    // filtra a linha e ZERO são atualizadas. Sem `.select()`, "respondeu OK"
+    // não significa que gravou.
+    if (moveErr) {
+      console.error("[GPTMaker] Falha ao mover o card:", moveErr);
+      return;
+    }
+
+    if (!moved || moved.length === 0) {
+      console.error(
+        `[GPTMaker] UPDATE do deal ${deal.id} afetou 0 linhas — card NÃO foi movido (verificar RLS)`
+      );
+      return;
+    }
+
+    console.log(
+      `[GPTMaker] Deal ${deal.id} movido para "${target?.name ?? rule.transferStageId}" na transferência`
+    );
+
+    await logStageMoveActivity(supabase, channel, deal, target?.name ?? "");
+  } catch (error) {
+    console.error("[GPTMaker] Erro ao mover o card na transferência (não fatal):", error);
+  }
+}
+
+/** Regra de roteamento do canal, incluindo o destino de transferência. */
+async function getTransferRoutingRule(
+  supabase: ReturnType<typeof createClient>,
+  channelId: string
+): Promise<{ boardId: string | null; transferStageId: string | null } | null> {
+  const { data, error } = await supabase
+    .from("lead_routing_rules")
+    .select("board_id, transfer_stage_id, enabled")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[GPTMaker] Falha ao ler a regra de roteamento:", error);
+    return null;
+  }
+
+  if (!data || !data.enabled) return null;
+
+  return {
+    boardId: (data.board_id as string) ?? null,
+    transferStageId: (data.transfer_stage_id as string) ?? null,
+  };
+}
+
+/**
+ * Registra "Moveu para X" no histórico do card, no mesmo formato do move manual
+ * (`useMoveDeal.ts`), para que a linha do tempo do deal fique coerente.
+ *
+ * `owner_id` fica NULL: não foi pessoa. A autoria da automação vai explícita na
+ * descrição — card que muda de coluna sozinho e sem explicação vira chamado
+ * ("quem moveu meu lead?").
+ */
+async function logStageMoveActivity(
+  supabase: ReturnType<typeof createClient>,
+  channel: ChannelRow,
+  deal: { id: string; contact_id: string | null },
+  stageName: string
+): Promise<void> {
+  const { error } = await supabase.from("activities").insert({
+    organization_id: channel.organization_id,
+    deal_id: deal.id,
+    contact_id: deal.contact_id,
+    type: "STATUS_CHANGE",
+    title: `Moveu para ${stageName}`.trim(),
+    description: "Movido automaticamente: a IA do GPT Maker transferiu o atendimento para humano.",
+    date: new Date().toISOString(),
+    completed: true,
+  });
+
+  // Histórico é rastro, não pré-requisito: falhar aqui não desfaz o movimento.
+  if (error) {
+    console.error("[GPTMaker] Falha ao registrar atividade do movimento (não fatal):", error.message);
   }
 }
 
