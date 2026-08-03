@@ -38,6 +38,7 @@ import {
   type CustomFieldProvenance,
   type ExtractedCustomField,
 } from './customFields.schemas';
+import { orderConversationWindow } from './conversationWindow';
 
 // =============================================================================
 // Constantes
@@ -146,14 +147,22 @@ export async function extractAndUpdateCustomFields(
     }
 
     // 4. Histórico da conversa
-    const { data: messages } = await supabase
+    //
+    // A janela é buscada por `created_at` DESC (as MAIS RECENTES — é onde a
+    // qualificação aparece, no fim do roteiro da IA) e reordenada em memória
+    // pelo horário real. Ordenar por `sent_at` no banco descartaria as
+    // mensagens sem `sent_at`, que é NULL-able. Ver conversationWindow.ts.
+    const { data: recentRows } = await supabase
       .from('messaging_messages')
-      .select('id, direction, content, created_at')
+      .select('id, direction, content, content_type, created_at, sent_at')
       .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
+      .neq('content_type', 'reaction')
+      .order('created_at', { ascending: false })
       .limit(MAX_MESSAGES_FOR_EXTRACTION);
 
-    if (!messages || messages.length < 2) {
+    const messages = orderConversationWindow(recentRows ?? []);
+
+    if (messages.length < 2) {
       return { success: true, updated: [] };
     }
 
