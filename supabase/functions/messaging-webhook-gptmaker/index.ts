@@ -51,6 +51,7 @@ import { fetchAudioTranscription } from "./transcription.ts";
 // Mover o card na transferência tem casos de borda que precisam de teste e não
 // precisam de banco (não regredir, empate de ordem, board diferente).
 import { decideStageMove } from "./stage-move.ts";
+import { resolveContactId, type ContactResolverClient } from "./contact.ts";
 
 // =============================================================================
 // TYPES
@@ -758,65 +759,41 @@ async function ensureConversation(
   return { conversationId, contactId };
 }
 
-/** Reusa o contato existente pelo telefone; só cria se não houver. */
+/**
+ * Reusa o contato existente pelo telefone; só cria se não houver.
+ *
+ * ⚠️ **A busca-e-cria acontece dentro do banco**, em `find_or_create_contact`
+ * (migration `20260804120000`), sob `pg_advisory_xact_lock(org, phone)`.
+ *
+ * Aqui em cima ela **não pode** ser fechada: `SELECT` e `INSERT` em chamadas
+ * separadas deixam uma janela entre os dois, e a entrega concorrente cabe nela.
+ * O tratamento de duplicidade que existia neste ponto era **letra morta** — ele
+ * espera `23505`, e `contacts` não tem constraint de unicidade nenhuma, então o
+ * insert concorrente simplesmente **não falha**. Story 2.6.
+ */
 async function findOrCreateContact(
   supabase: ReturnType<typeof createClient>,
   channel: ChannelRow,
   event: NormalizedEvent
 ): Promise<string | null> {
-  const phone = event.contactPhone;
-
-  if (phone) {
-    const { data: existing, error: lookupErr } = await supabase
-      .from("contacts")
-      .select("id")
-      .eq("organization_id", channel.organization_id)
-      .eq("phone", phone)
-      .is("deleted_at", null)
-      .order("created_at")
-      .limit(1)
-      .maybeSingle();
-
-    if (lookupErr) {
-      console.error("[GPTMaker] Error looking up contact:", lookupErr);
-      throw toError("Falha ao buscar contato", lookupErr);
-    }
-
-    if (existing) return existing.id;
-  }
-
-  const { data: newContact, error: createErr } = await supabase
-    .from("contacts")
-    .insert({
-      organization_id: channel.organization_id,
-      name: event.contactName ?? phone ?? "Contato do WhatsApp",
-      phone: phone,
+  const outcome = await resolveContactId(
+    supabase as unknown as ContactResolverClient,
+    {
+      organizationId: channel.organization_id,
+      phone: event.contactPhone,
+      name: event.contactName ?? event.contactPhone ?? "Contato do WhatsApp",
       source: "whatsapp",
-    })
-    .select("id")
-    .single();
+    },
+    (msg) => console.warn(msg)
+  );
 
-  if (createErr) {
-    // Mesma corrida da conversa: duas entregas simultâneas podem criar o mesmo
-    // contato. Se perdemos, relê em vez de deixar a conversa sem contato.
-    if (isDuplicateError(createErr) && phone) {
-      const { data: raced } = await supabase
-        .from("contacts")
-        .select("id")
-        .eq("organization_id", channel.organization_id)
-        .eq("phone", phone)
-        .is("deleted_at", null)
-        .order("created_at")
-        .limit(1)
-        .maybeSingle();
-      if (raced) return raced.id;
-    }
-    console.error("[GPTMaker] Error auto-creating contact:", createErr);
-    return null;
+  if (outcome.contactId) {
+    console.log(`[GPTMaker] Contato resolvido (${outcome.via}): ${outcome.contactId}`);
+  } else {
+    console.error("[GPTMaker] Não foi possível resolver o contato — seguindo sem ele");
   }
 
-  console.log(`[GPTMaker] Auto-created contact: ${newContact.id}`);
-  return newContact.id;
+  return outcome.contactId;
 }
 
 async function getLeadRoutingRule(
