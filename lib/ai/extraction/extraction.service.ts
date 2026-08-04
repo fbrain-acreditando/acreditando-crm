@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getModel } from '../config';
 import { getOrgAIConfig } from '../agent/agent.service';
 import { BANTExtractionSchema, type BANTExtraction, type AIExtractedData, type AIExtractedField } from './schemas';
+import { logAiTokens, type TokenLogClient } from '../token-log';
 
 // =============================================================================
 // Constants
@@ -127,21 +128,20 @@ Extraia Budget, Authority, Need e Timeline. Se não encontrar alguma informaçã
       return { success: false, error: 'Failed to generate extraction' };
     }
 
-    // Log tokens to ai_conversation_log fire-and-forget so budget enforcement counts them
-    const tokensUsed = result.usage?.totalTokens ?? 0;
-    if (tokensUsed > 0) {
-      supabase.from('ai_conversation_log').insert({
-        organization_id: organizationId,
-        conversation_id: conversationId,
-        tokens_used: tokensUsed,
-        model_used: aiConfig.model,
-        action_taken: 'bant_extraction',
-        action_reason: `BANT extraction for deal ${dealId}`,
-        ai_response: '',
-      }).then(({ error }) => {
-        if (error) console.error('[Extraction] Failed to log tokens (non-fatal):', error.message);
-      });
-    }
+    // ⚠️ Faltava `context_snapshot` (NOT NULL) — o insert falhava em silêncio.
+    // Story 2.9.
+    void logAiTokens(
+      supabase as unknown as TokenLogClient,
+      {
+        organizationId,
+        conversationId,
+        tokensUsed: result.usage?.totalTokens ?? 0,
+        modelUsed: aiConfig.model,
+        actionTaken: 'bant_extraction',
+        actionReason: `BANT extraction for deal ${dealId}`,
+      },
+      (msg) => console.error('[Extraction]', msg)
+    );
 
     const extraction = result.output;
 

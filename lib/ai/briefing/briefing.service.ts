@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getModel } from '../config';
 import { getOrgAIConfig } from '../agent/agent.service';
 import { MeetingBriefingSchema, type BriefingResponse, type MeetingBriefing } from './schemas';
+import { logAiTokens, type TokenLogClient } from '../token-log';
 
 // =============================================================================
 // Constants
@@ -82,6 +83,17 @@ interface DealContext {
     id: string;
     name: string;
   };
+  /**
+   * Conversa de onde saíram as mensagens deste briefing.
+   *
+   * Existe porque `ai_conversation_log.conversation_id` é **NOT NULL**: sem ele,
+   * o consumo de tokens do briefing não tem como ser contabilizado. Era uma das
+   * duas colunas obrigatórias que o insert antigo omitia (story 2.9).
+   *
+   * `null` quando o deal não tem conversa nenhuma — aí o briefing roda igual, só
+   * não entra na contabilidade, e o motivo é registrado.
+   */
+  conversationId: string | null;
 }
 
 /**
@@ -214,6 +226,7 @@ async function buildDealContext(
       id: org.id,
       name: org.name,
     },
+    conversationId: conversations?.[0]?.id ?? null,
   };
 }
 
@@ -386,20 +399,20 @@ INSTRUÇÕES FINAIS:
 
     const briefing = result.output;
 
-    // Log tokens to ai_conversation_log fire-and-forget so budget enforcement counts them
-    const tokensUsed = result.usage?.totalTokens ?? 0;
-    if (tokensUsed > 0) {
-      supabase.from('ai_conversation_log').insert({
-        organization_id: context.organization.id,
-        tokens_used: tokensUsed,
-        model_used: aiConfig.model,
-        action_taken: 'briefing',
-        action_reason: `Meeting briefing for deal ${dealId}`,
-        ai_response: '',
-      }).then(({ error }) => {
-        if (error) console.error('[Briefing] Failed to log tokens (non-fatal):', error.message);
-      });
-    }
+    // ⚠️ Este insert omitia DUAS colunas NOT NULL — `context_snapshot` e
+    // `conversation_id` — e falhava em silêncio. Story 2.9.
+    void logAiTokens(
+      supabase as unknown as TokenLogClient,
+      {
+        organizationId: context.organization.id,
+        conversationId: context.conversationId,
+        tokensUsed: result.usage?.totalTokens ?? 0,
+        modelUsed: aiConfig.model,
+        actionTaken: 'briefing',
+        actionReason: `Meeting briefing for deal ${dealId}`,
+      },
+      (msg) => console.error('[Briefing]', msg)
+    );
 
     return {
       ...briefing,

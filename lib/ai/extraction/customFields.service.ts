@@ -39,6 +39,7 @@ import {
   type ExtractedCustomField,
 } from './customFields.schemas';
 import { orderConversationWindow } from './conversationWindow';
+import { logAiTokens, type TokenLogClient } from '../token-log';
 
 // =============================================================================
 // Constantes
@@ -200,26 +201,23 @@ Extraia apenas o que a conversa disser. O que não estiver lá, retorne null.`,
       return { success: false, error: 'O modelo não devolveu extração' };
     }
 
-    // Contabiliza tokens no mesmo lugar que o resto da IA (fire-and-forget)
-    const tokensUsed = result.usage?.totalTokens ?? 0;
-    if (tokensUsed > 0) {
-      supabase
-        .from('ai_conversation_log')
-        .insert({
-          organization_id: organizationId,
-          conversation_id: conversationId,
-          tokens_used: tokensUsed,
-          model_used: aiConfig.model,
-          action_taken: 'custom_fields_extraction',
-          action_reason: `Extração de campos personalizados do deal ${dealId}`,
-          ai_response: '',
-        })
-        .then(({ error }) => {
-          if (error) {
-            console.error('[CustomFieldsExtraction] Falha ao logar tokens (não fatal):', error.message);
-          }
-        });
-    }
+    // Contabiliza tokens no mesmo lugar que o resto da IA.
+    // ⚠️ Este insert falhava em SILÊNCIO desde que entrou no ar: faltava
+    // `context_snapshot`, que é NOT NULL. A tabela ficou vazia e o gasto da
+    // extração — o único caminho de IA que roda neste canal — nunca foi medido.
+    // Story 2.9. O helper existe para não haver um quarto copy-paste.
+    void logAiTokens(
+      supabase as unknown as TokenLogClient,
+      {
+        organizationId,
+        conversationId,
+        tokensUsed: result.usage?.totalTokens ?? 0,
+        modelUsed: aiConfig.model,
+        actionTaken: 'custom_fields_extraction',
+        actionReason: `Extração de campos personalizados do deal ${dealId}`,
+      },
+      (msg) => console.error('[CustomFieldsExtraction]', msg)
+    );
 
     // 6. Merge — só campo vazio, só confiança suficiente, só valor válido
     const now = new Date().toISOString();
