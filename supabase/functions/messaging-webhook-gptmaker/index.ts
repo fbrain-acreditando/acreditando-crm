@@ -52,6 +52,10 @@ import { fetchAudioTranscription } from "./transcription.ts";
 // precisam de banco (não regredir, empate de ordem, board diferente).
 import { decideStageMove } from "./stage-move.ts";
 import { resolveContactId, type ContactResolverClient } from "./contact.ts";
+import {
+  updateConversationPreview,
+  type ConversationPreviewClient,
+} from "./conversation-preview.ts";
 
 // =============================================================================
 // TYPES
@@ -317,18 +321,25 @@ async function handleMessage(
     return;
   }
 
-  const { error: convUpdateErr } = await supabase
-    .from("messaging_conversations")
-    .update({
-      last_message_at: event.timestamp.toISOString(),
-      last_message_preview: preview.slice(0, 100),
-      last_message_direction: event.direction,
-      ...(event.direction === "inbound" ? { status: "open" } : {}),
-    })
-    .eq("id", conversationId);
+  // ⚠️ Condicional de propósito: as entregas do GPT Maker chegam FORA DE ORDEM
+  // (rajadas com 1 ms entre mensagens chegando embaralhadas por corrida de rede).
+  // Sobrescrever sem comparar fazia a prévia ser a da última mensagem A CHEGAR,
+  // não a da última ENVIADA — 33 conversas assim em produção. Story 2.8.
+  const outcome = await updateConversationPreview(
+    supabase as unknown as ConversationPreviewClient,
+    {
+      conversationId,
+      sentAt: event.timestamp.toISOString(),
+      preview,
+      direction: event.direction,
+    },
+    (msg) => console.error(msg, { conversationId })
+  );
 
-  if (convUpdateErr) {
-    console.error("[GPTMaker] Failed to update conversation:", convUpdateErr, { conversationId });
+  if (!outcome.applied) {
+    console.log(
+      `[GPTMaker] Mensagem fora de ordem — prévia preservada (reaberta: ${outcome.reopened}): ${conversationId}`
+    );
   }
 
   // ⚠️ A IA do CRM NÃO é acionada aqui — quem atende é o agente do GPT Maker.

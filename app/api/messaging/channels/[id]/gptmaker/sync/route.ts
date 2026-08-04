@@ -474,14 +474,27 @@ export async function POST(req: Request, { params }: RouteParams) {
         }
 
         if (lastTimestamp && conversationId) {
+          // ⚠️ Condicional ao carimbo (story 2.8). O sync só enxerga a janela de
+          // mensagens que buscou; se o webhook já gravou algo MAIS NOVO que não
+          // veio nessa janela, escrever sem comparar faria a lista andar para trás.
+          //
+          // Aqui é `lte`, e no webhook é `lt` — a diferença é deliberada. O webhook
+          // recusa empate porque duas entregas simultâneas ficariam alternando a
+          // prévia. O sync PRECISA do empate: é assim que ele conserta a prévia da
+          // MESMA última mensagem quando a transcrição do áudio chega depois — o
+          // carimbo é idêntico, só o texto melhora (de `[áudio]` para o que foi
+          // dito). Sem o empate, os áudios transcritos depois ficariam com a prévia
+          // de placeholder para sempre.
+          const iso = lastTimestamp.toISOString();
           await supabase
             .from('messaging_conversations')
             .update({
-              last_message_at: lastTimestamp.toISOString(),
+              last_message_at: iso,
               last_message_preview: lastPreview,
               last_message_direction: lastDirection,
             })
-            .eq('id', conversationId);
+            .eq('id', conversationId)
+            .or(`last_message_at.is.null,last_message_at.lte."${iso}"`);
         }
       } catch (chatError) {
         const message = chatError instanceof Error ? chatError.message : 'Erro desconhecido';
