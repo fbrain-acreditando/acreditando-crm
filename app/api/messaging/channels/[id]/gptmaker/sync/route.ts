@@ -54,8 +54,30 @@ function normalizePhone(raw: string | undefined | null): string | null {
 }
 
 /** Nome exibível do chat, com o telefone como último recurso. */
-function chatDisplayName(chat: GptMakerChat, phone: string | null): string {
-  return chat.userName || chat.name || chat.title || phone || chat.id;
+/**
+ * Nome de exibição do contato de um chat do GPT Maker.
+ *
+ * 🔴 **`chat.userName` NÃO é o contato — é o atendente humano.** Ele vinha em
+ * primeiro lugar nesta lista e, por isso, o sync batizou 11 leads reais com o nome
+ * do operador. Medido na API em 2026-08-04: de 4.000 chats, **151 trazem
+ * `userName: "Filipe Costa"`** e **17 trazem `"Fernanda"`** — os dois operadores da
+ * conta, não 168 pessoas homônimas.
+ *
+ * Exemplo literal da API, no mesmo objeto:
+ * ```
+ * { name: "GUINA😎", userName: "Filipe Costa" }   ← name é o contato
+ * ```
+ *
+ * ⚖️ O estrago não é cosmético: dado pessoal — e de saúde, neste canal — atrelado à
+ * identidade errada fere a exatidão do **Art. 6º, V da LGPD**, e a Fernanda via
+ * várias conversas com o mesmo nome sendo pessoas distintas.
+ *
+ * `userName` foi **removido da lista de propósito**: ele nunca é o contato, então
+ * nem como último recurso serve. Quando o GPT Maker não tem nome (acontece: 4 dos
+ * 11 casos vinham com `name: ""`), o telefone é a resposta honesta.
+ */
+export function chatDisplayName(chat: GptMakerChat, phone: string | null): string {
+  return chat.name || chat.title || phone || chat.id;
 }
 
 export async function POST(req: Request, { params }: RouteParams) {
