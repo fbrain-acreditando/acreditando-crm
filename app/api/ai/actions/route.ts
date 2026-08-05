@@ -113,23 +113,43 @@ const RewriteMessageDraftSchema = z.object({
     .describe('Mensagem final para enviar no canal escolhido.'),
 });
 
+/**
+ * Contabilização das ações avulsas de IA — **desativada de propósito** (story 2.10).
+ *
+ * ## Por que não grava nada
+ *
+ * Este insert nunca funcionou, e não é questão de configuração: **não cabe nesta
+ * tabela**. `ai_conversation_log.conversation_id` é `NOT NULL` e estas ações não
+ * têm conversa — são operações de board, deal e rascunho, disparadas da tela.
+ * A coluna era omitida ⇒ todo insert morria em `23502`, em silêncio, desde sempre.
+ *
+ * Somado a isso, os 14 rótulos usados aqui (`analyzeLead`, `generateEmailDraft`,
+ * …) estão fora do CHECK de `action_taken` — mas ampliar o CHECK não resolveria
+ * nada, porque o `23502` viria antes.
+ *
+ * ## Por que virou no-op em vez de "conserto"
+ *
+ * Fazer estas ações caberem exige decidir **onde** contabilidade sem conversa
+ * deve morar: tornar `conversation_id` NULLABLE (afrouxa o contrato de uma tabela
+ * que é, por nome e por FK, de conversa) ou criar uma tabela própria de consumo.
+ * É decisão de modelagem, não bugfix — e nada disso está no caminho da extração,
+ * que é o único caminho de IA que roda hoje (a IA do CRM está desligada neste
+ * canal desde 24/07).
+ *
+ * Enquanto a decisão não vem, **não tentar é melhor que tentar e falhar**: uma
+ * ida ao banco garantidamente perdida por ação, e um `console.error` que ninguém
+ * lê — que é exatamente o mecanismo que escondeu as stories 2.9 e 2.10.
+ *
+ * 📌 Registrado na fila como decisão de modelagem pendente.
+ */
 function logAIAction(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  orgId: string,
-  action: string,
-  modelId: string,
-  result: { usage?: { totalTokens?: number }; text?: string }
+  _supabase: Awaited<ReturnType<typeof createClient>>,
+  _orgId: string,
+  _action: string,
+  _modelId: string,
+  _result: { usage?: { totalTokens?: number }; text?: string }
 ): void {
-  void (supabase as any).from('ai_conversation_log').insert({
-    organization_id: orgId,
-    ai_response: (result.text || '').slice(0, 1000),
-    tokens_used: result.usage?.totalTokens ?? 0,
-    model_used: modelId,
-    action_taken: action,
-    context_snapshot: {},
-  }).then(({ error }: { error: unknown }) => {
-    if (error) console.error('[AI] log failed:', error);
-  });
+  // Intencionalmente vazio — ver o bloco acima.
 }
 
 function safeContextText(v: unknown, maxBytes = 80_000): string {

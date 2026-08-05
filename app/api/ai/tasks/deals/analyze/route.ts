@@ -50,16 +50,11 @@ export async function POST(req: Request) {
       prompt,
     });
 
-    void (supabase as any).from('ai_conversation_log').insert({
-      organization_id: organizationId,
-      ai_response: '',
-      tokens_used: result.usage?.totalTokens ?? 0,
-      model_used: modelId,
-      action_taken: 'analyze_lead',
-      context_snapshot: {},
-    }).then(({ error }: { error: unknown }) => {
-      if (error) console.error('[AI] log failed:', error);
-    });
+    // ⚠️ Story 2.10 — contabilização removida, não esquecida.
+    // Nunca gravou: omitia `conversation_id` (`NOT NULL`) ⇒ `23502` mudo. A
+    // análise é de DEAL e pode rodar sem nenhuma conversa, então não é conserto
+    // de coluna — é decisão de modelagem, documentada em `logAIAction`
+    // (`app/api/ai/actions/route.ts`).
 
     return json(result.output);
   } catch (err: unknown) {

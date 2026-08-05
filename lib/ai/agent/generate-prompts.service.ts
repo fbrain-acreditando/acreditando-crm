@@ -142,16 +142,14 @@ export async function generateStagePrompts(
       maxRetries: 2,
     });
 
-    void supabase.from('ai_conversation_log').insert({
-      organization_id: organizationId,
-      ai_response: '',
-      tokens_used: result.usage?.totalTokens ?? 0,
-      model_used: aiConfig.model,
-      action_taken: 'generate_stage_prompts',
-      context_snapshot: { boardId, stageCount: stages.length },
-    }).then(({ error }: { error: unknown }) => {
-      if (error) console.error('[AI] log failed:', error);
-    });
+    // ⚠️ Story 2.10 — contabilização removida, não esquecida.
+    // Este insert nunca gravou: omitia `conversation_id`, que é `NOT NULL` em
+    // `ai_conversation_log` ⇒ `23502` em silêncio, atrás de um `console.error`.
+    // E não é conserto de coluna: gerar prompts de estágio é operação de BOARD,
+    // não de conversa — não existe `conversation_id` para mandar. Onde essa
+    // contabilidade deve morar é decisão de modelagem pendente, documentada em
+    // `logAIAction` (`app/api/ai/actions/route.ts`). Até lá, não tentar é melhor
+    // que tentar e falhar: era uma ida ao banco garantidamente perdida.
 
     // AI SDK v6: resultado está em result.output (não experimental_output)
     const generated = result.output as GeneratedStagePrompts | undefined;

@@ -33,6 +33,51 @@
  * Enquanto esse gate não fechar, o valor é `{}` — explícito, nunca `null`.
  */
 
+/**
+ * ## ⚠️ Story 2.10 — a parede seguinte
+ *
+ * O conserto acima subiu em 04/08 e **não gravou uma linha**. `action_taken` tem
+ * um domínio fechado no banco que ninguém tinha olhado:
+ *
+ * ```
+ * CHECK (action_taken = ANY (ARRAY['responded','advanced_stage','handoff',
+ *                                  'skipped','stage_evaluation']))
+ * ```
+ *
+ * O valor gravado (`custom_fields_extraction`) está fora da lista ⇒ **23514
+ * check_violation**, pelo mesmo caminho mudo. A blindagem de 2.9 exigiu as
+ * colunas `NOT NULL` pelo tipo e deixou solto justamente o único campo com
+ * domínio fechado — cobriu o defeito, não a classe dele.
+ *
+ * Por isso `actionTaken` **não é mais `string`**: é a união abaixo, espelho da
+ * constraint. Rótulo novo agora quebra a compilação, não a produção.
+ */
+
+/**
+ * Domínio de `ai_conversation_log.action_taken`, espelhando a constraint
+ * `ai_conversation_log_action_taken_check` (migration `20260805*`).
+ *
+ * 🔗 **Contrato com o banco.** Acrescentar item aqui **exige** migration
+ * ampliando o CHECK, senão o insert volta a falhar em silêncio.
+ */
+export const AI_LOG_ACTIONS = [
+  // Decisões do agente de atendimento (domínio original, = `AIAction`)
+  'responded',
+  'advanced_stage',
+  'handoff',
+  'skipped',
+  'stage_evaluation',
+  // Contabilidade das chamadas de modelo (acrescentados na 2.10).
+  // Só entram rótulos de pontos que mandam `conversation_id` — os demais
+  // falhariam em `23502` antes do CHECK, e autorizá-los descreveria no schema
+  // um insert que não acontece. Ver `logAIAction` em `app/api/ai/actions/route.ts`.
+  'custom_fields_extraction',
+  'bant_extraction',
+  'briefing',
+] as const;
+
+export type AiLogAction = (typeof AI_LOG_ACTIONS)[number];
+
 /** Cliente mínimo — mantém o módulo testável sem o SDK inteiro. */
 export interface TokenLogClient {
   from(table: string): {
@@ -48,8 +93,14 @@ export interface TokenLogInput {
   conversationId: string | null | undefined;
   tokensUsed: number;
   modelUsed: string;
-  /** Rótulo do que consumiu os tokens, ex.: `custom_fields_extraction`. */
-  actionTaken: string;
+  /**
+   * Rótulo do que consumiu os tokens, ex.: `custom_fields_extraction`.
+   *
+   * ⚠️ União fechada de propósito (story 2.10): o banco tem CHECK neste campo.
+   * Era `string`, e foi por aí que `custom_fields_extraction` chegou à produção
+   * e falhou em silêncio por um dia inteiro.
+   */
+  actionTaken: AiLogAction;
   actionReason: string;
 }
 

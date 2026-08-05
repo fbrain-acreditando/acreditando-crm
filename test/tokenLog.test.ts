@@ -22,6 +22,8 @@ import { describe, expect, it } from 'vitest';
 import {
   logAiTokens,
   AI_CONVERSATION_LOG_REQUIRED_COLUMNS,
+  AI_LOG_ACTIONS,
+  type AiLogAction,
   type TokenLogClient,
 } from '../lib/ai/token-log';
 
@@ -45,6 +47,20 @@ function criarFake() {
                 },
               };
             }
+          }
+          // Story 2.10 — o duplo aprendeu a segunda constraint.
+          // Antes ele só aplicava `NOT NULL`, e por isso ficou VERDE enquanto a
+          // produção falhava em `23514`: o teste conhecia menos regras do banco
+          // que o banco. Aplicar o CHECK aqui é o que impede que a próxima
+          // correção passe no teste e morra no ar de novo.
+          if (!AI_LOG_ACTIONS.includes(values.action_taken as AiLogAction)) {
+            return {
+              error: {
+                code: '23514',
+                message:
+                  'new row for relation "ai_conversation_log" violates check constraint "ai_conversation_log_action_taken_check"',
+              },
+            };
           }
           linhas.push(values);
           return { error: null };
@@ -111,7 +127,7 @@ describe('logAiTokens — AC1, AC2, AC5', () => {
       conversationId: CONV,
       tokensUsed: 10,
       modelUsed: 'm',
-      actionTaken: 'a',
+      actionTaken: 'bant_extraction',
       actionReason: 'r',
     });
 
@@ -128,7 +144,7 @@ describe('logAiTokens — AC1, AC2, AC5', () => {
       conversationId: CONV,
       tokensUsed: 10,
       modelUsed: 'm',
-      actionTaken: 'a',
+      actionTaken: 'bant_extraction',
       actionReason: 'r',
     });
 
@@ -181,7 +197,7 @@ describe('logAiTokens — AC3: a falha deixa de ser silenciosa', () => {
         conversationId: CONV,
         tokensUsed: 50,
         modelUsed: 'm',
-        actionTaken: 'a',
+        actionTaken: 'bant_extraction',
         actionReason: 'r',
       },
       (m) => avisos.push(m)
@@ -215,7 +231,7 @@ describe('logAiTokens — AC4: nunca derruba a operação de origem', () => {
         conversationId: CONV,
         tokensUsed: 10,
         modelUsed: 'm',
-        actionTaken: 'a',
+        actionTaken: 'bant_extraction',
         actionReason: 'r',
       },
       (m) => avisos.push(m)
@@ -233,11 +249,105 @@ describe('logAiTokens — AC4: nunca derruba a operação de origem', () => {
       conversationId: CONV,
       tokensUsed: 0,
       modelUsed: 'm',
-      actionTaken: 'a',
+      actionTaken: 'bant_extraction',
       actionReason: 'r',
     });
 
     expect(r).toEqual({ logged: false, reason: 'sem_tokens' });
     expect(fake.linhas).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// Story 2.10 — a parede seguinte: `action_taken` violava o CHECK
+// =============================================================================
+
+describe('story 2.10 — o defeito que sobreviveu à 2.9', () => {
+  /** Domínio do CHECK como estava no banco ANTES desta story. */
+  const DOMINIO_ANTIGO = [
+    'responded',
+    'advanced_stage',
+    'handoff',
+    'skipped',
+    'stage_evaluation',
+  ];
+
+  it('reproduz o 23514: o rótulo da extração estava fora do domínio antigo', () => {
+    // Este é o motivo real de a tabela continuar vazia depois do deploy de 04/08.
+    // A story 2.9 corrigiu as colunas NOT NULL e o insert passou a morrer aqui.
+    expect(DOMINIO_ANTIGO).not.toContain('custom_fields_extraction');
+    expect(DOMINIO_ANTIGO).not.toContain('bant_extraction');
+    expect(DOMINIO_ANTIGO).not.toContain('briefing');
+  });
+
+  it('os três rótulos que gravam de fato estão no domínio novo', () => {
+    expect(AI_LOG_ACTIONS).toContain('custom_fields_extraction');
+    expect(AI_LOG_ACTIONS).toContain('bant_extraction');
+    expect(AI_LOG_ACTIONS).toContain('briefing');
+  });
+
+  it('o domínio antigo continua inteiro — ampliar não pode remover', () => {
+    for (const antigo of DOMINIO_ANTIGO) {
+      expect(AI_LOG_ACTIONS).toContain(antigo);
+    }
+  });
+
+  it('rótulo fora do domínio é recusado pelo duplo, com o código do Postgres', async () => {
+    const fake = criarFake();
+
+    // `as AiLogAction` força o valor inválido: em código de produção isto é erro
+    // de compilação — que é o AC2. Aqui o cast existe para provar que, se alguém
+    // contornar o tipo, o banco ainda barra.
+    const r = await logAiTokens(fake.client, {
+      organizationId: ORG,
+      conversationId: CONV,
+      tokensUsed: 100,
+      modelUsed: 'm',
+      actionTaken: 'generate_goal' as AiLogAction,
+      actionReason: 'r',
+    });
+
+    expect(r).toEqual({
+      logged: false,
+      reason: 'erro',
+      detail: expect.stringContaining('check constraint'),
+    });
+    expect(fake.linhas).toHaveLength(0);
+  });
+
+  it('AC2 — a união é FECHADA: valor novo não compila', () => {
+    // @ts-expect-error rótulo fora de AiLogAction precisa quebrar o build.
+    const invalido: AiLogAction = 'rotulo_inventado';
+    expect(invalido).toBe('rotulo_inventado');
+  });
+});
+
+describe('story 2.10 — contrato entre o código e a migration', () => {
+  /**
+   * `AI_LOG_ACTIONS` e o CHECK do banco são a MESMA regra escrita em dois
+   * lugares. Nada no projeto obriga os dois a andarem juntos — e foi uma
+   * dessincronia exatamente assim que produziu este bug: o código ganhou
+   * rótulos novos e o banco continuou com os cinco de origem.
+   *
+   * Este teste lê o SQL e compara. É a única coisa aqui que falha quando alguém
+   * acrescenta rótulo no TypeScript e esquece a migration.
+   */
+  it('os rótulos do código são exatamente os do CHECK na migration', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+
+    const sql = readFileSync(
+      join(
+        process.cwd(),
+        'supabase/migrations/20260805140000_ampliar_check_action_taken_ai_conversation_log.sql'
+      ),
+      'utf-8'
+    );
+
+    const corpo = sql.slice(sql.lastIndexOf('ADD CONSTRAINT'));
+    const naSql = [...corpo.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]);
+
+    expect(naSql.length).toBeGreaterThan(0);
+    expect([...naSql].sort()).toEqual([...AI_LOG_ACTIONS].sort());
   });
 });

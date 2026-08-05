@@ -81,16 +81,11 @@ Seja específico ao negócio. Mencione elementos reais do contexto (tipo de clie
 Retorne APENAS o JSON, sem markdown ou explicações.`,
     });
 
-    void supabase.from('ai_conversation_log').insert({
-      organization_id: profile.organization_id,
-      ai_response: text.slice(0, 1000),
-      tokens_used: usage?.totalTokens ?? 0,
-      model_used: aiConfig.model,
-      action_taken: 'generate_goal',
-      context_snapshot: {},
-    }).then(({ error }: { error: unknown }) => {
-      if (error) console.error('[AI] log failed:', error);
-    });
+    // ⚠️ Story 2.10 — contabilização removida, não esquecida.
+    // Nunca gravou: omitia `conversation_id` (`NOT NULL`) ⇒ `23502` mudo. Gerar
+    // objetivo de board não tem conversa associada, então não é conserto de
+    // coluna — é decisão de modelagem, documentada em `logAIAction`
+    // (`app/api/ai/actions/route.ts`).
 
     // Parse JSON response
     const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
