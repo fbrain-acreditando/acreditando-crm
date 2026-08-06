@@ -474,6 +474,19 @@ export const UsersPage: React.FC = () => {
                                                             }
                                                         </span>
                                                     </div>
+                                                    {/* Story 2.11 — a unidade decide se a pessoa vê alguma conversa.
+                                                        Sem isto na lista, escolher um link é escolher no escuro. */}
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        {invite.business_unit_id ? (
+                                                            <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                                                                Unidade: {businessUnits.find((u) => u.id === invite.business_unit_id)?.name ?? 'desconhecida'}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                                                                ⚠️ Sem unidade — quem usar este link não verá conversa nenhuma
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <code className="block text-xs text-slate-600 dark:text-slate-300 truncate">
                                                         ...{invite.token.slice(-8)}
                                                     </code>
