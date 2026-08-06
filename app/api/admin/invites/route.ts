@@ -16,6 +16,9 @@ const CreateInviteSchema = z
     role: z.enum(['admin', 'vendedor']).default('vendedor'),
     expiresAt: z.union([z.string().datetime(), z.null()]).optional(),
     email: z.string().email().optional(),
+    // Story 2.11 — unidade que o convidado passa a integrar ao aceitar.
+    // Ausente = nenhum vínculo (e, para não-admin, nenhuma conversa visível).
+    businessUnitId: z.union([z.string().uuid(), z.null()]).optional(),
   })
   .strict();
 
@@ -44,7 +47,7 @@ export async function GET() {
   // Return only active (not used) invites, and let UI decide how to show expiration.
   const { data: invites, error } = await supabase
     .from('organization_invites')
-    .select('id, token, role, email, created_at, expires_at, used_at, created_by')
+    .select('id, token, role, email, created_at, expires_at, used_at, created_by, business_unit_id')
     .eq('organization_id', me.organization_id)
     .is('used_at', null)
     .limit(200)
@@ -92,6 +95,22 @@ export async function POST(req: Request) {
   }
 
   const expiresAt = parsed.data.expiresAt ?? null;
+  const businessUnitId = parsed.data.businessUnitId ?? null;
+
+  // A unidade precisa ser da MESMA organização de quem convida. Sem esta checagem,
+  // um convite poderia conceder acesso às conversas de outra organização — e o
+  // aceite roda com service role, que ignora RLS e não pegaria o erro depois.
+  if (businessUnitId) {
+    const { data: unit } = await supabase
+      .from('business_units')
+      .select('id, organization_id')
+      .eq('id', businessUnitId)
+      .maybeSingle();
+
+    if (!unit || unit.organization_id !== me.organization_id) {
+      return json({ error: 'Unidade de negócio inválida para esta organização' }, 400);
+    }
+  }
 
   const { data: invite, error } = await supabase
     .from('organization_invites')
@@ -101,8 +120,9 @@ export async function POST(req: Request) {
       email: parsed.data.email ?? null,
       expires_at: expiresAt,
       created_by: me.id,
+      business_unit_id: businessUnitId,
     })
-    .select('id, token, role, email, created_at, expires_at, used_at, created_by')
+    .select('id, token, role, email, created_at, expires_at, used_at, created_by, business_unit_id')
     .single();
 
   if (error) {

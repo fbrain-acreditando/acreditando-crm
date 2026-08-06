@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBusinessUnits } from '@/lib/query/hooks/useBusinessUnitsQuery';
 import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { Loader2, UserPlus, Crown, Briefcase, KeyRound, Mail, Check, X, Sparkles, Clock, RefreshCw, Trash2, Link, Copy, CheckCircle2 } from 'lucide-react';
 
@@ -58,6 +59,9 @@ export const UsersPage: React.FC = () => {
     const [userToDelete, setUserToDelete] = useState<Profile | null>(null);
     const [activeInvites, setActiveInvites] = useState<any[]>([]);
     const [expirationDays, setExpirationDays] = useState<number | null>(7); // 7 days default, null = never
+    // Story 2.11 — sem unidade, quem não é admin entra e não vê conversa nenhuma.
+    const [newUserUnitId, setNewUserUnitId] = useState<string | null>(null);
+    const { data: businessUnits = [] } = useBusinessUnits();
 
     const sb = supabase;
 
@@ -167,6 +171,7 @@ export const UsersPage: React.FC = () => {
                 body: JSON.stringify({
                     role: newUserRole,
                     expiresAt,
+                    businessUnitId: newUserUnitId,
                 }),
             });
 
@@ -545,6 +550,29 @@ export const UsersPage: React.FC = () => {
                                             )}
                                         </button>
                                     </div>
+                                </div>
+
+                                {/* Business Unit Selection (Story 2.11) */}
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                        Unidade de negócio
+                                    </label>
+                                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                                        Define quais conversas a pessoa enxerga. Sem unidade, quem não é
+                                        administrador entra e não vê nenhuma conversa.
+                                    </p>
+                                    <select
+                                        value={newUserUnitId ?? ''}
+                                        onChange={(e) => setNewUserUnitId(e.target.value || null)}
+                                        className="w-full py-2 px-3 rounded-lg text-sm border bg-white text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+                                    >
+                                        <option value="">Nenhuma (sem acesso a conversas)</option>
+                                        {businessUnits.map((unit) => (
+                                            <option key={unit.id} value={unit.id}>
+                                                {unit.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
 
                                 {/* Expiration Selection */}

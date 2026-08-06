@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createStaticAdminClient } from '@/lib/supabase/server';
 import { isAllowedOrigin } from '@/lib/security/sameOrigin';
+import { decideInviteMembership } from '@/lib/invites/membership';
 
 function json<T>(body: T, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
   const { data: invite, error: inviteError } = await admin
     .from('organization_invites')
     // Performance: fetch only what we need (keeps payload small and avoids extra parsing).
-    .select('id, token, email, role, expires_at, used_at, organization_id')
+    .select('id, token, email, role, expires_at, used_at, organization_id, business_unit_id')
     .eq('token', token)
     .is('used_at', null)
     .single();
@@ -97,10 +98,61 @@ export async function POST(req: Request) {
     return json({ error: profileError.message }, 400);
   }
 
+  // Story 2.11 — o vínculo com a unidade de negócio nasce AQUI, no aceite.
+  //
+  // Sem ele, a RLS de `messaging_conversations` não devolve conversa nenhuma para
+  // quem não é admin: o convidado entra e vê uma caixa vazia, sem erro. Fazer isso
+  // depois, na mão, é um passo que ninguém lembra e cuja ausência é invisível.
+  //
+  // Falha aqui NÃO desfaz o usuário: a conta criada com o papel certo é resultado
+  // útil, e a unidade pode ser ajustada em Settings. Mas precisa gritar no log —
+  // este projeto já perdeu 22h com um insert que falhava em silêncio (story 2.10).
+  let membershipAttached = false;
+
+  if (invite.business_unit_id) {
+    const { data: unit } = await admin
+      .from('business_units')
+      .select('id, organization_id')
+      .eq('id', invite.business_unit_id)
+      .maybeSingle();
+
+    const decision = decideInviteMembership({
+      inviteBusinessUnitId: invite.business_unit_id,
+      inviteOrganizationId: invite.organization_id,
+      unit,
+    });
+
+    if (decision.attach) {
+      const { error: memberError } = await admin
+        .from('business_unit_members')
+        .upsert(
+          { business_unit_id: decision.businessUnitId, user_id: userId },
+          { onConflict: 'business_unit_id,user_id' }
+        );
+
+      if (memberError) {
+        console.error('[invites/accept] Falha ao vincular unidade de negócio:', {
+          userId,
+          businessUnitId: decision.businessUnitId,
+          error: memberError.message,
+        });
+      } else {
+        membershipAttached = true;
+      }
+    } else {
+      console.error('[invites/accept] Vínculo de unidade recusado:', {
+        userId,
+        inviteId: invite.id,
+        businessUnitId: invite.business_unit_id,
+        reason: decision.reason,
+      });
+    }
+  }
+
   await admin
     .from('organization_invites')
     .update({ used_at: nowIso })
     .eq('id', invite.id);
 
-  return json({ ok: true, user: { id: userId, email } });
+  return json({ ok: true, user: { id: userId, email }, membershipAttached });
 }
