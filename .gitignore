@@ -93,5 +93,12 @@ test/*.md
 .sb-pentest-*.log
 debug_navigation_failed_*.png
 *.png
+# Excecoes: assets de marca precisam ser versionados, senao o logo existe no
+# disco de quem gerou e some no deploy. A regra *.png acima segue valendo para
+# screenshot de debug, que e o que ela veio barrar.
+!public/brand/*.png
+!public/icons/*.png
+!app/icon.png
+!app/apple-icon.png
 .env*.local
 .dmux/
