@@ -8,8 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/boards',
     display: 'standalone',
     background_color: '#ffffff',
-    // Navy da marca Grupo Acreditando, amostrado do arquivo oficial do logo.
-    theme_color: '#272960',
+    // Azul-ardosia da marca Acreditando, amostrado do logo oficial do site.
+    theme_color: '#1F3C51',
     icons: [
       {
         src: '/icons/icon-192.png',
