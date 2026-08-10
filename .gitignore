@@ -79,8 +79,20 @@ docs/realtime-analysis.md
 docs/copilot-code-review-setup.md
 docs/prd-*.md
 docs/specs/
-docs/stories/
 docs/security/
+
+# docs/stories/ SAIU do ignore em 2026-08-10.
+# Motivo: eram 21 stories vivendo so no HD de uma maquina. Elas guardam o
+# RACIOCINIO (medicoes, gates que reprovaram, decisoes do Filipe e o porque) —
+# perder isso e perder mais que o codigo, porque o codigo da para reler.
+#
+# 🔴 REGRA AO ESCREVER STORY, agora que elas vao para o git:
+# NUNCA colar dado pessoal de lead — telefone, e-mail, endereco, nome completo
+# de terceiro, ou qualquer trecho de conversa. Este e um CRM de saude
+# (reabilitacao de lesao medular): dado de lead cai no Art. 11 da LGPD, e
+# historico de git e permanente mesmo em repo privado.
+# Ao versionar, foi encontrado e mascarado 1 telefone real (story 2.20).
+# Para se referir a um lead, use o id do deal/contato — nao o dado dele.
 
 # Dev/debug scripts (not needed for app to run)
 scripts/
