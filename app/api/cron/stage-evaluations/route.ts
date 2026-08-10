@@ -1,7 +1,24 @@
 /**
  * GET /api/cron/stage-evaluations
  *
- * Scheduled cron job (every minute) that processes pending AI stage evaluations.
+ * Scheduled cron job that processes pending AI stage evaluations.
+ *
+ * ⏱️ CADÊNCIA: a cada 5 minutos (pg_cron jobid=2, schedule "*\/5 * * * *").
+ *    Era "a cada minuto" até 2026-08-10. Story 2.22 baixou a frequência porque o
+ *    job havia rodado 27.315 vezes desde 22/07 — TODAS com a fila vazia. Medido:
+ *    `ai_pending_evaluations` nunca teve uma linha, porque o produtor
+ *    (agent.service.ts:673) só enfileira quando `config.advancement_criteria`
+ *    existe, e `stage_ai_config` tem ZERO linhas em produção.
+ *
+ * 🔴 SE VOCÊ FOR CONFIGURAR `stage_ai_config` (ligar o avanço automático de
+ *    estágio), leia isto antes: com a cadência de 5 min, uma avaliação espera
+ *    ATÉ 5 MINUTOS na fila antes de ser processada — ou seja, o card do lead
+ *    pode levar até 5 min para mudar de coluna sozinho (antes era até 1 min).
+ *    Se o produto exigir ~1 min, volte o cron junto com a configuração:
+ *      select cron.alter_job(2, schedule => '* * * * *');
+ *    ⚠️ O jobname em `cron.job` ainda é "stage-evaluations-1min" — o nome está
+ *    desatualizado de propósito registrado aqui; a fonte da verdade é o campo
+ *    `schedule`, não o nome.
  *
  * Why this exists: after sending an AI response, evaluating stage advancement
  * requires a second LLM call (~2-4s). If that runs inline inside the webhook
