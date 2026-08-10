@@ -28,6 +28,7 @@ import { ChannelIndicator } from './ChannelIndicator';
 import { WindowExpiryBadge } from './WindowExpiryBadge';
 import { ContactPanelSkeleton } from './skeletons/ContactPanelSkeleton';
 import { useUpdateContact } from '@/lib/query/hooks/useContactsQuery';
+import { LeadNameEditor } from '@/components/LeadNameEditor';
 import { useToggleConversationAiPause } from '@/lib/query/hooks/useMessagingConversationsQuery';
 
 interface ContactPanelProps {
@@ -186,8 +187,15 @@ export const ContactPanel = memo(function ContactPanel({
             </div>
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white truncate">
-              {displayName}
+            {/* Story 2.20 — o nome do lead é editável daqui, e a edição grava em
+                `contacts.name`, que é a fonte única. Boards e a lista de conversas
+                acompanham sozinhos. */}
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+              <LeadNameEditor
+                contactId={contactId}
+                displayName={displayName}
+                className="text-lg font-semibold text-slate-900 dark:text-white"
+              />
             </h3>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               {channelName}

@@ -25,6 +25,7 @@ export const ConversationItem = memo(function ConversationItem({
   presenceStatus = 'offline',
 }: ConversationItemProps) {
   const {
+    contactName,
     externalContactName,
     externalContactAvatar,
     channelType,
@@ -38,7 +39,14 @@ export const ConversationItem = memo(function ConversationItem({
     status,
   } = conversation;
 
-  const displayName = externalContactName || 'Contato desconhecido';
+  // Story 2.20 — `contacts.name` é a fonte única do nome do lead. O
+  // `externalContactName` (pushName do WhatsApp) fica só como fallback para
+  // conversa sem contato vinculado — `contact_id` é nullable e o webhook grava a
+  // mensagem mesmo quando não consegue resolver o contato.
+  // Esta ordem é a MESMA do ContactPanel:162. Antes desta story as duas telas
+  // liam de fontes diferentes e só concordavam porque nada nunca atualizava o
+  // contato; o primeiro rename é que faria a divergência aparecer.
+  const displayName = contactName || externalContactName || 'Contato desconhecido';
   const timeAgo = lastMessageAt
     ? formatDistanceToNow(new Date(lastMessageAt), { addSuffix: true, locale: ptBR })
     : '';

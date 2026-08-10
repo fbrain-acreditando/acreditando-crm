@@ -20,6 +20,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
+import { LeadNameEditor } from '@/components/LeadNameEditor';
 import { useMoveDealSimple } from '@/lib/query/hooks';
 import { DEALS_VIEW_KEY } from '@/lib/query';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
@@ -460,6 +461,22 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                     {deal.title}
                     <Pencil size={16} className="opacity-0 group-hover:opacity-50 text-slate-400" />
                   </h2>
+                )}
+
+                {/* Story 2.20 — o NOME DO LEAD, separado do título do card.
+                    São coisas diferentes: o título acima é livre (pode virar
+                    anotação), o nome abaixo é o do lead e vale nas 3 telas.
+                    Editar aqui grava em `contacts.name` e o banco propaga. */}
+                {deal.contactId && (
+                  <p className="text-sm text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
+                    <span className="flex-shrink-0">Lead:</span>
+                    <LeadNameEditor
+                      contactId={deal.contactId}
+                      displayName={deal.contactName || 'Sem nome'}
+                      className="text-sm text-slate-700 dark:text-slate-200 font-medium"
+                      ariaLabel="Editar o nome do lead (vale em Conversas, Boards e Contatos)"
+                    />
+                  </p>
                 )}
 
                 {isEditingValue ? (

@@ -67,6 +67,20 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       }
       return { data: [], isLoading: false };
     },
+    // Story 2.20 — o modal passou a montar o `LeadNameEditor`, que usa
+    // `useRenameLead` → `useQueryClient`. Este teste renderiza sem
+    // QueryClientProvider de propósito (o foco é ordem de hooks, não dados),
+    // então o client entra como stub em vez de o teste ganhar um provider.
+    useQueryClient: () => ({
+      invalidateQueries: vi.fn(),
+      cancelQueries: vi.fn(),
+      getQueryData: vi.fn(),
+      setQueryData: vi.fn(),
+      getQueriesData: vi.fn(() => []),
+    }),
+    // `useMutation` resolve o QueryClient por dentro do próprio módulo, sem passar
+    // pelo `useQueryClient` mockado acima — por isso precisa de stub também.
+    useMutation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   };
 });
 

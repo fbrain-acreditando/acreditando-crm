@@ -97,6 +97,10 @@ export function useMessagingConversations(filters?: ConversationFilters) {
         query = query.gt('unread_count', 0);
       }
       if (filters?.search) {
+        // ⚠️ Story 2.20 — `external_contact_name` é CACHE DE BUSCA, não fonte. A
+        // fonte do nome é `contacts.name`; o trigger `trg_propagate_contact_name`
+        // mantém esta coluna em dia a cada rename. Ver a nota longa no gêmeo deste
+        // filtro em useConversationsQuery.ts — os dois têm de andar juntos.
         query = query.or(`external_contact_name.ilike.%${filters.search}%,last_message_preview.ilike.%${filters.search}%`);
       }
 

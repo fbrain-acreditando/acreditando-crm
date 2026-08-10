@@ -124,6 +124,15 @@ export function useConversations(filters?: ConversationFilters) {
       if (filters?.search) {
         const safe = sanitizePostgrestValue(filters.search);
         if (safe) {
+          // ⚠️ Story 2.20 — `external_contact_name` aqui é CACHE DE BUSCA, não fonte.
+          // A fonte do nome é `contacts.name` (a exibição deriva dela), mas o
+          // PostgREST não faz OR entre coluna da tabela base e coluna de tabela
+          // embutida numa expressão só. Então o trigger `trg_propagate_contact_name`
+          // mantém esta coluna sincronizada a cada rename, e a busca segue aqui.
+          // 🔴 NÃO trocar por `contact.name` sem resolver o OR — o resultado seria
+          // buscar pelo nome novo e o lead sumir da lista.
+          // 🪤 Esta mesma busca existe em useMessagingConversationsQuery.ts — mexer
+          // numa e não na outra deixa a busca certa numa tela e errada na vizinha.
           query = query.or(
             `external_contact_name.ilike.%${safe}%,last_message_preview.ilike.%${safe}%`
           );
