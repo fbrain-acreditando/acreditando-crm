@@ -21,6 +21,7 @@ import { useToast } from '@/context/ToastContext';
 import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
 import { LeadNameEditor } from '@/components/LeadNameEditor';
+import { CustomFieldInput } from './CustomFieldInput';
 import { useMoveDealSimple } from '@/lib/query/hooks';
 import { DEALS_VIEW_KEY } from '@/lib/query';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
@@ -849,27 +850,14 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                           <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
                             {field.label}
                           </label>
-                          {field.type === 'select' ? (
-                            <select
-                              value={deal.customFields?.[field.key] || ''}
-                              onChange={e => updateCustomField(field.key, e.target.value)}
-                              className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded px-2 py-1.5 text-sm dark:text-white focus:ring-1 focus:ring-primary-500 outline-none"
-                            >
-                              <option value="">Selecione...</option>
-                              {field.options?.map(opt => (
-                                <option key={opt} value={opt}>
-                                  {opt}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type={field.type}
-                              value={deal.customFields?.[field.key] || ''}
-                              onChange={e => updateCustomField(field.key, e.target.value)}
-                              className="w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-white/10 rounded px-2 py-1.5 text-sm dark:text-white focus:ring-1 focus:ring-primary-500 outline-none"
-                            />
-                          )}
+                          {/* Story 2.26: o input tem estado local e grava ao SAIR
+                              do campo. Controlar pelo dado do servidor fazia o
+                              texto sumir e voltar a cada tecla. */}
+                          <CustomFieldInput
+                            field={field}
+                            valorServidor={String(deal.customFields?.[field.key] ?? '')}
+                            onSalvar={updateCustomField}
+                          />
                         </div>
                       ))}
                     </div>

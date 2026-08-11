@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
-import { X, ThumbsDown, DollarSign, Users, Clock, HelpCircle } from 'lucide-react';
+import { X, ThumbsDown, DollarSign, Users, Clock, HelpCircle, MapPin } from 'lucide-react';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
 
 interface LossReasonModalProps {
@@ -9,7 +9,22 @@ interface LossReasonModalProps {
   dealTitle?: string;
 }
 
+/**
+ * Motivos rápidos de perda.
+ *
+ * ⚠️ Ordem NÃO é arbitrária: o 1º é o mais frequente na operação. "Distância"
+ * entrou primeiro (pedido da Fernanda, story 2.26) porque a medição mostrou que
+ * ele é **6 dos 11** deals perdidos — enquanto os 5 botões que já existiam,
+ * somados, foram usados 2 vezes. Era o único motivo comum sem botão, e por isso
+ * vinha digitado à mão: o banco já tem `distância`, `distãncia` e
+ * `distância e parte financeira` — três grafias do mesmo motivo, impossíveis de agrupar.
+ *
+ * `value` é o que fica gravado em `deals.loss_reason` e é o que os relatórios
+ * agrupam ⇒ **um motivo, um `value` canônico**. Mudar um `value` daqui
+ * fragmenta o histórico; para renomear, migrar as linhas existentes junto.
+ */
 const QUICK_REASONS = [
+  { label: 'Distância', icon: MapPin, value: 'Distância' },
   { label: 'Preço', icon: DollarSign, value: 'Preço muito alto' },
   { label: 'Concorrência', icon: Users, value: 'Perdeu para concorrente' },
   { label: 'Timing', icon: Clock, value: 'Momento inadequado' },
