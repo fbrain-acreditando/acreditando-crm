@@ -8,6 +8,58 @@
 
 ---
 
+## 🚨 P0 — DOIS defeitos abertos na noite de 11/08 (relatos da Fernanda, NAO corrigidos)
+
+> Chegaram depois do fecho da sessao. **Diagnosticados por leitura de codigo, nenhum corrigido.**
+
+### 1. 🔴 O aviso "Voce nao salvou" aparece e NENHUM botao funciona — regressao da 2.27 (do mesmo dia)
+
+**Nao e um botao quebrado, e uma armadilha sem saida:** ela nao consegue Salvar, nem Descartar, nem
+Continuar editando. A saida provavel e **recarregar a pagina perdendo o texto** — exatamente o que a
+story existia para impedir. *O recurso que protege inverteu de sinal.*
+
+**Hipotese principal (lida no codigo):**
+- `DealDetailModal` envolve o conteudo em **`FocusTrap`** (`lib/a11y/components/FocusTrap.tsx`) com
+  `clickOutsideDeactivates = false` => **`allowOutsideClick: false`**
+- `FecharComPendenciasDialog` e um **Radix `AlertDialog`**, cujo `AlertDialogContent` fica dentro de
+  **`AlertDialogPortal`** => renderiza no `document.body`, **fora** de `<div data-focus-trap-fallback>`
+- => os cliques nos 3 botoes ocorrem "fora" do trap e sao **cancelados**
+
+**Contra-indicio (registrado de proposito):** o `ConfirmDialog` de excluir card usa o **mesmo** Radix
+AlertDialog com portal, **no mesmo modal**. Se ele funciona, a causa **nao** e o trap.
+
+**🧪 Teste que decide, 30 segundos: tentar EXCLUIR um card pelo modal.**
+- "Confirmar" tambem nao responde => **e o trap**; consertar uma vez vale para todos os dialogos
+  (caminhos: `clickOutsideDeactivates`/`allowOutsideClick`, ou renderizar o dialogo **dentro** do trap,
+  ou desativar o trap enquanto o aviso estiver aberto)
+- "Confirmar" responde => **hipotese cai**, recomecar a investigacao
+
+**Por que os 602 testes passaram:** montam o dialogo **isolado**, sem o `FocusTrap` real e sem ponteiro.
+Mesma familia do "teste nao enxerga pixel" da 2.27b.
+
+⚠️ **NAO enviar a ela o texto do botao Salvar antes do conserto** — seria ensinar a usar um botao que
+prende a tela.
+
+### 2. 🔀 O botao "Mensagem" do card leva SEMPRE para a conversa errada (e sempre a mesma)
+
+Relato **com video**. Causa lida:
+
+    // features/messaging/MessagingPage.tsx:140
+    if (!contactIdParam || selectedConversationId) return;
+
+O card faz `router.push('/messaging?contactId=...')` (`DealDetailModal.tsx:786`). Com uma conversa **ja
+selecionada**, o efeito **desiste antes de tentar resolver o contato novo** => ela continua vendo a
+conversa anterior ("foi para outro lead"), e como o estado nunca muda, **vai sempre para a mesma**.
+
+🔑 **A guarda inverte a prioridade: o estado velho vence a intencao nova** — e chegar por `?contactId=`
+e a intencao mais explicita que existe.
+
+🪞 **MESMA CLASSE da 2.27** (guarda de consumo de parametro de URL decidida por estado de UI; la era
+`dealIdFromUrl && !selectedDealId`). **Consertei num arquivo e nao varri a classe.**
+=> Ao corrigir, **varrer a classe**: procurar todo consumo de `searchParams` guardado por estado de UI.
+
+---
+
 ## O que é
 Fork do **`nossocrm`** (Thales Laray) — CRM open-source com IA nativa. Stack: **Next.js 16 (App Router) · React 19 · Supabase · TanStack Query v5 · Zustand · AI SDK v6 (Gemini)**. É a base de código do **CRM IA do Acreditando** (comercial da Fernanda, ~700 leads/mês).
 
