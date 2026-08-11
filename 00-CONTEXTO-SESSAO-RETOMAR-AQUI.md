@@ -123,6 +123,53 @@ saídas** (X, backdrop, Escape) + mobile.
 gravou**. Como a barra some junto, ela veria o botão sumir e **concluiria que salvou, com o texto
 perdido**. Agora só limpa em caso de sucesso, e *"Salvar e fechar"* **não fecha se falhar**.
 
+### 🎨 Correção de layout do aviso (print do Filipe) — `8297aa1`
+
+O `buttonVariants` do repo já traz **`h-10`** e **`whitespace-nowrap`**; o `AlertDialogCancel` e o
+`AlertDialogAction` herdam. **Eu escrevi o "Descartar e fechar" como `<button>` cru** ⇒ sem altura
+fixa e sem `nowrap` ⇒ o rótulo **quebrou em duas linhas** e desalinhou a fileira.
+
+🔑 *Botão irmão no mesmo diálogo tem de sair da **mesma fábrica de estilo**. À mão, a geometria
+diverge **em silêncio** — nada quebra, nada avisa, e só aparece em print.*
+
+Os três agora ficam **empilhados também no desktop** (os rótulos em pt-BR somam ~446 px e o diálogo
+tem ~336 px úteis ⇒ em linha, ou estoura ou quebra). 🪤 O teste achou de quebra que o
+**"Continuar editando" disparava DUAS vezes por clique** (o Cancel fecha pelo Radix, o fechamento
+cai no `onOpenChange`, e eu ainda tinha um `onClick`).
+
+⚠️ **Não verificado em pixel** — sem `.env.local`. A conferência visual é do Filipe.
+
+### 🚀 Deploy — verificado na fonte, não presumido
+
+| Camada | Leitura |
+|---|---|
+| Deployment | `dpl_9UNpgtKmcXhFM66tcGzca1owkgVN` · **● Ready** · build **2 min** |
+| Commit | **`8297aa1`** · `target: production` |
+| **Alias** | ✅ **`acreditando-crm-sandy.vercel.app`** — o endereço que ela usa |
+| Fetch ao vivo | **HTTP 200** · `Age: 0` · servido de `gru1` |
+
+**Os 6 commits do dia estão em produção**, cada um com deploy `Ready`.
+
+🪤 **O que quase me enganou:** o GitHub marcou `success` **1 segundo** depois de criar o registro —
+o que não bate com um build. Explicação: **a Vercel só cria o registro no GitHub quando o build já
+terminou**. Se eu tivesse confiado só no timestamp do GitHub, teria concluído errado — e **sem saber
+em qual direção**.
+
+### 🧰 Os scripts de banco saíram da pasta temporária — `scripts/db/`
+
+Reutilizáveis: **`sql-ro.mjs`** (executor somente-leitura) · **`RESTAURAR.mjs`** ·
+**`ensaio-ciclo.mjs`**. Históricos, marcados *"leia, não rode"*: `backup-julho`, `apagar-julho`,
+`normalizar-motivos`. `README.md` explica o contrato de escrita segura.
+
+🪤 **DUAS armadilhas do `.gitignore`, pegas pelo `git check-ignore` ANTES do commit:**
+1. `scripts/` ignorava a pasta inteira ⇒ os arquivos ficariam **só no disco**, repetindo
+   exatamente a falha que a pasta existe para impedir. *Mesma família do `*.png` da story 2.13.*
+2. Pôr `!scripts/db/` **não bastou**: o git **não reinclui arquivo dentro de diretório excluído**.
+   Precisou virar **`scripts/*`**, senão o `!` é letra morta.
+
+✅ Read-back arquivo a arquivo: **7 dentro**, `scripts/marca` **ainda fora**, e os 7 conferidos
+**no remoto** pela API do GitHub.
+
 ### 🧪 O padrão de teste que se firmou nesta sessão
 
 **Todo teste novo tem de reprovar com o código antigo.** Como o código defeituoso era **inline**
@@ -148,9 +195,12 @@ asserções:
    `deleted_at`.
 4. ⏭️ **AC4 da 2.23** (paginação) — recomendação segue **depois de 14/08**.
 5. 🚩 **Story do vazamento de assinatura de Realtime** — 7 assinaturas vivas 10 min após fechar.
-6. 🧰 **Os scripts de banco vivem no scratchpad** e evaporam ao fim da sessão — como o executor
-   somente-leitura de 10/08 evaporou (a busca confirmou: **nenhum arquivo**, só menção em markdown).
-   ⚠️ **`RESTAURAR.mjs` e `REVERTER.sql` estão salvos junto dos backups**; os demais, não.
+6. ✅ ~~Os scripts de banco vivem no scratchpad~~ — **resolvido**: estão em `scripts/db/`, no git.
+7. 🎨 **Conferir o aviso na tela** — a correção de layout **não foi verificada em pixel**. Se ainda
+   estiver torto, o print diz onde olhar.
+8. ⚠️ **A tela dela mudou 4× hoje e um comportamento INVERTEU:** o campo personalizado **não grava
+   mais sozinho**. Se ela digitar e fechar por reflexo, o aviso segura — **mas ela precisa saber que
+   o aviso existe**. Isso ainda **não está** na mensagem.
 
 ---
 
