@@ -130,6 +130,16 @@ const model = getModel(config.provider, config.apiKey, config.model)
 
 **maybeSingle() vs single()**: usar `.maybeSingle()` para lookups que podem retornar 0 rows; `.single()` lança erro se não encontrar.
 
+**Soft delete — toda leitura que chega a uma tela filtra `deleted_at`**:
+```typescript
+supabase.from('deals').select('*').is('deleted_at', null)
+```
+Tem de ser **na query**: `Deal`/`DealView` não expõem `deletedAt` (`transformDeal` não mapeia, de propósito), então não há como filtrar depois. Vale para contagens de pré-check também (`canDelete`, `deleteStage`, `hasDeals`) — contar linha morta faz a tela avisar sobre card que não existe, ou **bloquear** uma exclusão legítima.
+
+> ⚠️ **Estado atual (story 2.25):** filtram `lib/supabase/deals.ts`, `boards.ts` e `contacts.ts` — o caminho da UI. **NÃO filtram** `lib/ai/**`, `lib/mcp/**` e `app/api/public/v1/**` (~70 acessos) ⇒ **a IA e a API pública enxergam deal excluído**. Dívida conhecida, não descuido.
+>
+> Histórico de por que isto virou regra: a story 2.16 marcou 431 leads como excluídos, reportou "read-back 8/8" e **a usuária continuou vendo os 431** — nenhuma consulta lia o campo. Foi preciso apagar fisicamente (story 2.24) para obter o efeito que o soft delete deveria ter dado.
+
 **Schema Supabase**: tabela `board_stages` (não `stages`), coluna `"order"` (não `position`)
 
 ### AI — Fluxo de Dados

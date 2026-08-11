@@ -531,7 +531,10 @@ export const contactsService = {
       const { data, count, error } = await supabase
         .from('deals')
         .select('id, title', { count: 'exact' })
-        .eq('contact_id', contactId);
+        .eq('contact_id', contactId)
+        // Este número aparece no aviso "este contato tem N negócios" antes de
+        // excluir. Contar excluídos faria a tela avisar sobre card que não existe.
+        .is('deleted_at', null);
 
       if (error) return { hasDeals: false, dealCount: 0, deals: [], error };
       const deals = (data || []).map(d => ({ id: d.id, title: d.title }));

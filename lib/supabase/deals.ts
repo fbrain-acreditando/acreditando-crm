@@ -268,7 +268,11 @@ export const dealsService = {
         .select(`
           *,
           deal_items (*)
-        `);
+        `)
+        // Soft delete: excluído não volta para a tela.
+        // Tem de ser AQUI, na query — `Deal`/`DealView` não expõem `deletedAt`
+        // (transformDeal não mapeia, de propósito), então não há como filtrar depois.
+        .is('deleted_at', null);
       if (options?.signal) dealsQuery = dealsQuery.abortSignal(options.signal);
       const { data, error } = await dealsQuery
         .order('created_at', { ascending: false })
@@ -348,11 +352,18 @@ export const dealsService = {
         return { data: null, error: new Error('Supabase não configurado') };
       }
       const [dealResult, itemsResult] = await Promise.all([
-        supabase.from('deals').select('*').eq('id', id).maybeSingle(),
+        // `.is('deleted_at', null)`: um deal excluído não abre nem por link direto.
+        supabase.from('deals').select('*').eq('id', id).is('deleted_at', null).maybeSingle(),
         supabase.from('deal_items').select('id, organization_id, deal_id, product_id, name, quantity, price, unit, discount, total, created_at, updated_at').eq('deal_id', id),
       ]);
 
       if (dealResult.error) return { data: null, error: dealResult.error };
+
+      // "Não encontrado" é `data: null`, não erro. Antes do filtro isso quase nunca
+      // acontecia; agora acontece sempre que o id é de um excluído — e sem esta
+      // guarda o transformDeal receberia null e estouraria dentro do catch,
+      // transformando "não existe" em "deu erro".
+      if (!dealResult.data) return { data: null, error: null };
 
       const deal = transformDeal(dealResult.data as DbDeal, (itemsResult.data || []) as DbDealItem[]);
       return { data: deal, error: null };

@@ -664,7 +664,10 @@ export const boardsService = {
       const { count, error } = await supabase
         .from('deals')
         .select('*', { count: 'exact', head: true })
-        .eq('board_id', boardId);
+        .eq('board_id', boardId)
+        // Card já excluído não impede excluir o board — nem entra na contagem
+        // que a tela mostra ao usuário.
+        .is('deleted_at', null);
 
       if (error) return { canDelete: false, dealCount: 0, error };
 
@@ -856,11 +859,14 @@ export const boardsService = {
     try {
       if (!supabase) return { error: new Error('Supabase não configurado') };
 
-      // Verificar se há deals ativos neste estágio
+      // Verificar se há deals ativos neste estágio.
+      // "Ativos" precisa excluir os soft-deleted: sem isso o estágio fica
+      // impossível de excluir por causa de cards que já não existem para ninguém.
       const { count, error: countError } = await supabase
         .from('deals')
         .select('*', { count: 'exact', head: true })
-        .eq('stage_id', stageId);
+        .eq('stage_id', stageId)
+        .is('deleted_at', null);
 
       if (countError) {
         return { error: countError };
