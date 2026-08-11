@@ -24,6 +24,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface FecharComPendenciasDialogProps {
   isOpen: boolean;
@@ -61,18 +63,49 @@ export function FecharComPendenciasDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <AlertDialogFooter className="sm:justify-center gap-2 flex-col sm:flex-row">
-          {/* O Cancel do Radix recebe foco por padrão — e aqui a opção mais
-              segura é justamente voltar a editar, não fechar. */}
-          <AlertDialogCancel onClick={onContinuarEditando}>Continuar editando</AlertDialogCancel>
+        {/* EMPILHADO, também no desktop — e é decisão, não descuido.
+            Três rótulos em pt-BR ("Continuar editando", "Descartar e fechar",
+            "Salvar e fechar") somam ~446 px de botão; o diálogo tem ~336 px
+            úteis. Em linha, ou estoura ou algum rótulo quebra — foi exatamente
+            o que apareceu na tela. Empilhado não depende da largura nem do
+            tamanho da tradução.
+
+            `flex-col` (não `col-reverse`): assim a ordem do DOM é a ordem que
+            se lê, e o leitor de tela ouve na mesma sequência que o olho vê.
+            `sm:space-x-0` porque o footer padrão traz `sm:space-x-2` e somar com
+            `gap-2` espaçaria em dobro. */}
+        <AlertDialogFooter className="flex-col sm:flex-col gap-2 sm:space-x-0 [&>*]:w-full">
+          <AlertDialogAction onClick={onSalvarEFechar}>Salvar e fechar</AlertDialogAction>
+
+          {/* ⚠️ Este botão JÁ FOI um `<button>` cru com `px-4 py-2` na mão — e por
+              isso ficava sem o `h-10` e sem o `whitespace-nowrap` que o
+              `buttonVariants` dá aos outros dois: o rótulo quebrava em duas
+              linhas e o botão crescia, desalinhando a fileira inteira.
+              Botão dentro de um AlertDialog usa a MESMA fábrica de estilo dos
+              irmãos, senão a geometria diverge em silêncio. */}
           <button
             type="button"
             onClick={onDescartarEFechar}
-            className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 focus-visible-ring"
+            className={cn(
+              buttonVariants({ variant: 'outline' }),
+              // Descartar é a ação que joga trabalho fora: precisa se distinguir
+              // do "Continuar editando" sem virar um segundo botão primário.
+              'text-red-600 hover:text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20'
+            )}
           >
             Descartar e fechar
           </button>
-          <AlertDialogAction onClick={onSalvarEFechar}>Salvar e fechar</AlertDialogAction>
+
+          {/* O Cancel do Radix recebe foco por padrão — e aqui a opção mais
+              segura é justamente voltar a editar, não fechar. Por último na
+              ordem visual, porque é a saída, não a decisão.
+
+              ⚠️ SEM `onClick` de propósito: o Cancel já fecha pelo Radix, e o
+              fechamento cai no `onOpenChange` acima, que é quem chama
+              `onContinuarEditando`. Ter os dois fazia o handler disparar DUAS
+              vezes por clique — inofensivo hoje (só zera um booleano), mas é a
+              armadilha que espera alguém pôr algo não-idempotente ali. */}
+          <AlertDialogCancel className="mt-0">Continuar editando</AlertDialogCancel>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

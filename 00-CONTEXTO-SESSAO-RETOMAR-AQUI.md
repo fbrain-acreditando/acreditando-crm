@@ -17,6 +17,143 @@ Fork do **`nossocrm`** (Thales Laray) — CRM open-source com IA nativa. Stack: 
 
 ---
 
+## Sessão 2026-08-11 (tarde) — 🗑️ julho apagado · 🫥 soft delete ligado · 🫨 3 pedidos da Fernanda
+
+> **4 stories no ar em uma tarde: 2.24 · 2.25 · 2.26 · 2.27.** Commits `d1f75c6`, `a0d4277`,
+> `d02ebde`, `dcb1a21` — todos **pushados** com read-back no remoto.
+> **Estado do banco ao fim:** `deals` **295** · **0** com `deleted_at` · contatos 787 · mensagens ~10.356.
+
+### 🚨 O achado que abriu a tarde: o soft delete NUNCA chegou à tela
+
+A story 2.16 marcou 431 leads em 10/08, reportou *"read-back 8/8"* — e **a Fernanda continuava
+vendo os 724**. Nenhuma camada filtrava `deleted_at`: nem `deals.getAll`, nem `dealsViewQueryFn`,
+nem `makeSelectByBoard`, nem a RLS — e o `transformDeal` **sequer mapeia o campo**, então não havia
+como filtrar depois. `deals` é BASE TABLE, sem view escondida.
+
+O read-back da 2.16 foi feito **em SQL, com o filtro escrito à mão**; o **AC6 — *"a Fernanda abrir
+o board"*** nunca rodou. 🔑 **A distância entre "provado em read-back" e "provado em uso" era o
+board inteiro.**
+
+### 2.24 — exclusão física dos leads de julho (`d1f75c6`)
+
+Decisão do Filipe **depois** de ler o parecer contrário (ligar o filtro daria o mesmo efeito, em 1
+linha e reversível). Registrado na story como escolha informada.
+
+| | |
+|---|---|
+| Resultado | `deals` **724 → 293**; a linha de julho **sumiu do `group by`** |
+| Cascata real | **431 deals + 11 `activities`** |
+| Intactos | contatos **787** · conversas **745** · mensagens **10.356** |
+| Backup | `.dados-leads\crm-julho-pre-delete-2026-08-11-14-30\` + `RESTAURAR.mjs` ao lado |
+
+✏️ **O AC0 derrubou o meu próprio alerta.** Eu havia dito *"9 tabelas em CASCADE"* lendo a **forma**
+do schema. Medido: **8 estão vazias**, e `voice_calls` (NO ACTION), a única FK capaz de abortar o
+`DELETE` no meio, tem **zero** linhas. ⇒ *schema diz o que PODE acontecer; só a contagem diz o que VAI.*
+
+🪤 **Meu 1º dry-run do restaurador passou sem testar nada** — o `ON CONFLICT DO NOTHING` pulou as 431
+porque elas ainda existiam. Trocado pelo **ensaio do ciclo completo** (apaga → restaura do arquivo →
+reconta) dentro de `DO $$ … RAISE EXCEPTION $$`, abortado **pelo Postgres**, não pela rede.
+**Provou a volta, não só a ida.**
+
+### 2.25 — soft delete que esconde de verdade (`a0d4277`)
+
+**AC0 dobrou o escopo.** Dos **85 acessos** a `deals`, **5** são leituras de tela — e **duas travam
+funcionalidade**, não só mostram número errado:
+
+| Ponto | O que fazia |
+|---|---|
+| `deals.getAll` | board inteiro mostrava excluídos |
+| `deals.getById` | card excluído abria por link direto |
+| `boards.canDelete` | pré-check contava cards mortos |
+| `boards.deleteStage` | **IMPEDIA excluir estágio** por card inexistente |
+| `contacts.hasDeals` | pré-check de excluir contato contava mortos |
+
+🐛 O filtro **expôs** um defeito no `getById`: com `maybeSingle()` devolvendo `null`, o
+`transformDeal` estourava e o `catch` virava *"não existe"* em *"deu erro"*. Guardado.
+
+⚖️ **Sem ganho de performance, e a story diz isso:** 0 deals com `deleted_at` ⇒ `getAll` deixa de
+trazer **zero** linhas.
+
+🔴 **DÍVIDA VIVA:** `lib/ai/**`, `lib/mcp/**` e `app/api/public/v1/**` (**~70 acessos**) **seguem sem
+filtro** ⇒ **a IA e a API pública enxergam deal excluído.** Escrito no `CLAUDE.md` do repo.
+
+### 2.26 — o campo que piscava e o motivo "Distância" (`d02ebde`)
+
+**Relato dela:** *"escrevo, apaga sozinho e depois aparece — fica piscando"*.
+
+**Causa:** input controlado **direto pelo servidor**, gravando **a cada tecla**. O update otimista
+**existia e não resolvia** — o problema era a **reconciliação chegando atrasada sobre um input sem
+memória própria**. 🔴 **Custo determinístico:** `dealsViewQueryFn` faz 4 consultas ⇒ digitar
+"Distância" custava **9 UPDATEs + 9 broadcasts + ~36 consultas**. *A lentidão da 2.23 sendo
+produzida ao vivo pela digitação dela.*
+
+📊 **"Distância" não era preferência:** dos 11 perdidos, **6 eram distância em 3 grafias**
+(`distância` 4 · `distãncia` **com til** 1 · `distância e parte financeira` 1) — e os 5 botões que já
+existiam, **somados**, foram usados 2 vezes. **O motivo mais comum era o único sem botão.**
+
+✅ **AC5 executado** (autorizado): **5 linhas → `Distância`**; `distância e parte financeira`
+**mantido** (são dois motivos e o campo guarda um). Motivos distintos **9 → 8**. Backup +
+`REVERTER.sql` em `.dados-leads\crm-motivos-perda-2026-08-11-15-05\`.
+
+🪤 **Meu read-back mentiu:** `lower(btrim(loss_reason)) in ('distância','distãncia')` acusou **5
+"variantes restantes"** — casava com o **próprio canônico** em minúsculo. Refeito com
+`loss_reason <> 'Distância'`: **zero**. 🔑 *A trava do read-back não é reler; é reler com um
+predicado que consegue estar errado.*
+
+### 2.27 — o modal que reabria sozinho e o Salvar explícito (`dcb1a21`)
+
+**Relato dela:** *"a aba fecha e fica abrindo sozinha; clico no X, some e aparece de novo"*.
+
+`setSelectedDealId` é chamado em **3 lugares**. Dois são `onClick` no card, e o modal tem
+**backdrop** ⇒ o X **não atinge o card atrás**. Sobra o efeito do `?deal=`, cuja guarda era
+`dealIdFromUrl && !selectedDealId`. 🔑 **`!selectedDealId` é estado de UI que ela zera ao fechar** ⇒
+fechar destrava a guarda ⇒ reabre ⇒ **laço**.
+
+**Correção:** guarda virou **ref que lembra QUAL valor foi consumido** (o valor, não booleano — senão
+um `?deal=` diferente deixaria de abrir). A limpeza da URL saiu de `router.replace('?')`.
+**Duas defesas**, porque a da URL é a que não dá para testar sem `.env.local`.
+
+**Salvar explícito:** campos personalizados não gravam mais sozinhos — pendentes no modal, **1
+escrita em lote**, barra com Salvar/Descartar, **borda âmbar no campo alterado**, e aviso nas **3
+saídas** (X, backdrop, Escape) + mobile.
+
+🎁 O pendente **mata o piscar da 2.26 por construção** — o refetch não chega ao input.
+
+🪤 **O teste achou defeito no meu conserto:** `salvarCampos` limpava os pendentes **antes de saber se
+gravou**. Como a barra some junto, ela veria o botão sumir e **concluiria que salvou, com o texto
+perdido**. Agora só limpa em caso de sucesso, e *"Salvar e fechar"* **não fecha se falhar**.
+
+### 🧪 O padrão de teste que se firmou nesta sessão
+
+**Todo teste novo tem de reprovar com o código antigo.** Como o código defeituoso era **inline**
+(sem `git stash` possível), ele foi **reconstruído dentro do arquivo de teste** e submetido às mesmas
+asserções:
+
+| Story | Prova |
+|---|---|
+| 2.25 | `git stash` do código de produção → **6 de 7 falham** |
+| 2.26 / 2.27 | `InputAntigo` e `ConsumidorAntigo` reconstruídos no teste → **reprovam** |
+
+*Teste que passa sem exercitar o caminho é teste que mente.*
+
+### ⏭️ Próximos passos
+
+1. 🛑 **AC6 da 2.27 + AC5 da 2.24 — só a Fernanda fecha.** O laço **não foi reproduzido** aqui
+   (segue sem `.env.local`). Se ela ainda ficar presa, **a causa é outra e a story não está fechada**
+   — próximo passo é o console dela, como na 2.14.
+2. 📩 **A mensagem dela** (`docs/mensagens/RASCUNHO-fernanda-acumulando.md`) está pronta e atualizada
+   (**293**, e "saíram de vez"). ⚠️ **Falta acrescentar que agora existe botão Salvar** — a tela mudou
+   3× hoje e o comportamento de gravação **inverteu**.
+3. 🔴 **Dívida da 2.25:** ~70 acessos em `lib/ai`, `lib/mcp` e `app/api/public/v1` sem filtro de
+   `deleted_at`.
+4. ⏭️ **AC4 da 2.23** (paginação) — recomendação segue **depois de 14/08**.
+5. 🚩 **Story do vazamento de assinatura de Realtime** — 7 assinaturas vivas 10 min após fechar.
+6. 🧰 **Os scripts de banco vivem no scratchpad** e evaporam ao fim da sessão — como o executor
+   somente-leitura de 10/08 evaporou (a busca confirmou: **nenhum arquivo**, só menção em markdown).
+   ⚠️ **`RESTAURAR.mjs` e `REVERTER.sql` estão salvos junto dos backups**; os demais, não.
+
+---
+
 ## Sessão 2026-08-10 (noite) → 2026-08-11 — 🐌 auditoria de lentidão: **o banco é inocente**
 
 > **Gatilho:** *"A Fernanda reclamou que o CRM está muito lento"* (relato do Filipe).
