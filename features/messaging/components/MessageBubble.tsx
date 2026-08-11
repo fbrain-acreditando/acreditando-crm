@@ -172,7 +172,17 @@ const AudioPlayer = memo(function AudioPlayer({
 interface MessageBubbleProps {
   message: MessagingMessage;
   conversationId: string;
-  allMessages?: MessagingMessage[];
+  /**
+   * A mensagem à qual esta responde, JÁ RESOLVIDA pelo pai (story 2.23, AC2).
+   *
+   * 🪤 Antes isto era `allMessages: MessagingMessage[]` e cada bolha fazia
+   * `allMessages.find(...)` — busca linear POR BOLHA, ou seja O(n²) na conversa.
+   * Pior: o array chegava com identidade nova a cada render, o que anulava o
+   * `memo()` desta função e fazia TODAS as bolhas repintarem.
+   * O pai agora resolve por um Map memoizado e passa só o objeto.
+   * 🔴 NÃO voltar a receber a lista inteira aqui.
+   */
+  repliedToMessage?: MessagingMessage;
   onReply?: (message: MessagingMessage) => void;
 }
 
@@ -444,7 +454,7 @@ function replyPreviewText(msg: MessagingMessage): string {
 export const MessageBubble = memo(function MessageBubble({
   message,
   conversationId,
-  allMessages,
+  repliedToMessage,
   onReply,
 }: MessageBubbleProps) {
   const isOutbound = message.direction === 'outbound';
@@ -454,10 +464,7 @@ export const MessageBubble = memo(function MessageBubble({
   const reactions = (message.metadata?.reactions as Record<string, number> | undefined) ?? {};
   const canReact = !isOutbound && !!message.externalId;
 
-  // Find the message being replied to
-  const repliedToMessage = message.replyToMessageId
-    ? allMessages?.find((m) => m.id === message.replyToMessageId || m.externalId === message.replyToMessageId)
-    : undefined;
+  // A mensagem respondida chega resolvida do pai (ver MessageBubbleProps).
 
   const handleReact = useCallback(
     (emoji: string) => {

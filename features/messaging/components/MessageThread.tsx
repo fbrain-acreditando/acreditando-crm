@@ -7,6 +7,7 @@ import { Loader2, MessageSquare } from 'lucide-react';
 import { PresenceIndicator } from './PresenceIndicator';
 import { MessageBubble } from './MessageBubble';
 import { useMessagesInfinite } from '@/lib/query/hooks/useMessagesQuery';
+import { buildMessageIndex } from '../utils/buildMessageIndex';
 import type { MessagingMessage } from '@/lib/messaging/types';
 
 interface MessageThreadProps {
@@ -66,14 +67,27 @@ export function MessageThread({ conversationId, presenceStatus, onReply }: Messa
   // conversa. `sentAt` vem do timestamp do próprio provedor → ordem determinística
   // e igual em toda recarga. Array.sort é estável: empate no mesmo instante mantém
   // a ordem de chegada como desempate.
-  const messages = (data?.pages.flatMap((p) => p.messages) ?? [])
-    .filter((m) => m.contentType !== 'reaction')
-    .sort((a, b) => {
-      const ta = Date.parse(a.sentAt ?? a.createdAt);
-      const tb = Date.parse(b.sentAt ?? b.createdAt);
-      if (Number.isNaN(ta) || Number.isNaN(tb) || ta === tb) return 0;
-      return ta - tb;
-    });
+  //
+  // ⚡ useMemo NÃO é enfeite aqui (story 2.23, AC1). Sem ele, este flatMap +
+  // filter + sort com Date.parse rodava A CADA RENDER — e, pior, devolvia um
+  // array com IDENTIDADE NOVA sempre. Isso quebrava duas coisas em cascata:
+  //   1. o useMemo de `messagesWithDates`, cuja dep é [messages], nunca acertava;
+  //   2. `allMessages={messages}` era passado a cada MessageBubble, que é memo()
+  //      — com a prop mudando de referência sempre, o memo era 100% inútil e
+  //      TODAS as bolhas repintavam a cada mensagem que chegava.
+  // A dep é [data] porque é ele que muda quando o cache é atualizado.
+  const messages = useMemo(
+    () =>
+      (data?.pages.flatMap((p) => p.messages) ?? [])
+        .filter((m) => m.contentType !== 'reaction')
+        .sort((a, b) => {
+          const ta = Date.parse(a.sentAt ?? a.createdAt);
+          const tb = Date.parse(b.sentAt ?? b.createdAt);
+          if (Number.isNaN(ta) || Number.isNaN(tb) || ta === tb) return 0;
+          return ta - tb;
+        }),
+    [data]
+  );
 
   // Scroll to bottom on new messages (not when loading older)
   useEffect(() => {
@@ -144,6 +158,11 @@ export function MessageThread({ conversationId, presenceStatus, onReply }: Messa
     return result;
   }, [messages]);
 
+  // Índice O(1) para resolver "a qual mensagem esta responde" (story 2.23, AC2).
+  // A regra de desempate ("primeiro vence") e o porquê dela estão em
+  // buildMessageIndex.ts, com testes provando equivalência com o find antigo.
+  const messageIndex = useMemo(() => buildMessageIndex(messages), [messages]);
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -197,7 +216,11 @@ export function MessageThread({ conversationId, presenceStatus, onReply }: Messa
             key={item.message.id}
             message={item.message}
             conversationId={conversationId}
-            allMessages={messages}
+            repliedToMessage={
+              item.message.replyToMessageId
+                ? messageIndex.get(item.message.replyToMessageId)
+                : undefined
+            }
             onReply={onReply}
           />
         );
