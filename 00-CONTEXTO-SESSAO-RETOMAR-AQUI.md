@@ -17,6 +17,93 @@ Fork do **`nossocrm`** (Thales Laray) — CRM open-source com IA nativa. Stack: 
 
 ---
 
+## Sessão 2026-08-10 (noite) → 2026-08-11 — 🐌 auditoria de lentidão: **o banco é inocente**
+
+> **Gatilho:** *"A Fernanda reclamou que o CRM está muito lento"* (relato do Filipe).
+> **Resultado:** a medição **derrubou duas hipóteses minhas e o alvo da story que eu mesmo escrevi.**
+
+### 🔬 O diagnóstico, medido em produção (não inferido)
+
+Auditoria em 3 frentes (3 subagentes: dados · runtime/realtime · bundle) + medição direta no banco.
+
+| Medição | Valor | Leitura |
+|---|---|---|
+| Query do **board** | **46 ms** | banco não é o gargalo |
+| Query da **lista de conversas** | **67 ms** | idem |
+| Tabela `deals` inteira | **704 kB** | — |
+| **JS da tela de login** (a mais leve) | **894 kB** brutos / 270 KB comprimidos | 🎯 **o código pesa mais que o dado** |
+| **Decodificador de WAL do Realtime** | **405 mil chamadas · 3.657.030 ms (61 min) · pico 4.898 ms** | 40× mais que todas as queries da app somadas |
+| Lista de conversas em `pg_stat_statements` | 4.225 chamadas · 90.550 ms | 21 ms/refetch — ninguém sente |
+
+**Gate decisivo (2 leituras de 180 s):**
+
+```
+0 assinaturas → delta ZERO chamadas, ZERO ms
+7 assinaturas, Filipe usando  → 1,93 chamadas/s
+7 assinaturas, Filipe fechou  → 1,94 chamadas/s
+```
+
+⇒ O WAL **só existe com cliente conectado** (logo é do app, não piso da plataforma), **mas a taxa é PLANA** — não depende de atividade. É **custo fixo de manter assinatura**, ~16,3 ms de CPU de banco por segundo de tela aberta (1,6 % de um núcleo, por usuário).
+
+🎯 **A regra que nasceu disso:** *custo de servidor e latência de usuário são grandezas diferentes.* Os 61 min de WAL são conta do mês; **não são os segundos que ela espera olhando a tela.** Atacar o WAL para responder *"está lento"* seria trocar a pergunta.
+
+⇒ **A lentidão dela mora no navegador**: 739 linhas viram objetos, 739 itens entram no DOM (zero virtualização), bolhas repintam.
+
+### ✅ O que foi ao ar
+
+| Commit | O quê |
+|---|---|
+| `b45f2ca` | **Story 2.22** — cron de cada minuto → `*/5`. 1.440 → 288 execuções/dia |
+| `d0a0534` | **21 stories saem do `.gitignore`** e entram no git, com PII mascarada |
+| `89d879b` | **Story 2.23, bloco 1** (AC1+AC2) — `useMemo` no thread + fim da busca O(n²) |
+| `a341020` | Limpeza: uma story 2.23 só; 2.21 marcada como absorvida |
+
+**Story 2.22 — o `AC0` trouxe uma 3ª hipótese.** Não era produtor quebrado nem volume raro: `stage_ai_config` tem **0 linhas** ⇒ a guarda `if (config.advancement_criteria…)` **nunca é verdadeira**. O avanço automático de estágio por IA está **inteiro no ar e inteiro inerte** (mesma família do BANT: 198 deals, zero). Read-back conferido; reverter = `cron.alter_job(2, '* * * * *')`.
+❌ **Renomear o job (`stage-evaluations-1min`, que agora mente) está BLOQUEADO:** `42501: permission denied for table job`, e `cron.alter_job` não tem parâmetro de nome. O contorno exigiria reescrever o comando **com o `CRON_SECRET` dentro**. Decisão: não renomear; documentado no `route.ts` que a verdade é o `schedule`.
+
+**Story 2.23, bloco 1.** `MessageThread.tsx:69` montava a lista no corpo do componente ⇒ array com identidade nova a cada render ⇒ (a) o `useMemo` de `messagesWithDates` nunca acertava e (b) `allMessages={messages}` ia para cada bolha, anulando o `memo()` — **todas repintavam**. E dentro da bolha, `allMessages.find(...)` por bolha = **O(n²)**.
+Agora: `useMemo([data])` + `buildMessageIndex` (Map) + `repliedToMessage` resolvido no pai.
+🧪 **8 testes comparam o índice novo contra a implementação ANTIGA como oráculo**, chave por chave — inclusive colisão `externalId` × `id`, onde um Map ingênuo daria outra resposta.
+
+### 🛑 O que foi REPROVADO antes de virar código
+
+- **AC3 (`getPresence`)** — o diagnóstico do agente estava **superestimado** e o conserto que **eu mesmo escrevi na story quebraria a funcionalidade**. `ConversationList.tsx:272` passa `presenceStatus` como **string primitiva** ao wrapper `memo()` ⇒ só a linha do contato repinta, não as 739. E `useRef` + `useCallback([])` tornaria `getPresence` estável ⇒ a lista **pararia de re-renderizar** ⇒ o *"digitando…"* sumiria. Trocaria lentidão por defeito silencioso.
+- **`.limit()` puro na lista de conversas (story 2.21)** — o `AC0` reprovou: as **739 conversas têm atividade nos últimos 30 dias** (275 só nos últimos 7) ⇒ `.limit(100)` esconderia **86 %**. Tem de ser `useInfiniteQuery` + `.range()`.
+
+### ✏️ Renomear o lead — a funcionalidade existe; o problema é **descoberta**
+
+O Filipe pediu "poder editar o nome na tela de Mensagens". **Já dá:** `ContactPanel.tsx:194` monta o `LeadNameEditor`. Ele **não achou** — e depois achou sozinho.
+
+- 🪤 **A causa:** `opacity-0 group-hover:opacity-100` — o lápis é **invisível até o hover**, sem `cursor-pointer`, sem underline, sem nenhuma pista.
+- 📱 **E `hover` não existe em tela de toque.** O app **não tem nenhum tratamento de ponteiro** (zero `@media (hover)`, zero `pointer: coarse`); a detecção é por **largura**, e um iPad de 1024 px vira "tablet" sem hover ⇒ **inalcançável**. A `MessagingPage` **não é responsiva** (3 colunas fixas, 640 px de laterais `flex-shrink-0`).
+- ✅ **O repo já tem a convenção certa:** lápis **sempre visível** em `ProductsCatalogManager.tsx:333`, `CustomFieldsManager.tsx:173`, `ProfilePage.tsx:402`. `opacity-0 group-hover` aparece ~20×, mas quase sempre em ação **secundária**; só **3 ações primárias** estão escondidas assim, e esta é uma.
+- 📊 **`AC0`: 109 de 777 contatos (14 %) com nome inutilizável** — 43 sem nome, 28 com `@lid`, 14 só telefone, 24 com 1–2 caracteres. **Cresce sozinho** (todo lead novo entra com o `pushName`).
+- 🔴 **O cabeçalho da conversa (`MessagingPage.tsx:308`) é texto puro** — é onde ele olhou primeiro.
+- ✅ **Feito:** o Bloco 5 do rascunho da Fernanda foi reescrito — dizia *"passe o mouse no nome"* **sem dizer onde** e **sem avisar que no celular não funciona**.
+- ⏭️ **Na fila (opção B, sem prazo):** lápis sempre visível. Pequeno, segue convenção da casa, resolve o toque.
+
+### 🪤 Erros meus nesta sessão (registrados de propósito)
+
+1. **Culpei o soft delete de ontem pela lentidão.** Errado: `deals.getAll` **sempre** trouxe a tabela inteira. O payload **não cresceu** — só ficou desperdiçado. O que mudou foi **quem usa**: a Fernanda entrou em 07/08 e virou usuária diária. **A lentidão é pré-existente.**
+2. **Escrevi a mensagem de commit com here-string do PowerShell (`@'…'@`) dentro do Bash** ⇒ `b45f2ca` foi ao ar com `@` solto no assunto. Conteúdo intacto. **Decisão: não corrigir** — force push em `main` com auto-deploy, por um caractere, na semana da apresentação dela, não compensa.
+3. **A trava do meu executor somente-leitura tinha furo:** bloqueia `\bALTER\b`, mas o comando era `select cron.alter_job(...)` e `_` conta como letra ⇒ **a escrita teria passado disfarçada de leitura**. Mesma família do `*.png` da 2.13: *o gate parecia cobrir e não cobria*.
+4. **Declarei uma medição inválida sem conferir.** Disse que a janela estava suja porque o Filipe fechou o CRM; o dado mostrava **7 assinaturas nas duas pontas**. Conferi depois — estava limpa.
+
+### ⏭️ Estado e próximos passos da 2.23
+
+| AC | Estado |
+|---|---|
+| AC1+AC2 (`useMemo` + fim do O(n²)) | ✅ **No ar**, 8 testes |
+| AC3 (`getPresence`) | 🛑 **Reprovado** — fora de escopo |
+| **AC4** — paginação (`useInfiniteQuery`) | ⏭️ **Próximo**, decisão do Filipe pendente: fazer agora (com validação de tela) ou **depois de 14/08** *(recomendação: depois)* |
+| AC5 — virtualização (`@tanstack/react-virtual`) | Depois do AC4, medindo entre um e outro |
+| AC0.3 — tempo de repintura na tela | ⛔ **Bloqueado** — não há `.env.local` (só `.env.example`) e não houve aba logada. **A entrega vai dizer isso**, não trocar por métrica de servidor |
+| AC8 — provado em uso | ⏳ **Perguntar à Fernanda se melhorou** — única medição que vale |
+
+🚩 **Story nova a abrir:** **vazamento de assinatura de Realtime** — 7 assinaturas seguiam vivas **10 min** após fechar o CRM, cobrando os mesmos 1,94/s. É custo, não velocidade.
+
+---
+
 ## Sessão 2026-08-10 — 🔒 2.16 EXECUTADA · 🛑 2.18 morta pelo próprio AC0 · 📝 2.20 nasceu `Ready`
 
 > **Acesso ao banco restabelecido.** Token do Supabase em `.credenciais\supabase-crm-mgmt.token`

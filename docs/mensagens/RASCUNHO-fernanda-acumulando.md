@@ -82,16 +82,32 @@
 
 > Ah, e tem uma coisa nova que acho que vai te ajudar: **agora dá pra corrigir o nome do lead**.
 >
-> Sabe quando o WhatsApp manda um nome esquisito — só o telefone, um emoji, ou às vezes nem o nome (teve um que veio "Rondônia", que era a região dele)? Agora é só passar o mouse no nome e clicar no lapisinho ✏️
+> Sabe quando o WhatsApp manda um nome esquisito — só o telefone, um emoji, ou às vezes nem o nome (teve um que veio "Rondônia", que era a região do lead)? Dá pra arrumar.
 >
-> Pode fazer isso **na conversa ou no card do board**, tanto faz — o nome novo aparece nos três lugares sozinho: Conversas, Boards e Contatos.
+> **Onde fica, no computador:** abre a conversa em **Conversas**. Do lado direito tem um painel com a foto do lead e o nome dele logo abaixo. **Encosta o mouse em cima desse nome** — aparece um lapisinho ✏️ do lado. Clica nele, escreve o nome certo e aperta **Enter**.
 >
-> Só um detalhe: se você já tinha escrito alguma coisa no título do card (tipo "Maria — ligar terça"), aquilo **não é apagado**. O sistema te avisa que aquele card manteve o texto que você escreveu.
+> Também dá pra fazer abrindo o **card no Boards**, se for mais fácil pra você. Tanto faz: o nome novo aparece nos três lugares sozinho — Conversas, Boards e Contatos.
+>
+> ⚠️ **Duas coisas que eu preciso te avisar:**
+>
+> 1. **No celular esse lapisinho não aparece** — ele depende de encostar o mouse, e no celular não existe isso. Por enquanto essa correção só dá pra fazer no computador. Já está na minha lista pra arrumar.
+> 2. Se você já tinha escrito alguma coisa no título do card (tipo "Maria — ligar terça"), aquilo **não é apagado**. O sistema te avisa que aquele card manteve o texto que você escreveu.
 
 > [!note] Nota interna, não enviar
-> Vale só depois de conferir que o deploy da Vercel terminou. E é bom lembrar que **1 em cada 7 leads
-> (106 de 768) está com nome inutilizável hoje** — 40 sem nome nenhum. Se ela quiser, dá para
-> priorizar os que têm conversa ativa.
+> ✏️ **Reescrito em 11/08.** A versão anterior dizia só *"é só passar o mouse no nome e clicar no
+> lapisinho"*, **sem dizer onde** e **sem avisar que no celular não funciona**. Ela ia procurar e não
+> achar — foi o que aconteceu com o próprio Filipe, que encomendou a funcionalidade e não a encontrou.
+>
+> Medido em 11/08: **109 de 777 contatos (14%) com nome inutilizável** — 43 sem nome nenhum, 28 com
+> `@lid`, 14 só telefone, 24 com 1–2 caracteres. E o número **cresce sozinho**, porque todo lead novo
+> entra com o `pushName` que a pessoa configurou no WhatsApp.
+>
+> 🔴 A limitação do celular é real e está documentada: o app **não tem nenhum tratamento de toque**
+> (zero `@media (hover)`, detecção só por largura de tela). Enquanto o lápis depender de hover, a
+> funcionalidade é inalcançável em celular e tablet. Conserto = deixar o lápis sempre visível, que é
+> a convenção que o próprio repo já usa em Configurações e Perfil.
+>
+> Se ela quiser começar a arrumar, dá pra priorizar os que têm conversa ativa.
 
 ---
 
