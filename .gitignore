@@ -95,7 +95,20 @@ docs/security/
 # Para se referir a um lead, use o id do deal/contato — nao o dado dele.
 
 # Dev/debug scripts (not needed for app to run)
-scripts/
+# `scripts/*` e NAO `scripts/`: o git nao reinclui arquivo dentro de diretorio
+# excluido — com `scripts/` ele nem desce na pasta, e o `!` abaixo vira letra
+# morta. Pego pelo `git check-ignore` antes do commit, nao depois.
+scripts/*
+
+# EXCECAO: scripts/db/ VAI para o git, de proposito.
+# Em 10/08 o executor "somente-leitura" foi construido, registrado no contexto da
+# sessao como controle de seguranca — e nunca foi salvo em lugar nenhum. Morreu
+# com a pasta temporaria e precisou ser reescrito de memoria no dia seguinte.
+# Um controle que depende de memoria nao e controle. Estes arquivos nao rodam na
+# app; existem para nao se perder de novo. Nenhum contem segredo: o token e lido
+# de fora do repositorio (`.credenciais/`, que segue ignorado).
+!scripts/db/
+!scripts/db/**
 
 # Test documentation (test code stays, docs are local)
 test/*.md
