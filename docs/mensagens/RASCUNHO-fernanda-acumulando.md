@@ -14,7 +14,7 @@
 
 | Item | Por que tem pressa |
 |---|---|
-| **Aviso do board** | Ela pode abrir o CRM a qualquer momento e ver **276 cards no lugar de 707** sem explicação. O aviso na tela ficou **fora de escopo** por decisão do Filipe (story 2.16) ⇒ **esta mensagem é o aviso** |
+| **Aviso do board** | Ela pode abrir o CRM a qualquer momento e ver **293 cards no lugar de 724** sem explicação. O aviso na tela ficou **fora de escopo** por decisão do Filipe (story 2.16) ⇒ **esta mensagem é o aviso**. ⚠️ **Atualizado em 11/08 (story 2.24):** julho foi **excluído de vez**, não escondido — e o número correto é **293**, não 276 (entraram 17 leads novos desde 10/08) |
 | **Perguntas 1 e 2** | Travam a story **2.17** (movimentações automáticas), prazo **13/08** |
 | **Pergunta 3** | Trava a story **2.19** (painel), prazo **13/08** |
 | **Pergunta das estrelas** | Story **2.18** foi **bloqueada pelo próprio AC0** — a regra por zona não é implementável |
@@ -26,11 +26,13 @@
 
 > Oi Fernanda, tudo bem?
 >
-> Mexi no board hoje pra ele ficar mais fácil de trabalhar: os leads de julho saíram da tela e ficaram só os de agosto. Agora são **276 cards** no lugar de 707.
+> Mexi no board hoje pra ele ficar mais fácil de trabalhar: tirei os leads de julho e deixei só os de agosto. Agora são **293 cards** no lugar de 724.
 >
-> Julho **não foi apagado** — está guardado e eu trago de volta na hora que você pedir. E já separei os números de julho num relatório pra você usar na sexta.
+> Assim o número que aparece na tela é o do mês, e você não precisa mais separar na cabeça o que é de julho e o que é de agosto.
 >
-> Falo isso porque a tela não avisa que eles estão escondidos. Se você estranhar a fila mais curta, é isso 🙂
+> Os leads de julho **saíram do quadro de vez**. As conversas do WhatsApp deles continuam todas lá, então nada de histórico se perdeu — e eu tenho uma cópia guardada de tudo, caso um dia você precise de algum. Se aparecer algum nome de julho de novo, ele entra como card novo, normal.
+>
+> Falo isso agora porque a tela não avisa que a fila encurtou. Se você estranhar, é isso 🙂
 
 ---
 
