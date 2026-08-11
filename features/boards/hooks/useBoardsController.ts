@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { DealView, Board, CustomFieldDefinition } from '@/types';
 import {
   useBoards,
@@ -62,6 +62,7 @@ export const useBoardsController = () => {
   const { profile, organizationId } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const pathname = usePathname();
 
   // AI Context
   const { setContext, clearContext } = useAI();
@@ -316,18 +317,38 @@ export const useBoardsController = () => {
     stageId: string;
   } | null>(null);
 
-  // Open deal from URL param (e.g., /boards?deal=xxx)
+  /**
+   * Abre o card vindo da URL (`/boards?deal=xxx`) — story 2.27.
+   *
+   * 🪤 A versão anterior guardava "já consumi este parâmetro" em
+   * `!selectedDealId`, que é **estado de UI que o usuário zera ao fechar o
+   * modal**. Fechar destravava a guarda e, se o parâmetro ainda estivesse
+   * legível, o efeito reabria o card — e ela fechava de novo, para sempre.
+   * A Fernanda descreveu como *"some e aparece de novo, fica travado nisso"*.
+   *
+   * Consumir um parâmetro é **evento único**: a guarda tem de ser uma ref que
+   * lembra QUAL valor já foi consumido, não um estado que a tela pode reverter.
+   * Guardar o valor (e não um booleano) mantém funcionando o caso legítimo de
+   * chegar um `?deal=` **diferente** numa navegação nova.
+   */
+  const dealIdConsumidoDaUrl = useRef<string | null>(null);
   useEffect(() => {
     if (!searchParams) return;
     const dealIdFromUrl = searchParams.get('deal');
-    if (dealIdFromUrl && !selectedDealId) {
-      setSelectedDealId(dealIdFromUrl);
-      // Clear the param from URL using router
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete('deal');
-      router.replace(`?${params.toString()}`, { scroll: false });
-    }
-  }, [searchParams, selectedDealId, router]);
+    if (!dealIdFromUrl || dealIdConsumidoDaUrl.current === dealIdFromUrl) return;
+
+    dealIdConsumidoDaUrl.current = dealIdFromUrl;
+    setSelectedDealId(dealIdFromUrl);
+
+    // Limpeza da URL: `router.replace('?')` — o que sobrava quando `deal` era o
+    // ÚNICO parâmetro — é justamente o caso que podia não limpar. Montar o
+    // caminho explicitamente tira a dependência desse comportamento; e mesmo se
+    // a limpeza falhar, a ref acima já impede o efeito de reabrir.
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('deal');
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
 
   // Fallback for drag issues
   const lastMouseDownDealId = React.useRef<string | null>(null);

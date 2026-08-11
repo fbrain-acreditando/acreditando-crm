@@ -22,6 +22,7 @@ import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
 import { LeadNameEditor } from '@/components/LeadNameEditor';
 import { CustomFieldInput } from './CustomFieldInput';
+import { FecharComPendenciasDialog } from './FecharComPendenciasDialog';
 import { useMoveDealSimple } from '@/lib/query/hooks';
 import { DEALS_VIEW_KEY } from '@/lib/query';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
@@ -171,6 +172,16 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   const [pendingLostStageId, setPendingLostStageId] = useState<string | null>(null);
   const [lossReasonOrigin, setLossReasonOrigin] = useState<'button' | 'stage'>('button');
   const [showBriefingDrawer, setShowBriefingDrawer] = useState(false);
+
+  // Story 2.27 — campos personalizados só gravam quando ela clica em Salvar.
+  const [camposPendentes, setCamposPendentes] = useState<Record<string, string>>({});
+  const [avisoPendencia, setAvisoPendencia] = useState(false);
+
+  // Trocar de card não pode carregar rascunho do card anterior.
+  useEffect(() => {
+    setCamposPendentes({});
+    setAvisoPendencia(false);
+  }, [dealId]);
 
   // Tags suggestions (local for now; Settings UI writes to the same key)
   const [availableTags, setAvailableTags] = usePersistedState<string[]>('crm_tags', []);
@@ -407,9 +418,64 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
     }
   };
 
-  const updateCustomField = (key: string, value: string | number | boolean) => {
-    const updatedFields = { ...deal.customFields, [key]: value };
-    updateDeal(deal.id, { customFields: updatedFields });
+  /**
+   * Campos personalizados com Salvar explícito — story 2.27.
+   *
+   * Pedido da Fernanda: *"toda alteração, quando for feita, precisa clicar em
+   * salvar"*. Digitar só mexe em `camposPendentes`; a gravação é do botão.
+   *
+   * O pendente também é o que impede o piscar da story 2.26: enquanto ele
+   * existir, é ele que aparece — o refetch do servidor não chega ao input.
+   */
+  const valorDoCampo = (key: string) =>
+    camposPendentes[key] ?? String(deal.customFields?.[key] ?? '');
+
+  const campoAlterado = (key: string) =>
+    key in camposPendentes && camposPendentes[key] !== String(deal.customFields?.[key] ?? '');
+
+  const camposAlterados = Object.keys(camposPendentes).filter(campoAlterado);
+  const temPendencia = camposAlterados.length > 0;
+
+  const anotarCampo = (key: string, value: string) => {
+    setCamposPendentes(anterior => ({ ...anterior, [key]: value }));
+  };
+
+  const descartarCampos = () => setCamposPendentes({});
+
+  /**
+   * Grava os pendentes. Devolve `true` só se a escrita foi aceita.
+   *
+   * ⚠️ Limpar `camposPendentes` ANTES de saber o resultado apagaria o que ela
+   * digitou quando a gravação falhasse — e, como o botão some junto com a
+   * barra, ela acharia que salvou. Com salvamento automático isso era invisível;
+   * com botão explícito, é promessa quebrada.
+   */
+  const salvarCampos = async (): Promise<boolean> => {
+    if (!temPendencia) return true;
+    // UMA escrita com todos os campos de uma vez. Um UPDATE por campo geraria
+    // um broadcast de Realtime e um refetch do board por campo.
+    const atualizados = { ...deal.customFields };
+    for (const key of camposAlterados) atualizados[key] = camposPendentes[key];
+    try {
+      await updateDeal(deal.id, { customFields: atualizados });
+      setCamposPendentes({});
+      return true;
+    } catch {
+      addToast('Não deu para salvar os campos. O que você digitou continua aí.', 'error');
+      return false;
+    }
+  };
+
+  /**
+   * O modal tem TRÊS saídas — X, backdrop e Escape. As três passam por aqui,
+   * senão o aviso vira decorativo em duas delas.
+   */
+  const tentarFechar = () => {
+    if (temPendencia) {
+      setAvisoPendencia(true);
+      return;
+    }
+    onClose();
   };
 
   // dealActivities memoized above.
@@ -417,7 +483,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   // Handle escape key to close modal
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape' && !isEditingTitle && !isEditingValue) {
-      onClose();
+      tentarFechar();
     }
   };
 
@@ -617,7 +683,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                   <Trash2 size={24} aria-hidden="true" />
                 </button>
                 <button
-                  onClick={onClose}
+                  onClick={tentarFechar}
                   className="ml-2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
                   aria-label="Fechar modal"
                 >
@@ -850,17 +916,49 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                           <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
                             {field.label}
                           </label>
-                          {/* Story 2.26: o input tem estado local e grava ao SAIR
-                              do campo. Controlar pelo dado do servidor fazia o
-                              texto sumir e voltar a cada tecla. */}
+                          {/* Story 2.27: digitar não grava — fica pendente até o
+                              botão Salvar. O pendente também é o que impede o
+                              piscar da 2.26: o refetch não chega ao input. */}
                           <CustomFieldInput
                             field={field}
-                            valorServidor={String(deal.customFields?.[field.key] ?? '')}
-                            onSalvar={updateCustomField}
+                            valor={valorDoCampo(field.key)}
+                            alterado={campoAlterado(field.key)}
+                            onMudar={anotarCampo}
                           />
                         </div>
                       ))}
                     </div>
+
+                    {/* Barra de Salvar — story 2.27.
+                        Aparece SÓ quando há alteração pendente. Visível e com
+                        rótulo, não ícone escondido: a lição da 2.20 é que
+                        funcionalidade que não se vê não existe para quem usa. */}
+                    {temPendencia && (
+                      <div
+                        className="mt-4 flex items-center gap-2 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-900/15 px-3 py-2"
+                        role="status"
+                      >
+                        <span className="text-xs text-amber-800 dark:text-amber-300 flex-1">
+                          {camposAlterados.length === 1
+                            ? '1 campo alterado, ainda não salvo'
+                            : `${camposAlterados.length} campos alterados, ainda não salvos`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={descartarCampos}
+                          className="text-xs px-2 py-1 rounded text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-white/5 focus-visible-ring"
+                        >
+                          Descartar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={salvarCampos}
+                          className="text-xs font-semibold px-3 py-1 rounded bg-primary-600 text-white hover:bg-primary-500 focus-visible-ring"
+                        >
+                          Salvar
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1309,19 +1407,39 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
           isOpen={showBriefingDrawer}
           onClose={() => setShowBriefingDrawer(false)}
         />
+
+        {/* Story 2.27 — as três saídas (X, backdrop, Escape) passam por
+            `tentarFechar`, que abre este aviso quando há pendência. */}
+        <FecharComPendenciasDialog
+          isOpen={avisoPendencia}
+          quantidade={camposAlterados.length}
+          onSalvarEFechar={async () => {
+            // Só fecha se a gravação foi aceita. Fechar mesmo assim jogaria
+            // fora o que ela digitou, calado.
+            const ok = await salvarCampos();
+            setAvisoPendencia(false);
+            if (ok) onClose();
+          }}
+          onDescartarEFechar={() => {
+            descartarCampos();
+            setAvisoPendencia(false);
+            onClose();
+          }}
+          onContinuarEditando={() => setAvisoPendencia(false)}
+        />
     </>
   );
 
   if (isMobile) {
     return (
-      <DealSheet isOpen={isOpen} onClose={onClose} ariaLabel={`Negócio: ${deal.title}`}>
+      <DealSheet isOpen={isOpen} onClose={tentarFechar} ariaLabel={`Negócio: ${deal.title}`}>
         <div onKeyDown={handleKeyDown}>{inner}</div>
       </DealSheet>
     );
   }
 
   return (
-    <FocusTrap active={isOpen} onEscape={onClose}>
+    <FocusTrap active={isOpen} onEscape={tentarFechar}>
       <div
         // Backdrop + positioning wrapper. Clicking outside the panel should close the modal.
         // No desktop, este modal não deve cobrir a sidebar de navegação.
@@ -1333,7 +1451,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
         onKeyDown={handleKeyDown}
         onClick={(e) => {
           // Only close when clicking the backdrop, not when clicking inside the panel.
-          if (e.target === e.currentTarget) onClose();
+          if (e.target === e.currentTarget) tentarFechar();
         }}
       >
         {inner}
