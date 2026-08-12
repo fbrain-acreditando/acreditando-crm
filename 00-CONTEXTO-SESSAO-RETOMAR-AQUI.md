@@ -8,11 +8,61 @@
 
 ---
 
-## 🚨 P0 — DOIS defeitos abertos na noite de 11/08 (relatos da Fernanda, NAO corrigidos)
+## Sessao 2026-08-12 (manha) — ✅ story 2.28 no ar: o aviso parou de prender a tela
 
-> Chegaram depois do fecho da sessao. **Diagnosticados por leitura de codigo, nenhum corrigido.**
+> SDC completo (@sm → @po → @dev → @qa → @devops). Commit **`2531da6`**, deployment
+> `state=success`, alias da Fernanda **HTTP 200** — verificado na fonte, nao pelo `git push`.
 
-### 1. 🔴 O aviso "Voce nao salvou" aparece e NENHUM botao funciona — regressao da 2.27 (do mesmo dia)
+### 🛑 O AC0 derrubou o diagnostico da noite anterior em DOIS pontos
+
+1. **O `FocusTrap` nao veio da 2.27** — `git log -S` o encontra no **`initial commit`**.
+2. **O contra-indicio caiu: o `ConfirmDialog` de excluir card TAMBEM estava morto.** Ou seja,
+   **nunca funcionou de dentro do card** — ninguem tinha tentado excluir um negocio por ali.
+
+⇒ **A 2.27 nao criou o defeito. Ela estreou o unico caminho em portal que a Fernanda percorre
+todo dia.** Regressao de **exposicao**, nao de mecanismo. O defeito era do repo desde o comeco.
+
+### 🕳️ Por que 602 testes ficaram verdes com a tela travada
+
+    // DealDetailModal.test.tsx:132  (antes)
+    FocusTrap: ({ children }) => <>{children}</>,     // o trap era MOCKADO fora
+
+O suite arrancava o trap: **o componente testado nunca foi o que roda em producao.** Isso tambem
+derrubou a parede do `.env.local` — o defeito virou reproduzivel **em teste**, sem navegador.
+
+### 🔧 O conserto, em duas camadas
+
+- **`lib/a11y/components/FocusTrap.tsx`** — `allowOutsideClick` deixou de ser amarrado a
+  `clickOutsideDeactivates` e virou **prop propria, default `true`**. O trap segue confinando
+  `Tab`; so parou de **cancelar clique alheio**. Cobre qualquer portal futuro, no repo inteiro.
+- **`DealDetailModal.tsx:1449`** — o trap do card **cede** enquanto ha dialogo em portal por cima
+  (`active={isOpen && !avisoPendencia && !deleteId}`). Sem isso o clique voltava mas o **teclado**
+  nao: dois traps ativos disputam o `focusin`. O Radix ja traz o proprio confinamento.
+
+### 🧪 Provas
+
+- **Oraculo por `git stash` do codigo de producao: 5 testes REPROVAM com o codigo antigo** e passam
+  com o conserto. O 6o e **controle negativo** (mesmo dialogo sem trap) e passa dos dois lados.
+- **AC5** trava que o `Tab` continua confinado — o conserto nao podia ser "desligar acessibilidade".
+- **Classe varrida e contada:** 12 call sites de `FocusTrap`, **so 2 aninhavam portal** — os dois
+  consertados. Os outros tem `<select>` nativo e conteudo inline.
+- Gates: lint 0 warnings · typecheck · **659 testes (+8)** · build.
+
+⏳ **AC9 ABERTO:** nada foi visto em navegador. **So a Fernanda fecha** — abrir card, editar campo,
+fechar e sair pelos tres botoes. *Provado em teste, ainda nao em uso.*
+
+📩 **Liberado o que estava travado:** o paragrafo do botao Salvar pode ir para ela **depois** que
+ela confirmar que os botoes respondem.
+
+---
+
+## 🚨 P0 — o que sobra da noite de 11/08
+
+### 1. ✅ ~~O aviso "Voce nao salvou" prende a tela~~ — **CORRIGIDO em 12/08 (story 2.28, `2531da6`)**
+
+> Mantido abaixo o diagnostico original **porque ele estava parcialmente errado**, e o erro ensina:
+> a hipotese do trap estava certa no mecanismo e **errada na origem** (culpei a 2.27; o trap era
+> anterior a tudo). O "teste que decide" foi rodado — e o irmao reprovou junto, como previsto.
 
 **Nao e um botao quebrado, e uma armadilha sem saida:** ela nao consegue Salvar, nem Descartar, nem
 Continuar editando. A saida provavel e **recarregar a pagina perdendo o texto** — exatamente o que a
