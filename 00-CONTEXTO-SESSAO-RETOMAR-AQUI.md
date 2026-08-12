@@ -8,6 +8,51 @@
 
 ---
 
+## Sessao 2026-08-12 (2) — ✅ story 2.29: UMA traducao so do banco para a tela
+
+> Commit **`538e6fb`**, deployment `state=success`, alias **HTTP 200**. SDC completo.
+
+**Relato do Filipe testando a 2.28:** salvava campo personalizado, o card seguia mostrando o
+valor anterior, **e so o F5 corrigia**. ✅ De quebra isso **fechou o AC9 da 2.28** — o pop-up
+apareceu e o "Salvar e fechar" funcionou na tela real.
+
+🔑 **O relato ja trazia o diagnostico:** *"quando atualizo a pagina aparece"* ⇒ o banco TEM o
+dado. Nao e gravacao, e **entrega ao cache**.
+
+**AC0 eliminou o suspeito errado antes de acusar:** com `QueryClient` real e observer ativo, o
+caminho da mutacao (otimismo → escrita → invalidate → refetch) termina com o valor **NOVO**.
+Sobrou um unico escritor na janela seguinte: o Realtime.
+
+**Os dois defeitos, provados por teste:**
+- **(A)** a traducao banco→app do Realtime era **lista escrita a mao de 7 campos**;
+  `custom_fields` ficava de fora ⇒ entrava em snake_case e o `customFields` que a tela le
+  **mantinha o valor velho**. Explica os dois sintomas: *"some"* = valor velho vazio;
+  *"volta pro antigo"* = valor velho preenchido.
+- **(B)** a decisao de aplicar olhava **so o estagio** ⇒ confundia MOVIMENTACAO com
+  ATUALIZACAO e descartava toda edicao que nao move o card.
+
+🎯 **A causa raiz nao era `custom_fields`: era existirem DUAS traducoes do mesmo dado.** A copia
+manual nasce desatualizada no dia em que alguem adiciona coluna — e falha **calada**.
+Varredura de `payload.new`: **4 locais, 3 quebrados** (UPDATE com 7 campos · INSERT com 12,
+ainda mapeando `company_id`, **coluna que nao existe** · deal ausente entrando **cru**). O 4o
+(mensagens) ja usava a canonica.
+
+📌 **E este padrao ja estava DOCUMENTADO na story 2.14** e nao foi consertado —
+*armadilha documentada nao e armadilha resolvida*.
+
+**Conserto:** `lib/realtime/normalizeDealRow.ts` traduz com **`transformDeal`** (a mesma do
+fetch), preserva o enriquecimento do `DealView` no merge, e decide frescor por **`updated_at`**.
+A protecao contra o card "pular de volta" continua — agora pelo timestamp, sem cegar a linha.
+`useRealtimeSync.ts`: **1.019 → 732 linhas**. Regra escrita no `CLAUDE.md`.
+
+**Oraculo:** a implementacao ANTIGA foi **reconstruida dentro do teste** e reprova nas mesmas
+assercoes (o codigo defeituoso era inline num hook de 1.019 linhas — sem `git stash` possivel).
+Gates: lint 0 · typecheck · **672 testes (+13)** · build.
+
+⏳ **AC7 ABERTO:** falta ela editar um campo, salvar e ver o valor novo **sem F5**.
+
+---
+
 ## Sessao 2026-08-12 (manha) — ✅ story 2.28 no ar: o aviso parou de prender a tela
 
 > SDC completo (@sm → @po → @dev → @qa → @devops). Commit **`2531da6`**, deployment
