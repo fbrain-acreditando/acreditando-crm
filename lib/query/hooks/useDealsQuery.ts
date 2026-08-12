@@ -389,9 +389,22 @@ export const useUpdateDeal = () => {
       }
     },
     onSettled: () => {
-      // Rede de segurança (targeted): reconcilia deals com o banco (cobre view +
-      // lista + detalhe) mesmo se o Realtime não disparar.
-      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all });
+      // Story 2.30 — marca como stale SEM refetchar.
+      //
+      // ⚠️ Aqui havia um `invalidateQueries` que refetchava na hora, e era ele
+      // que produzia o "pisca o valor antigo e depois vira o novo": o refetch
+      // sai logo após a escrita e pode aterrissar com leitura stale, por cima
+      // do update otimista. Antes da story 2.29 isso ficava PRESO no valor
+      // velho (o Realtime que corrigiria era descartado); com o Realtime
+      // consertado, virou um piscar — o conserto acontecendo à vista.
+      //
+      // É a MESMA decisão que o `useMoveDeal` já tinha tomado, pelo mesmo
+      // motivo, e está escrita lá desde então (`useMoveDeal.ts:336-343`).
+      //
+      // A rede de segurança continua: `refetchType: 'none'` marca a query como
+      // stale, e o `refetchOnMount` do `useDealsByBoard` reconcilia com o banco
+      // na próxima montagem. O que sai é só a corrida.
+      queryClient.invalidateQueries({ queryKey: queryKeys.deals.all, refetchType: 'none' });
     },
   });
 };
