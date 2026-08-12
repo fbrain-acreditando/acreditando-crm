@@ -110,6 +110,17 @@ scripts/*
 !scripts/db/
 !scripts/db/**
 
+# Backups de operacao no banco — NUNCA versionar.
+#
+# Sao dumps de producao: titulo de card, nome e telefone de lead. Isto e CRM de
+# saude, dado de lead cai no Art. 11 da LGPD, e historico de git e PERMANENTE —
+# apagar o arquivo depois nao apaga o commit.
+#
+# Ate 12/08 estes backups viviam FORA do repo e o furo nunca mordeu. Na primeira
+# vez que a pasta nasceu aqui dentro, o `git check-ignore` reprovou ANTES do
+# commit — que e a unica hora em que perguntar ao gate ainda adianta.
+.dados-leads/
+
 # Test documentation (test code stays, docs are local)
 test/*.md
 
