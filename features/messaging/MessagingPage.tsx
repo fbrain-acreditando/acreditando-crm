@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { deveResolverContatoDaUrl } from './utils/resolverContatoDaUrl';
 import { MessageSquare, User, CheckCircle, MoreVertical, LinkIcon, Trash2, RotateCcw, Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
@@ -136,15 +137,35 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
   // Guarda contra disparar o aviso duas vezes antes de o `replace` da URL propagar.
   const resolvedContactRef = useRef<string | null>(null);
 
+  // Story 2.31 — a ref se solta quando o parâmetro some da URL, para que clicar
+  // no mesmo lead uma segunda vez volte a funcionar. Sem isto, "já consumi este
+  // contato" valeria para sempre nesta montagem.
   useEffect(() => {
-    if (!contactIdParam || selectedConversationId) return;
-    if (isResolvingContact || !contactConversations) return;
-    if (resolvedContactRef.current === contactIdParam) return;
+    if (!contactIdParam) resolvedContactRef.current = null;
+  }, [contactIdParam]);
+
+  useEffect(() => {
+    // ⚠️ Story 2.31 — a condição de parada NÃO olha a conversa selecionada.
+    // `|| selectedConversationId` fazia o estado velho vencer a intenção nova, e
+    // o botão "Mensagem" caía sempre na mesma conversa errada. Ver
+    // `resolverContatoDaUrl.ts` para o porquê e para a classe.
+    if (
+      !deveResolverContatoDaUrl({
+        contactIdParam,
+        contatoJaResolvido: resolvedContactRef.current,
+        carregando: isResolvingContact,
+        temResposta: Boolean(contactConversations),
+      })
+    ) {
+      return;
+    }
 
     resolvedContactRef.current = contactIdParam;
 
     // `useConversationsByContact` já ordena por `last_message_at desc`.
-    const latest = contactConversations[0];
+    // (A decisão acima só passa com a resposta em mãos; o `?? []` é só para o
+    // TypeScript, que não enxerga a garantia através da função.)
+    const latest = (contactConversations ?? [])[0];
 
     if (latest) {
       setSelectedConversationId(latest.id);
@@ -154,14 +175,10 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
 
     addToast('Este lead ainda não tem conversa de WhatsApp registrada.', 'info');
     router.replace('/messaging', { scroll: false });
-  }, [
-    contactIdParam,
-    selectedConversationId,
-    contactConversations,
-    isResolvingContact,
-    router,
-    addToast,
-  ]);
+    // ⚠️ `selectedConversationId` saiu das dependências junto com a guarda: o
+    // efeito não depende mais do estado da tela, e mantê-lo aqui só faria o
+    // efeito reavaliar à toa a cada troca de conversa.
+  }, [contactIdParam, contactConversations, isResolvingContact, router, addToast]);
 
   // Clear URL if conversation was deleted or not found
   useEffect(() => {
