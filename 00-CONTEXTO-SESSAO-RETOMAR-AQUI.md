@@ -8,6 +8,65 @@
 
 ---
 
+## Sessao 2026-08-12 (4) — ✅ story 2.31: o quadro escondia exatamente o que ela classifica
+
+> Commit **`ddb59bf`**, deploy **Ready**, alias **HTTP 200**, `origin/main` conferido.
+> ⏳ **AC5 aberto:** falta ela abrir o board e ver os 22.
+
+**Relato dela:** *"ontem eu fiz algumas movimentacoes e elas nao permaneceram... na coluna do
+perdido eu tinha alguns nomes, nao tenho mais nenhum. Ganho, tambem."* — e o fecho:
+***"nao sei se eu preciso mexer em alguma coisa pra olhar o todo, mas nao deveria, ne?"***
+
+🔑 **NADA SE PERDEU — a tela e que escondia.** Medido em producao: **18 cards em `Perdido`** e
+**4 em `Ganho`** vivos no banco, **16 movidos por ela em 11/08**; o `activities` confirma por
+outro caminho (19 "Moveu para Perdido", 4 "Moveu para Ganho"). As 23 gravacoes funcionaram.
+
+**Causa:** `statusFilter` nascia em `'open'` (`useBoardsController.ts:131`) e `matchesStatus =
+!isWon && !isLost` (`:416`) apagava da tela o card ganho ou perdido. Mover para essas colunas e
+**justamente o que marca** esses campos ⇒ **CLASSIFICAR = DESAPARECER**. E, sendo `useState` e
+nao preferencia salva, o filtro **voltava para `'open'` a cada carregamento** — o trabalho
+"sumia da noite para o dia" sem ninguem mexer.
+
+**Conserto:** default `'all'` + o diagnostico escrito no proprio comentario, para ninguem
+"otimizar" de volta.
+
+❌ **A hipotese mais natural foi DESCARTADA POR DADO antes de qualquer codigo:** a exclusao
+fisica de julho (2.24) era a suspeita obvia — e **nenhum dos 431 apagados** tinha movimentacao
+em 10 ou 11/08 (backup pre-exclusao, `updated_at` mais recente = 07/08). Custou 10 minutos e
+evitou consertar o que nao estava quebrado.
+
+🚪 **Segunda porta fechada antes de virar suspeita:** ela usou os DOIS caminhos ("alguns eu
+arrastei e outros eu fui por dentro"). O caminho "por dentro" tem um atalho que marca `isLost`
+**sem mover de coluna** (`DealDetailModal.tsx:1372`) — teria criado card perdido escondido em
+coluna comum. Medido: **zero deals com is_won/is_lost fora das colunas certas** ⇒ ela usou o
+seletor de fase (`:715`). Os dois gravaram certo.
+
+**Oraculo:** revertido para `'open'` ⇒ 1 de 5 testes falha. Alem da invariante do default, o
+teste replica `matchesStatus` e exercita com os 22 cards reais: `'open'` mostra 0, `'all'` mostra 22.
+
+Gates: lint 0 · typecheck 0 · **687 testes**.
+
+⚠️ **FICA DE PE, de proposito (caminho A):**
+- **story 2.32 candidata** — o corte de 30 dias (`:423-431`) esconde ganho/perdido antigo
+  **INCLUSIVE em `'all'`**. Nao morde hoje (os 22 sao recentes); **morde em setembro**, e o board
+  e o que ela apresenta a diretoria todo mes.
+- **mover card falha em silencio** — `useMoveDeal.ts:329` faz rollback sem toast, e o
+  `onSettled` nao invalida de proposito. Nao causou este caso; e a proxima armadilha da familia.
+
+🎁 **REQUISITO QUE ELA ENTREGOU DE GRACA, e que muda a 2.18:** *"tive que entrar nas mensagens
+pra relembrar qual e o tipo de conversa que eu tive, quem era o cliente, porque ta desde o
+comeco do mes e eu nao lembro de todo mundo."* ⇒ **o card precisa dizer QUEM E a pessoa sem
+obrigar a abrir a conversa.** Levar ao @sm antes de escrever o codigo da 2.18.
+
+📌 **Licao:** o contraste do relato valeu mais que o relato. Das 5 colunas que ela citou, foi a
+**intacta** (`Avaliacao agendada`) que apontou o culpado — se fosse a tela toda, teria zerado
+tambem. E duas das quatro que ela deu como zeradas **nunca receberam card**: relato de usuario
+erra na borda e acerta no centro. Descartar o todo por causa da borda teria custado o dia.
+
+Story: `docs/stories/2.31.o-quadro-esconde-o-que-ela-classifica.story.md`
+
+---
+
 ## Sessao 2026-08-12 (3) — ✅ story 2.30: o piscar do valor antigo depois de salvar
 
 > Commit **`8c20ba9`**, deployment `state=success`, alias **HTTP 200**.
