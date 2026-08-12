@@ -66,6 +66,12 @@ export interface DbDeal {
   value: number;
   /** Probabilidade de fechamento (0-100). */
   probability: number;
+  /** Story 2.18 — nota de prioridade: quantos critérios bateram. NULL = sem nota. */
+  lead_score?: number | null;
+  /** Story 2.18 — denominador: quantos critérios eram conhecíveis. */
+  lead_score_known?: number | null;
+  lead_score_source?: 'auto' | 'manual' | null;
+  lead_score_detail?: Record<string, any> | null;
   /** Status legado (deprecado, usar stage_id). */
   status: string | null;
   /** Prioridade (low, medium, high). */
@@ -175,6 +181,13 @@ export const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]
     lastStageChangeDate: db.last_stage_change_date || undefined,
     customFields: db.custom_fields || {},
     aiExtracted: db.ai_extracted || undefined,
+    // Story 2.18 — `?? null` e não `|| null`: `lead_score = 0` é uma nota VÁLIDA
+    // ("perguntamos e nenhum critério bateu") e `||` a transformaria em null,
+    // que significa "não sabemos nada". São estados opostos.
+    leadScore: db.lead_score ?? null,
+    leadScoreKnown: db.lead_score_known ?? null,
+    leadScoreSource: db.lead_score_source ?? null,
+    leadScoreDetail: db.lead_score_detail ?? null,
     createdAt: db.created_at,
     updatedAt: db.updated_at,
     items: filteredItems.map(i => ({

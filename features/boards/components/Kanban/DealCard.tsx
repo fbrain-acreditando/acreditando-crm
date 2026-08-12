@@ -205,6 +205,28 @@ const DealCardComponent: React.FC<DealCardProps> = ({
       )}
 
       <div className="flex gap-1 mb-2 flex-wrap">
+        {/*
+          Story 2.18a — a nota de prioridade, COM o denominador.
+          `1/1` e `1/5` são coisas opostas (um lead a investigar × um lead já
+          refutado quatro vezes) e sem o denominador ficariam idênticos na tela.
+          Card sem nota não mostra badge nenhum — silêncio é melhor que "0".
+        */}
+        {deal.leadScore !== null && deal.leadScore !== undefined && (
+          <span
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+              deal.leadScore > 0
+                ? 'bg-amber-100 dark:bg-amber-800/40 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-700'
+                : 'bg-slate-100 dark:bg-white/5 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-white/5'
+            }`}
+            title={
+              deal.leadScore > 0
+                ? `${deal.leadScore} de ${deal.leadScoreKnown ?? 0} critérios de prioridade`
+                : `Nenhum dos ${deal.leadScoreKnown ?? 0} critérios conhecidos bateu`
+            }
+          >
+            ★ {deal.leadScore}/{deal.leadScoreKnown ?? 0}
+          </span>
+        )}
         {/* Won/Lost status badge */}
         {deal.isWon && (
           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-800/40 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700">

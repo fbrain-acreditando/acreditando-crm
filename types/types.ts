@@ -243,6 +243,20 @@ export interface Deal {
   lossReason?: string; // For win/loss analysis
   aiExtracted?: Record<string, any>; // AI-extracted BANT fields (zero config)
 
+  /**
+   * Story 2.18 — nota de prioridade (estrelas do card).
+   *
+   * `leadScore` sozinho NÃO diz nada: 1 acerto de 1 critério conhecido e 1
+   * acerto de 5 são coisas opostas. Sempre ler junto com `leadScoreKnown`, que
+   * é o denominador mostrado na tela.
+   */
+  leadScore?: number | null;
+  leadScoreKnown?: number | null;
+  /** `auto` = regra · `manual` = a Fernanda mudou (e o recálculo não sobrescreve). */
+  leadScoreSource?: 'auto' | 'manual' | null;
+  /** Quais critérios bateram, foram refutados e seguem desconhecidos (AC5). */
+  leadScoreDetail?: Record<string, any> | null;
+
   // @deprecated - Use clientCompanyId instead
   companyId?: string;
 }
