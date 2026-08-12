@@ -19,12 +19,28 @@
 // que a migracao diz criar e compara. "A API respondeu 200" nao e prova de
 // nada — e a Rule 7 do Meta Ads valendo dentro do banco.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const REF = 'jmjhtprnxjffaqhdzfmc';
-const TOKEN = fs
-  .readFileSync('C:/Users/filip_mg5w2c4/.credenciais/supabase-crm-mgmt.token', 'utf8')
-  .trim();
+
+// Mesma correcao do `sql-ro.mjs`: o caminho estava cravado no home e o token
+// real vive no workspace => ENOENT em toda maquina que nao fosse a original.
+const CANDIDATOS = [
+  process.env.SUPABASE_CRM_MGMT_TOKEN_FILE,
+  path.join(os.homedir(), 'grupo-acreditando', '.credenciais', 'supabase-crm-mgmt.token'),
+  path.join(os.homedir(), '.credenciais', 'supabase-crm-mgmt.token'),
+].filter(Boolean);
+
+const arquivoDoToken = CANDIDATOS.find(p => fs.existsSync(p));
+if (!arquivoDoToken && !process.env.SUPABASE_CRM_MGMT_TOKEN) {
+  console.error('Token nao encontrado. Procurei em:\n  ' + CANDIDATOS.join('\n  '));
+  process.exit(4);
+}
+
+const TOKEN = (
+  process.env.SUPABASE_CRM_MGMT_TOKEN ?? fs.readFileSync(arquivoDoToken, 'utf8')
+).trim();
 
 const arquivo = process.argv[2];
 const autorizado = process.argv.includes('--eu-autorizo');

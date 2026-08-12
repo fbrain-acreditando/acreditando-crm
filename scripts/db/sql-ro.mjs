@@ -2,11 +2,30 @@
 // Executor SOMENTE-LEITURA contra o Supabase do CRM (ref jmjhtprnxjffaqhdzfmc).
 // Bloqueia qualquer verbo de escrita ANTES de a query sair da maquina.
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const REF = 'jmjhtprnxjffaqhdzfmc';
-const TOKEN = fs
-  .readFileSync('C:/Users/filip_mg5w2c4/.credenciais/supabase-crm-mgmt.token', 'utf8')
-  .trim();
+
+// O caminho do token estava CRAVADO no home do usuario, e o token real vive no
+// workspace (`grupo-acreditando/.credenciais/`) => todo script daqui falhava com
+// ENOENT nesta maquina. Procurar nos lugares conhecidos, na ordem, e dizer ONDE
+// procurou quando nao achar — mensagem de erro que nao diz onde olhou custa uma
+// sessao inteira de adivinhacao.
+const CANDIDATOS = [
+  process.env.SUPABASE_CRM_MGMT_TOKEN_FILE,
+  path.join(os.homedir(), 'grupo-acreditando', '.credenciais', 'supabase-crm-mgmt.token'),
+  path.join(os.homedir(), '.credenciais', 'supabase-crm-mgmt.token'),
+].filter(Boolean);
+
+const arquivo = CANDIDATOS.find(p => fs.existsSync(p));
+if (!arquivo && !process.env.SUPABASE_CRM_MGMT_TOKEN) {
+  console.error('Token nao encontrado. Procurei em:\n  ' + CANDIDATOS.join('\n  '));
+  console.error('Defina SUPABASE_CRM_MGMT_TOKEN ou SUPABASE_CRM_MGMT_TOKEN_FILE.');
+  process.exit(4);
+}
+
+const TOKEN = (process.env.SUPABASE_CRM_MGMT_TOKEN ?? fs.readFileSync(arquivo, 'utf8')).trim();
 
 const sql = process.argv[2];
 if (!sql) {
