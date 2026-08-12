@@ -8,6 +8,105 @@
 
 ---
 
+## Sessao 2026-08-12 (6) — 📊 story 2.19 BLOCO B: o painel que ela apresenta
+
+> Commit **`f90b814`**, pushado. ⚠️ **Deploy NAO confirmado** — sem token da Vercel
+> nesta maquina e o App Router nao expoe `buildId`. Producao responde HTTP 200,
+> mas nao ha prova de QUAL commit esta no ar. Status honesto: *pushado, deploy a
+> confirmar*. **Primeira coisa a fazer ao retomar.**
+
+### 🛑 O AC0 derrubou DUAS premissas antes de qualquer linha de codigo
+
+**1. "quantos EU respondi" nao existe no dado.** O risco nº 3 da story dizia que
+era ambiguo. Medido: e **ausente**. O GPT Maker carimba TODA saida como
+`role='assistant'` — os unicos papeis que existem sao `assistant`, `user` e
+`tool`. Sao **6.421 mensagens de saida com `sender_type` e `sender_name` NULOS**,
+contra **21** com autor. Nao da para contar "mensagens dela" pelo corpo da
+mensagem, nem hoje nem retroativamente.
+
+**O sinal que resolve e TEMPORAL, e veio do Filipe:** a IA transfere e **nao
+volta**. O carimbo da transferencia corta a conversa em duas metades — antes e
+IA, depois e ela. Medido: **146 conversas transferidas**, **todas as 146** com
+saida depois do carimbo (**1.398 mensagens**). O `contextId` casa com
+`external_contact_id` em **146 de 146** — join total.
+
+🔑 *Eu tinha concluido "nao e possivel" lendo a tabela de mensagens. Era possivel,
+e a resposta estava no evento que a normalizacao joga fora.* O parser ate
+documenta isso na linha 237 (*"assistant / human / agent e saida"*) — a
+informacao passava e era descartada.
+
+**2. A validacao "118 ≈ 116" era coincidencia.** Ficou registrado ontem que a
+definicao de *"eu abordei"* se validava sozinha contra a contagem manual dela.
+Medido por dia: das 118 de julho, **84 nasceram em 4 horas do dia da carga
+inicial** (24/07) — **48 numa unica hora**. Ninguem inicia 48 conversas numa
+hora. O numero real de julho e **~34**.
+⚠️ **A definicao continua certa; o que caiu foi a PROVA dela.** E cai junto
+qualquer ideia de reproduzir julho.
+
+### Os numeros de agosto (01-12/08), medidos
+
+| Numero | Valor |
+|---|---|
+| Chegaram (lead inicia) | **300** |
+| Chegaram ate mim (transferidas) | **101** |
+| A IA resolveu sozinha | **199** |
+| Eu abordei (equipe inicia) | **17** |
+| Sem resposta (zero saida) | **14** (4,7%) |
+| Ganhos · Perdidos (por `closed_at`) | **4 · 20** |
+
+Sobreposicao entre *transferidas* e *abordadas*: **zero**, medida. Os perdidos
+foram de 18 para 20 durante a sessao — ela esta classificando agora.
+
+### O que foi construido
+
+- **View `v_transferencia_da_conversa`** — quando cada conversa saiu da IA.
+  Origem: `messaging_webhook_events` (evento cru), porque a transferencia **nunca
+  foi materializada** em coluna nenhuma. Sem expurgo em `cron.job` (conferido).
+- **RPC `get_metricas_de_atendimento`** — SECURITY DEFINER + checagem de org.
+- **`features/dashboard/blocoB.ts`** — regras puras: percentual (devolve `null`
+  em 0/0, porque "0%" num mes sem lead e elogio inventado) e aviso de cobertura.
+- **`BlocoBSection.tsx`** — cada card escreve **na tela** o que conta (AC1).
+- **AC6** — as metricas de carteira saem da TELA por `MOSTRAR_METRICAS_DE_CARTEIRA
+  = false`. O calculo continua; nada foi apagado.
+
+### 🪤 A RPC nasceu com um nome que a propria trava de seguranca bloqueava
+
+Chamava-se `get_metricas_do_atendimento`. A primeira consulta de read-back foi
+recusada: `BLOQUEADO: verbo de escrita detectado -> "do"` — `DO` abre bloco de
+codigo no Postgres, e o `sql-ro.mjs` pega verbo colado em `_` de proposito
+(licao do `cron.alter_job`). **A trava estava certa; o nome, errado** — uma
+funcao impossivel de consultar pelo caminho seguro convida a desligar a trava.
+📌 **Regra nova:** identificador em portugues nao pode conter `do`, `set`,
+`call`, `comment`, `copy`. `de`, `da`, `dos`, `das` sao seguros.
+
+### 📅 Correcao de registro: a cobertura comeca em 23/07, nao 24/07
+
+Todo o projeto vinha dizendo *"o CRM so tem dado a partir de 24/07"*. A primeira
+conversa e **24/07 02:59 UTC = 23/07 as 23:59 em Sao Paulo** — um minuto antes da
+meia-noite. O painel escreve **23/07** e esta certo. Um teste trava isso; foi um
+teste MEU, escrito com a assercao errada, que expos a diferenca.
+
+### ⏳ Gate @qa: CONCERNS — 3 ressalvas abertas
+
+1. 🔴 **AC7 nao conferido** — ninguem comparou o `300` com a anotacao de agosto
+   dela. A story diz que este e *o gate real*. **So ela fecha.**
+2. 🟡 **A RPC nunca rodou de ponta a ponta com sessao** — as 3 consultas do corpo
+   foram exercitadas uma a uma; a funcao so foi provada ate a checagem de acesso
+   (`auth.uid()` e nulo fora de sessao). Fecha quando a tela abrir.
+3. 🟡 **O recorte do mes usa o fuso do NAVEGADOR**, nao `America/Sao_Paulo` como
+   o AC2 pede. `periodToDateRange` e pre-existente e a `MessagingMetricsSection`
+   tem o mesmo defeito. So morde com fuso errado na maquina — mas agora afeta
+   numero que vai a diretoria.
+
+### Ainda falta da 2.19
+
+- **Bloco A** ("o que eu faco agora") e **Bloco C** ("por que a gente perde") —
+  nao implementados.
+- **AC4 (SP × fora)** — segue no caminho (c): entregar o que existe e dizer o que
+  falta. A classificacao por IA dos 62 valores de texto livre nao foi feita.
+
+---
+
 ## Sessao 2026-08-12 (4) — ✅ story 2.31: o quadro escondia exatamente o que ela classifica
 
 > Commit **`ddb59bf`**, deploy **Ready**, alias **HTTP 200**, `origin/main` conferido.
