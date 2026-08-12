@@ -67,6 +67,106 @@ Story: `docs/stories/2.31.o-quadro-esconde-o-que-ela-classifica.story.md`
 
 ---
 
+## Sessao 2026-08-12 (5) — ✅ story 2.33: o board vira o funil que ela usa
+
+> Commits **`be38fa1`** (execucao) + **`9b5a101`** (correcao). Mudanca de DADO e CONFIG, nao de codigo.
+
+**Pedido da Fernanda por audio.** Board hoje: `Lead novo` 139 · **`Contato Realizado` 55** ·
+**`Qualificado` 67** · Apresentacao 16 · Aguardando 12 · Avaliacao agendada 5 · Avaliacao realizada 0 ·
+` Proposta enviada` 0 · Ganho 4 · Perdido 18 · 🆕 **`Profissional`** 0 · 🆕 **`Projeto Social`** 0.
+**Sairam:** `Em qualificacao ` e `Em negociacao`. Ordem **0-11 sem buracos**.
+A transferencia automatica (story 2.5) agora aponta para **`Qualificado`**.
+
+### ✏️ O ERRO QUE COMETI, e a correcao — leia antes de mexer nisto
+
+Eu registrei que apontar a transferencia para `Qualificado` faria "o lead nascer qualificado sem
+ela ter qualificado" e que isso tornaria o T3 da 2.17 inerte. **Estava errado, e o erro mudou uma
+decisao** (movi os 56 cards para `Contato Realizado`).
+
+**O Filipe corrigiu:** a IA transferir **JA E** a qualificacao — ela fez o roteiro inteiro. O
+*"a partir do contato eu qualifico"* da Fernanda e o **OUTRO caminho**: o lead inicia e nao
+finaliza, a IA nao qualifica, ele fica em `Lead novo`, ela assume, move para `Contato Realizado`
+e qualifica na mao.
+
+| Caminho | Como anda |
+|---|---|
+| 🤖 automatico | completa o roteiro → IA qualifica e transfere → `Qualificado` |
+| ✋ manual | abandona no meio → fica em `Lead novo` → ela assume → `Contato Realizado` → ela qualifica |
+
+⇒ **O T3 da 2.17 NAO ficou inerte** — ele cobre o caminho manual. E os 56 voltaram para
+`Qualificado` (`Qualificado` 10 → 67).
+
+📊 **Nuance medida:** dos 56, so **41** tem os dois campos da regra dela; 11 parciais, 4 sem nenhum.
+Nao e defeito da regra nova — e **mistura de duas eras**: ate 11/08 a IA transferia com **1,32
+perguntas** (monobloco 5,9%); a regra que a faz completar o roteiro entrou **ontem** (4,23 e 77,5%).
+
+🔑 **Licao:** registrar a consequencia foi certo; o conteudo do que registrei estava errado.
+**Quem conhece a operacao e quem opera** — eu li a mecanica do board e inferi a intencao.
+
+### Como foi feito (o procedimento vale para a proxima)
+
+- **AC0 mediu as 15 FKs** que apontam para `board_stages` antes de apagar: `boards`,
+  `integration_inbound_sources`, `webhook_events_out`, `ai_conversation_log`,
+  `ai_pending_stage_advances` = **zero em todas**; `stage_ai_config` tem **0 linhas**.
+- **A rede de seguranca estava no schema e foi usada como gate:** `deals_stage_id_fkey` e
+  **NO ACTION** ⇒ aborta o DELETE se sobrar card. Mover primeiro, apagar depois.
+- **Sempre por UUID:** `Em qualificacao ` tem **espaco no fim do nome**.
+- **A migracao corretiva move so quem AINDA estava em `Contato Realizado`** — nunca desfazer
+  trabalho de usuario.
+- 🚨 **O `git check-ignore` REPROVOU o backup antes do commit:** `.dados-leads/` nao estava no
+  `.gitignore` e **nome de lead iria para o historico PERMANENTE do git**. Ate hoje esses backups
+  viviam FORA do repo e o furo nunca mordeu. **5a vez no mes** que um gate parecia cobrir e nao
+  cobria. Corrigido.
+- Backup: `.dados-leads/board-colunas-pre-2026-08-12/` com **`REVERTER.sql`** ao lado.
+
+⏳ **AC6 ABERTO:** falta ela abrir o board e mover um lead para `Projeto Social`.
+📌 **E o pedido dela nao esta inteiro:** as colunas existem, mas **nada poe o lead nelas sozinho**.
+Enquanto for manual, depende de ela lembrar — que e literalmente a queixa (*"eu nao anoto nada"*).
+Fechar isso = a extracao identificar interesse em projeto social e rotear. **Vira story propria.**
+
+---
+
+## Sessao 2026-08-12 (4) — 🧱 base do painel da 2.19 + story 2.32
+
+> Commits **`fedd1d4`** (2.32) · **`5582828`** (renumeracao) · **`60fef7e`** (view).
+
+### ✅ Story 2.32 — o botao "Mensagem" abre a conversa DAQUELE lead
+
+⚠️ **Renumerada de 2.31 para 2.32:** duas sessoes trabalharam no repo hoje e **as duas criaram uma
+"story 2.31"** (esta e a do filtro do board, `ddb59bf`). Sem conflito de codigo, so de numeracao.
+A outra ficou com o numero porque o vault ja a registrava assim. **O commit `fedd1d4` segue dizendo
+"2.31"** — historico publicado nao se reescreve para ficar bonito.
+
+A guarda era `if (!contactIdParam || selectedConversationId) return`. O 2o termo e **estado de UI**:
+com conversa aberta, o efeito desistia antes de resolver o contato novo. **Mesma classe da 2.27**
+(consumo de parametro de URL decidido por estado de UI) — a 2.27 corrigiu a instancia e **nao varreu
+a classe**. Varredura feita e contada: **6 consumidores, 2 da classe**, os dois fechados.
+Conserto: `features/messaging/utils/resolverContatoDaUrl.ts` — a conversa selecionada **nao e
+parametro** da funcao, entao reintroduzir o defeito exige mudar a assinatura.
+
+### 🧱 A base do painel (story 2.19) — view `v_origem_da_conversa`
+
+**A definicao mudou, e a do Filipe estava certa:** "lead que chegou" **nao** podia ser contado por
+deal (o card nasce quando o lead inicia ⇒ daria 100%). O sinal e a **direcao da PRIMEIRA mensagem**
+da conversa. **Validado contra a contagem manual dela: ela anotou 116 iniciadas por ela em julho;
+a definicao devolve 118.**
+
+🛑 **E o achado que muda o escopo:** julho existe em **conversas** (452: 334 lead / 118 equipe) e
+**NAO existe em deals** — a story 2.24 apagou fisicamente os 431 cards de julho e preservou
+conversas por escopo. ⇒ **O AC5 ("julho continua respondivel") so e atendivel por conversas.**
+⚠️ O CRM so tem dados **a partir de 24/07**, entao o "963" do painel antigo nao e reproduzivel —
+e o CRM ve **118 iniciadas por ela so na ultima semana de julho**, o que reforca a desconfianca que
+ela mesma tinha ("116 conversas iniciadas, impossivel").
+
+**Definicoes fechadas pelo Filipe:** *lead que chegou* = o lead inicia · *lead que falei* = ela
+inicia. **SP x fora:** a classificacao sera feita **pela IA** (sao so 62 valores distintos em texto
+livre), nos existentes **e** na extracao futura.
+
+⏳ **O que falta da 2.19:** a TELA (blocos A/B/C com a definicao escrita em cada numero — AC1) e a
+chamada de classificacao de SP. **O dado ja esta pronto para os dois.**
+
+---
+
 ## Sessao 2026-08-12 (3) — ✅ story 2.30: o piscar do valor antigo depois de salvar
 
 > Commit **`8c20ba9`**, deployment `state=success`, alias **HTTP 200**.
