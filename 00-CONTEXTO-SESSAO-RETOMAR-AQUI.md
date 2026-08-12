@@ -10,10 +10,20 @@
 
 ## Sessao 2026-08-12 (6) — 📊 story 2.19 BLOCO B: o painel que ela apresenta
 
-> Commit **`f90b814`**, pushado. ⚠️ **Deploy NAO confirmado** — sem token da Vercel
-> nesta maquina e o App Router nao expoe `buildId`. Producao responde HTTP 200,
-> mas nao ha prova de QUAL commit esta no ar. Status honesto: *pushado, deploy a
-> confirmar*. **Primeira coisa a fazer ao retomar.**
+> Commit **`f90b814`** · ✅ **NO AR, provado**: o alias de producao
+> `acreditando-crm-sandy.vercel.app` resolve para **`3b8ce58`** (ponta da `main`,
+> que contem o Bloco B), `target: production`, `READY`, `aliasError: null`,
+> HTTP 200.
+>
+> 🪤 **A lacuna que isso expos, e que vale para a proxima sessao:** por ~10 min o
+> status ficou em *"pushado, deploy a confirmar"* porque **nao ha token da Vercel
+> em `.credenciais/`** — so `supabase-crm-mgmt.token`. Sem ele o read-back de
+> deploy e impossivel: o App Router **nao expoe `buildId`**, e `curl` no dominio
+> so prova que **algo** responde 200, nao QUAL commit. E "deployment READY"
+> tambem nao basta — os 3 ultimos estavam READY e so **um** era o alias. A prova
+> e resolver o alias (`/v13/deployments/{dominio}`).
+> ⇒ **Guardar o token da Vercel junto do da Supabase** ou todo deploy futuro
+> termina em "a confirmar".
 
 ### 🛑 O AC0 derrubou DUAS premissas antes de qualquer linha de codigo
 
