@@ -31,19 +31,47 @@ function listaDe(detail: Props['detail'], chave: string): CriterioId[] {
     return Array.isArray(bruto) ? (bruto as CriterioId[]) : [];
 }
 
+/** Itens com motivo, quando a nota veio da IA (story 2.35). */
+interface ItemComMotivo {
+    id: CriterioId;
+    atende: 0 | 1;
+    motivo: string;
+}
+
+function itensDe(detail: Props['detail']): ItemComMotivo[] {
+    const bruto = detail?.['itens'];
+    return Array.isArray(bruto) ? (bruto as ItemComMotivo[]) : [];
+}
+
 function Linha({
     icone: Icone,
     cor,
     criterio,
+    motivo,
 }: {
     icone: React.ElementType;
     cor: string;
     criterio: CriterioId;
+    /**
+     * O porquê daquele ponto, quando a nota veio da IA.
+     *
+     * É a mitigação da reversão do "fora de escopo" da story 2.18: a nota deixou
+     * de ser regra determinística, então ela precisa se explicar frase por frase.
+     * Sem isto, é opinião sem recurso.
+     */
+    motivo?: string;
 }) {
     return (
         <li className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300">
             <Icone size={13} className={`${cor} mt-0.5 shrink-0`} aria-hidden="true" />
-            <span>{ROTULO_DO_CRITERIO[criterio] ?? criterio}</span>
+            <span>
+                {ROTULO_DO_CRITERIO[criterio] ?? criterio}
+                {motivo && (
+                    <span className="block text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
+                        {motivo}
+                    </span>
+                )}
+            </span>
         </li>
     );
 }
@@ -54,6 +82,10 @@ export function PainelDaNota({ score, known, source, detail, onAlterar }: Props)
     const bateram = listaDe(detail, 'matched');
     const refutados = listaDe(detail, 'refuted');
     const desconhecidos = listaDe(detail, 'unknown');
+
+    // Nota da IA (story 2.35) traz um motivo por item. Nota calculada por regra
+    // (2.18a/b) não traz — e aí as listas acima bastam.
+    const motivoPor = new Map(itensDe(detail).map(i => [i.id, i.motivo]));
 
     const alterar = async (nota: number | null) => {
         setSalvando(true);
@@ -93,10 +125,10 @@ export function PainelDaNota({ score, known, source, detail, onAlterar }: Props)
             {(bateram.length > 0 || refutados.length > 0 || desconhecidos.length > 0) && (
                 <ul className="space-y-1.5 mb-4">
                     {bateram.map(c => (
-                        <Linha key={c} icone={Check} cor="text-green-500" criterio={c} />
+                        <Linha key={c} icone={Check} cor="text-green-500" criterio={c} motivo={motivoPor.get(c)} />
                     ))}
                     {refutados.map(c => (
-                        <Linha key={c} icone={X} cor="text-slate-400" criterio={c} />
+                        <Linha key={c} icone={X} cor="text-slate-400" criterio={c} motivo={motivoPor.get(c)} />
                     ))}
                     {/*
                       Os desconhecidos aparecem de propósito. Omitir faria a nota

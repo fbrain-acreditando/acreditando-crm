@@ -52,9 +52,31 @@ if (!arquivo) {
 
 const sql = fs.readFileSync(arquivo, 'utf8');
 
+// Remove COMENTARIOS antes de procurar verbo destrutivo.
+//
+// POR QUE (2026-08-12): a trava recusou uma migracao que nao continha DROP
+// nenhum — a palavra aparecia so em comentarios explicando POR QUE aquele DROP
+// nao estava sendo usado. Falso positivo, e o incentivo que ele cria e pessimo:
+// a saida facil e reescrever o comentario para enganar a trava, o que apaga
+// justamente a documentacao mais valiosa do arquivo.
+//
+// Isto NAO afrouxa o controle. DROP em codigo continua bloqueado exatamente
+// como antes; o que mudou e que a trava passou a olhar so o codigo. Mesma
+// direcao do endurecimento do `sql-ro.mjs` em 11/08 (que aprendeu a pegar verbo
+// colado em `_`): a trava fica mais PRECISA, nao mais permissiva.
+//
+// ⚠️ Limite conhecido: um `--` dentro de string literal seria tratado como
+// comentario. Nenhuma migracao deste repo faz isso, e o erro cairia para o lado
+// seguro apenas se a string contivesse "drop" — caso em que vale rever a mao.
+function semComentarios(texto) {
+  return texto
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')  // bloco /* ... */
+    .replace(/--[^\n]*/g, ' ');          // linha  -- ...
+}
+
 // Trava: esta ferramenta nao remove nada.
 const DESTRUTIVO = /(^|[^a-z])(drop|truncate)([^a-z0-9]|$)/i;
-const d = sql.match(DESTRUTIVO);
+const d = semComentarios(sql).match(DESTRUTIVO);
 if (d) {
   console.error(`BLOQUEADO: verbo destrutivo "${d[2]}" — use procedimento proprio, com backup.`);
   process.exit(2);
