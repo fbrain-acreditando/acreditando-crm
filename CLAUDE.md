@@ -124,6 +124,19 @@ const model = getModel(config.provider, config.apiKey, config.model)
 
 **Realtime**: invalidação targeted em `lib/realtime/useRealtimeSync.ts` — nunca invalidar globalmente. UPDATE/DELETE usam debounce; INSERT não.
 
+**Uma tradução só do banco para a tela (story 2.29)**: linha crua do Postgres **nunca** entra no cache. Toda conversão snake_case→camelCase passa pela MESMA função que o `fetch` usa (`transformDeal`, `transformMessage`, …), via `lib/realtime/normalizeDealRow.ts`.
+```typescript
+// ERRADO — lista escrita à mão: nasce desatualizada e falha calada
+const normalized = { ...payload.new };
+if (payload.new.stage_id) { normalized.status = payload.new.stage_id; /* … */ }
+
+// CERTO — a canônica, a mesma do fetch
+proximo[i] = mesclarDealDoRealtime(cacheAtual, payload.new);
+```
+> Por quê: existiam **três** traduções manuais (7, 12 e "nenhuma — linha crua"). O que ficava de fora entrava em snake_case e o campo camelCase que a tela lê **guardava o valor velho** — a Fernanda salvava um campo e via o anterior até dar F5. Uma delas ainda mapeava `company_id`, coluna que não existe.
+>
+> **Freshness é por `updated_at`, nunca por igualdade de estágio.** A regra antiga descartava a linha inteira quando o card não mudava de coluna — confundindo *movimentação* com *atualização* e jogando fora toda edição de campo.
+
 **Sanitize**: usar `sanitizePostgrestValue()` e `sanitizeUrl()` de `lib/utils/sanitize.ts`
 
 **RLS defense-in-depth**: todas as queries filtram por `organization_id` além do RLS — especialmente crítico com service role (IA/tools).

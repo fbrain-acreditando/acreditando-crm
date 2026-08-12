@@ -142,7 +142,7 @@ interface DbDealWithItems extends DbDeal {
   deal_items: DbDealItem[];
 }
 
-const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]): Deal => {
+export const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]): Deal => {
   // Usar stage_id como status (UUID do estágio no kanban)
   // is_won e is_lost indicam se o deal foi fechado
   const stageStatus = db.stage_id || db.status || '';
