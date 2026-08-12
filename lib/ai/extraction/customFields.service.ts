@@ -40,6 +40,7 @@ import {
 } from './customFields.schemas';
 import { orderConversationWindow } from './conversationWindow';
 import { logAiTokens, type TokenLogClient } from '../token-log';
+import { moveDealIfQualified } from '@/lib/deals/moveOnQualified';
 
 // =============================================================================
 // Constantes
@@ -276,6 +277,23 @@ Extraia apenas o que a conversa disser. O que não estiver lá, retorne null.`,
     }
 
     console.log('[CustomFieldsExtraction] Campos preenchidos:', updated, 'no deal:', dealId);
+
+    // 8. T3 (story 2.17) — se a extração acabou de completar o critério de
+    //    "qualificado" da operação, o card anda sozinho.
+    //
+    //    Aqui é o único lugar do sistema que sabe que os campos MUDARAM. O
+    //    webhook não sabe: quem grava é este serviço, e ele roda depois.
+    //
+    //    Deliberadamente DEPOIS do `console.log` e sem `await` no caminho de
+    //    erro: a extração já está gravada e o resultado dela não depende do
+    //    movimento. Enquanto ninguém configurar `qualified_stage_id`, esta
+    //    chamada termina em `sem_destino_configurado` e não toca em nada.
+    await moveDealIfQualified({
+      supabase,
+      dealId,
+      organizationId,
+      customFields: nextFields,
+    });
 
     return { success: true, updated, skipped };
   } catch (error) {

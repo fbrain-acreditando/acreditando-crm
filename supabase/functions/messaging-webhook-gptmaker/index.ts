@@ -50,7 +50,7 @@ import { fetchAudioTranscription } from "./transcription.ts";
 
 // Mover o card na transferência tem casos de borda que precisam de teste e não
 // precisam de banco (não regredir, empate de ordem, board diferente).
-import { decideStageMove } from "./stage-move.ts";
+import { decideStageMove, decideReplyStageMove } from "./stage-move.ts";
 import { resolveContactId, type ContactResolverClient } from "./contact.ts";
 import {
   updateConversationPreview,
@@ -342,6 +342,15 @@ async function handleMessage(
     );
   }
 
+  // T2 (story 2.17) — o lead respondeu. Se ainda não está qualificado, o card
+  // sai da coluna de entrada sozinho.
+  //
+  // Só para `inbound`: mensagem que NÓS mandamos não é sinal de que o lead
+  // interagiu, e tratá-la como tal encheria a coluna de gente que nunca falou.
+  if (event.direction === "inbound") {
+    await moveDealOnReply(supabase, channel, conversationId);
+  }
+
   // ⚠️ A IA do CRM NÃO é acionada aqui — quem atende é o agente do GPT Maker.
   // Ligar as duas faria dois robôs responderem o mesmo lead.
 }
@@ -476,7 +485,7 @@ async function resolveDealForConversation(
   supabase: ReturnType<typeof createClient>,
   channel: ChannelRow,
   conversationId: string
-): Promise<{ id: string; stage_id: string | null; board_id: string | null; contact_id: string | null } | null> {
+): Promise<{ id: string; stage_id: string | null; board_id: string | null; contact_id: string | null; custom_fields: Record<string, unknown> | null } | null> {
   const { data: conv, error: convErr } = await supabase
     .from("messaging_conversations")
     .select("contact_id")
@@ -490,7 +499,7 @@ async function resolveDealForConversation(
 
   const { data: deal, error: dealErr } = await supabase
     .from("deals")
-    .select("id, stage_id, board_id, contact_id")
+    .select("id, stage_id, board_id, contact_id, custom_fields")
     .eq("contact_id", conv.contact_id)
     .eq("organization_id", channel.organization_id)
     .is("deleted_at", null)
@@ -508,7 +517,7 @@ async function resolveDealForConversation(
     return null;
   }
 
-  return deal as { id: string; stage_id: string | null; board_id: string | null; contact_id: string | null };
+  return deal as { id: string; stage_id: string | null; board_id: string | null; contact_id: string | null; custom_fields: Record<string, unknown> | null };
 }
 
 /**
@@ -596,14 +605,21 @@ async function moveDealOnTransfer(
   }
 }
 
-/** Regra de roteamento do canal, incluindo o destino de transferência. */
+/** Regra de roteamento do canal, incluindo os destinos automáticos. */
 async function getTransferRoutingRule(
   supabase: ReturnType<typeof createClient>,
   channelId: string
-): Promise<{ boardId: string | null; transferStageId: string | null } | null> {
+): Promise<
+  | {
+      boardId: string | null;
+      transferStageId: string | null;
+      repliedStageId: string | null;
+    }
+  | null
+> {
   const { data, error } = await supabase
     .from("lead_routing_rules")
-    .select("board_id, transfer_stage_id, enabled")
+    .select("board_id, transfer_stage_id, replied_stage_id, enabled")
     .eq("channel_id", channelId)
     .maybeSingle();
 
@@ -617,7 +633,93 @@ async function getTransferRoutingRule(
   return {
     boardId: (data.board_id as string) ?? null,
     transferStageId: (data.transfer_stage_id as string) ?? null,
+    repliedStageId: (data.replied_stage_id as string) ?? null,
   };
+}
+
+/**
+ * T2 — o card sai da coluna de entrada quando o lead responde.
+ *
+ * Mesma forma do `moveDealOnTransfer`: nunca derruba o webhook. O 200 para o
+ * fornecedor e o registro da mensagem valem mais que o movimento, que a
+ * Fernanda refaz num arrasto.
+ *
+ * ⚠️ Enquanto `replied_stage_id` for NULL — o default — esta função sai na
+ * primeira linha e não toca em nada (AC10).
+ */
+async function moveDealOnReply(
+  supabase: ReturnType<typeof createClient>,
+  channel: ChannelRow,
+  conversationId: string
+): Promise<void> {
+  try {
+    const rule = await getTransferRoutingRule(supabase, channel.id);
+    if (!rule?.repliedStageId) return;
+
+    const deal = await resolveDealForConversation(supabase, channel, conversationId);
+    if (!deal) return;
+
+    const stageIds = [rule.repliedStageId, deal.stage_id].filter(Boolean) as string[];
+    const { data: stages, error: stagesErr } = await supabase
+      .from("board_stages")
+      .select('id, name, "order", board_id')
+      .in("id", stageIds);
+
+    if (stagesErr) {
+      console.error("[GPTMaker] T2 — falha ao ler estágios:", stagesErr);
+      return;
+    }
+
+    const rows = (stages ?? []) as Array<{ id: string; name: string; order: number; board_id: string }>;
+    const target = rows.find((s) => s.id === rule.repliedStageId);
+    const current = rows.find((s) => s.id === deal.stage_id);
+
+    const decision = decideReplyStageMove({
+      customFields: deal.custom_fields,
+      currentStageId: deal.stage_id,
+      currentStageOrder: current?.order ?? null,
+      repliedStageId: rule.repliedStageId,
+      repliedStageOrder: target?.order ?? null,
+      dealBoardId: deal.board_id,
+      ruleBoardId: rule.boardId,
+    });
+
+    if (!decision.move) {
+      console.log(`[GPTMaker] T2 — deal ${deal.id} não movido: ${decision.reason}`);
+      return;
+    }
+
+    const { data: moved, error: moveErr } = await supabase
+      .from("deals")
+      .update({ stage_id: rule.repliedStageId })
+      .eq("id", deal.id)
+      .select("id");
+
+    if (moveErr) {
+      console.error("[GPTMaker] T2 — falha ao mover o card:", moveErr);
+      return;
+    }
+
+    // Rule 7 dentro do código: PostgREST devolve sucesso com ZERO linhas.
+    if (!moved || moved.length === 0) {
+      console.error(
+        `[GPTMaker] T2 — UPDATE do deal ${deal.id} afetou 0 linhas — card NÃO movido (verificar RLS)`
+      );
+      return;
+    }
+
+    console.log(`[GPTMaker] T2 — deal ${deal.id} movido para "${target?.name ?? rule.repliedStageId}"`);
+
+    await logStageMoveActivity(
+      supabase,
+      channel,
+      deal,
+      target?.name ?? "",
+      "Movido automaticamente: o lead respondeu e ainda não está qualificado."
+    );
+  } catch (error) {
+    console.error("[GPTMaker] T2 — erro ao mover o card (não fatal):", error);
+  }
 }
 
 /**
@@ -632,7 +734,8 @@ async function logStageMoveActivity(
   supabase: ReturnType<typeof createClient>,
   channel: ChannelRow,
   deal: { id: string; contact_id: string | null },
-  stageName: string
+  stageName: string,
+  description = "Movido automaticamente: a IA do GPT Maker transferiu o atendimento para humano."
 ): Promise<void> {
   const { error } = await supabase.from("activities").insert({
     organization_id: channel.organization_id,
@@ -640,7 +743,7 @@ async function logStageMoveActivity(
     contact_id: deal.contact_id,
     type: "STATUS_CHANGE",
     title: `Moveu para ${stageName}`.trim(),
-    description: "Movido automaticamente: a IA do GPT Maker transferiu o atendimento para humano.",
+    description,
     date: new Date().toISOString(),
     completed: true,
   });

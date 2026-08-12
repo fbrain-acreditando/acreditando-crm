@@ -3,7 +3,12 @@
 **Status:** 🟡 **NÃO ENVIADO** — acumulando até o Filipe mandar tudo de uma vez
 **Aberto em:** 2026-08-10
 **Destino:** Fernanda (`comercial@acreditando.com.br` · WhatsApp a confirmar)
-**Última atualização:** 2026-08-10
+**Última atualização:** 2026-08-11
+
+> ✂️ **ESCOPO REDUZIDO em 11/08 (decisão do Filipe):** os **Blocos 1 e 5 já foram conversados
+> com ela por outro canal** ⇒ **NÃO enviar**. E o Bloco 6 (aviso do botão *Salvar*), que estava
+> como pendência do daily de 11/08, **também já foi conversado** ⇒ **não precisa ser escrito**.
+> **O que resta enviar: Bloco 2 · Bloco 3 · Bloco 4.**
 
 > Este arquivo **cresce** conforme a semana avança. Quando o Filipe disser "manda", releia tudo,
 > **reordene em blocos curtos** e só então dispare. Nada aqui foi enviado.
@@ -22,7 +27,7 @@
 
 ---
 
-## Bloco 1 — o aviso do board *(mandar ANTES de ela abrir o sistema)*
+## ~~Bloco 1~~ — o aviso do board ✅ **JÁ CONVERSADO (11/08) — NÃO ENVIAR**
 
 > Oi Fernanda, tudo bem?
 >
@@ -80,7 +85,7 @@
 
 ---
 
-## Bloco 5 — novidade: dá para corrigir o nome do lead *(no ar em 10/08)*
+## ~~Bloco 5~~ — corrigir o nome do lead ✅ **JÁ CONVERSADO (11/08) — NÃO ENVIAR**
 
 > Ah, e tem uma coisa nova que acho que vai te ajudar: **agora dá pra corrigir o nome do lead**.
 >
@@ -113,8 +118,103 @@
 
 ---
 
+## ✅ ENVIADO em 11/08 — e RESPONDIDO no mesmo dia
+
+O Filipe encaminhou os Blocos 2, 3 e 4 do próprio WhatsApp. **Respostas literais dela:**
+
+> 1. 24 horas
+> 2. Onde mora e o tipo de lesão
+> 3. todos as opções
+> O lead que eu ligo primeiro: SP e se chega até o final de conversa com a IA já dizendo como quer conversar
+>
+> Reunião: diretoria e MKT
+
+### O que cada resposta destrava
+
+| Resposta | Story | Estado |
+|---|---|---|
+| **24 horas** sem responder | **2.17** — movimentações automáticas de coluna | 🟢 critério fechado |
+| Qualificado = **onde mora + tipo de lesão** | **2.17** | 🟢 dois campos, ambos já extraídos pela IA |
+| Painel = *"todas as opções"* | **2.19** | 🟡 ver ressalva abaixo |
+| **SP** + **chegou ao fim do roteiro da IA** | **2.18** | 🟢 **desbloqueia o AC0** |
+| Reunião = **diretoria e MKT** | pendência nº 6 | ✅ fechada — Felipe (CEO) + Izadira |
+
+### 🔑 Por que a 2.18 deixou de estar bloqueada
+
+O `AC0` a travou porque a regra dita em 16/07 usava **zona da cidade**, e só **28,2%** dos leads
+têm zona identificável. **A resposta dela não usa zona.** Usa:
+
+1. **SP × não-SP** — corte grosso, derivável de muito mais registros que a zona
+2. **Chegou ao final da conversa com a IA** — não é dado de texto livre, é **estado do roteiro**,
+   que já medimos (o levantamento do `Virtual4` conta pergunta a pergunta)
+3. **"Já dizendo como quer conversar"** — sinal de intenção declarada pelo próprio lead
+
+⇒ Os três são computáveis. **A regra é implementável como ela a disse** — o que não era verdade
+para a versão de 16/07.
+
+### ✅ As duas ambiguidades — RESOLVIDAS pelo Filipe em 11/08
+
+**1. "SP" = a CIDADE de São Paulo** (a capital), não a Grande SP nem o estado.
+
+⇒ `Taubaté` **não pontua** (é estado de SP, ~130 km). `Sapopemba`, `zona leste` e qualquer bairro
+da capital **pontuam**. `Rio` e `Rondônia` ficam de fora, como já se esperava.
+
+> ⚠️ **Assunção registrada, não decidida por ela:** municípios da **Grande SP** (Guarulhos, Santo
+> André, Osasco) ficam **fora** pela letra do critério — embora vários estejam **mais perto** do
+> centro que partes da zona leste da própria capital. Como o motivo de perda nº 1 dela é
+> **distância**, esse recorte pode estar cortando lead viável. **Não muda a implementação agora**;
+> fica anotado para revisar quando houver volume para medir.
+
+**2. Painel: os 4 exemplos estão aprovados** — ela concordou com todos. Especificação abaixo,
+com acréscimos propostos para ela confirmar.
+
+---
+
+## 📊 Especificação do painel (story 2.19)
+
+> 🔑 **O achado que organizou a proposta:** os 4 números aprovados são **todos retrospectivos e
+> mensais** — contam o que já aconteceu. **Nenhum deles diz a ela o que fazer agora.** Como o
+> trabalho dela é uma fila de WhatsApp que anda o dia inteiro, um painel só de fechamento de mês
+> vira relatório para outra pessoa ler. Por isso a proposta separa em **três blocos**, e o primeiro
+> é o que ela olha todo dia.
+
+### 🔴 Bloco A — "O que eu faço agora" *(proposto — o mais valioso)*
+
+| Número | Por que existe | Dado |
+|---|---|---|
+| **Esperando minha resposta** | É a fila real de trabalho. Hoje ela descobre isso rolando o WhatsApp | ✅ existe |
+| **Passou de 24h sem resposta minha** | Usa **o critério que ela mesma acabou de dar**. Transforma o 24h de definição em **alarme** | ✅ existe |
+| **Prontos para ligar** — SP + roteiro da IA completo | É **literalmente a regra de prioridade dela**, virando lista clicável em vez de nota mental | 🟡 depende da 2.18 |
+
+### 🔵 Bloco B — "Como foi o mês" *(os 4 aprovados + 1)*
+
+| Número | Origem |
+|---|---|
+| Quantos **entraram** no mês | ✅ aprovado por ela |
+| Quantos **eu respondi** | ✅ aprovado por ela |
+| Quantos **viraram venda** | ✅ aprovado por ela |
+| Quantos **ficaram sem resposta** | ✅ aprovado por ela |
+| **% que eu consegui responder** | ➕ proposto — é a dor declarada dela: *"eu dou importância para quem me respondeu"*, e em junho foram **240 de ~700** |
+
+### 🟡 Bloco C — "Por que a gente perde" *(proposto)*
+
+| Número | Por que existe |
+|---|---|
+| **Ranking dos motivos de perda** | O dado **já existe e já foi medido**: dos 12 perdidos, **`Distância` é 5** — campeão isolado. Hoje ninguém vê isso somado |
+| **Quantos são de SP × de fora** | Casa direto com o motivo nº 1 ser distância. Se a maior parte da fila é de fora, o problema é **de origem de tráfego**, não de atendimento — e essa conclusão é da [[Izadira]], não dela |
+| **Quantos são do serviço gratuito (Instituto)** | Pedido **dela mesma em 07/08**: hoje **tudo cai para ela**, inclusive lead de serviço gratuito do Instituto, que nem deveria estar na fila comercial |
+
+### ⚠️ Ressalva de método
+
+*"Todas as opções"* foi respondido **em cima dos meus 4 exemplos** — é a minha lista aceita, não
+a lista dela. Os acréscimos acima seguem a mesma regra: **mostrar o painel pronto e perguntar
+"falta algum número aqui?"** antes de dar a 2.19 por fechada. Ela responde melhor **vendo** do
+que imaginando — foi o que aconteceu com o lápis de renomear o lead.
+
+---
+
 ## ➕ A acrescentar antes de enviar
 
 *(anotar aqui o que for surgindo no resto da semana)*
 
-- [ ]
+- [ ] **Confirmar o que é "SP"** (cidade × Grande SP × estado) — 1 pergunta, destrava a 2.18

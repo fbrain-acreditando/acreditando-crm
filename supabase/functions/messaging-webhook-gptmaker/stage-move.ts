@@ -102,3 +102,75 @@ export function decideStageMove(input: StageMoveInput): StageMoveDecision {
 
   return { move: true, reason: 'mover' };
 }
+
+// =============================================================================
+// T2 — "respondeu, mas ainda não qualificou" (story 2.17)
+// =============================================================================
+
+/**
+ * As duas chaves que definem "qualificado", ditas pela Fernanda em 11/08.
+ *
+ * ⚠️ GÊMEO DE `lib/deals/autoStage.ts`. Deno e Node não compartilham import,
+ * então a constante existe duas vezes de propósito. **Mudou aqui, muda lá** —
+ * e o teste `stageMoveOnReply.test.ts` trava o valor nos dois lados.
+ */
+export const QUALIFICATION_FIELD_KEYS = ['ondeReside', 'tipoDeLesao'] as const;
+
+/** Vazio, em branco ou só espaços NÃO conta como preenchido. */
+export function isFieldFilled(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/** O lead atende ao critério de "qualificado" da operação? */
+export function isQualified(
+  customFields: Record<string, unknown> | null | undefined,
+  fieldKeys: readonly string[] = QUALIFICATION_FIELD_KEYS
+): boolean {
+  if (!customFields) return false;
+  return fieldKeys.every((key) => isFieldFilled(customFields[key]));
+}
+
+export type ReplyStageReason = StageMoveReason | 'ja_qualificado';
+
+export interface ReplyStageInput extends Omit<StageMoveInput, 'transferStageId' | 'transferStageOrder'> {
+  /** Destino do T2 (`lead_routing_rules.replied_stage_id`). */
+  repliedStageId: string | null;
+  /** Ordem do destino do T2. */
+  repliedStageOrder: number | null;
+  /** `deals.custom_fields` como está agora. */
+  customFields: Record<string, unknown> | null | undefined;
+}
+
+/**
+ * Decide se o card deve andar por TER RESPONDIDO.
+ *
+ * O gatilho é a própria mensagem inbound — por isso não há parâmetro
+ * "temResposta": se este código está rodando, a resposta acabou de chegar.
+ *
+ * 🔑 POR QUE MEDIMOS ISTO: em 11/08, `Lead novo` tinha 141 cards e **124 já
+ * haviam respondido**. A coluna de entrada estava 88% mentindo, porque a única
+ * movimentação existente (`transfer_stage_id`) só dispara quando a IA transfere
+ * — e a maioria dos leads responde SEM nunca ser transferida.
+ */
+export function decideReplyStageMove(input: ReplyStageInput): { move: boolean; reason: ReplyStageReason } {
+  const { customFields, repliedStageId, repliedStageOrder, ...rest } = input;
+
+  // Lead já qualificado é assunto do T3, que tem destino mais à frente. Mover
+  // para "respondeu" aqui seria puxar o card PARA TRÁS — e a trava de
+  // não-regressão bloquearia depois, deixando um log confuso no lugar de uma
+  // decisão clara. Sair antes diz a verdade sobre o motivo.
+  if (isQualified(customFields)) {
+    return { move: false, reason: 'ja_qualificado' };
+  }
+
+  return decideStageMove({
+    ...rest,
+    transferStageId: repliedStageId,
+    transferStageOrder: repliedStageOrder,
+  });
+}
