@@ -8,6 +8,151 @@
 
 ---
 
+## Sessao 2026-08-12 (7) — 🆕 coluna `Clientes` no board (4º pedido da Fernanda no dia)
+
+> **Aplicado no banco, read-back conferido. NAO commitado, NAO pushado** — os 2 arquivos de
+> migracao estao no working tree.
+
+**Arquivos:**
+- `supabase/migrations/20260812210000_board_ganha_coluna_clientes.sql`
+- `supabase/migrations/20260812210000_board_ganha_coluna_clientes_REVERTER.sql`
+
+**Estado no banco (lido de volta):** `ord 10 · Clientes · linked_lifecycle_stage NULL ·
+bg-emerald-500 · 0 cards`. Board `0..12`, **13 colunas, 0 `order` duplicado**.
+As tres categorias no fim: `Clientes` 10 · `Profissional` 11 · `Projeto Social` 12.
+
+### 🪤 A coluna nasceu em 12 e o Filipe a moveu PELA TELA para 10 — e isso quebrou a migracao
+
+A reordenacao pela UI persistiu corretamente no banco. **O arquivo de migracao, nao.** Ele cravava
+`order = 12`; num banco reconstruido do zero, inseriria `Clientes` em **10 colidindo com
+`Profissional`**, que a migracao anterior (`20260812170000`) crava em 10 ⇒ **duas colunas com o
+mesmo `order`**, ordem indefinida na tela.
+
+Corrigido com `UPDATE`s de reordenacao **por UUID** (nunca por nome — licao da 2.33). **Reexecutada
+contra o banco ja no estado final: no-op provado** (1 linha `Clientes`, 13 colunas, 0 empate).
+
+🔑 *Mexer na tela e mexer no repo sao duas escritas na mesma verdade — e a segunda nao acontece
+sozinha. Este repo ja carrega a pendencia nº 18: `supabase/migrations/` NAO e a fonte da verdade.*
+
+### 🛑 O achado que muda o desenho — leia antes de mexer em qualquer coluna deste board
+
+Ligar a coluna ao ciclo **`CUSTOMER`** era a escolha obvia (faria `contacts.stage = CUSTOMER`, e o
+sistema finalmente saberia quem e cliente — hoje sao **4 de 813**). **Medido: nao da.**
+
+`boards.won_stage_id` e **NULL** neste board ⇒ `useMoveDeal.ts:70-81` cai no **fallback por
+lifecycle**, e QUALQUER coluna `CUSTOMER` marca **`is_won = true`**:
+
+1. o card entra na contagem de **GANHO do dashboard** (`useDashboardMetrics.ts:232`) ⇒ cliente
+   antigo contado como **venda** no numero que a Fernanda apresenta em **14/08**;
+2. o card cai no **corte de 30 dias** (`useBoardsController.ts:430-438`) ⇒ some da tela **mesmo com
+   o filtro em "Todos"**. Seria a **story 2.31 de novo**, dentro da coluna criada para o problema
+   oposto.
+
+⇒ nasceu com `linked_lifecycle_stage NULL`, igual a `Profissional` e `Projeto Social`.
+
+**Custo aceito:** a coluna organiza a tela; **ela nao ensina o sistema a saber quem e cliente**, e
+**nada poe o lead nela sozinho** (movimentacao manual, por quem disse *"eu nao anoto nada"*).
+
+### ⏳ Aberto
+
+- **Avisar a Fernanda que o card NAO vai sozinho** — a fala dela supoe o contrario
+- Perguntas de definicao: *"cliente"* = ja atendido **x** em tratamento agora? · de onde importar o
+  dado (nao esta na conversa)? · e os **490 contatos sem card**, que nenhuma coluna alcanca?
+- 🧭 **Arquitetura:** **3 das 13 colunas ja sao CATEGORIA, nao etapa** — um card so cabe em uma, e
+  cliente **em negociacao** obriga a escolher. Alternativa registrada: **campo + filtro**
+
+---
+
+## Sessao 2026-08-12 (7) — ⭐ story 2.18a: a nota de prioridade no card
+
+> Commit **`f0daa50`** · ✅ **NO AR, provado**: alias de producao resolve para
+> `f0daa50`, `READY`, `target: production`. SDC completo (@sm → @po → @dev AC0 →
+> @qa → @devops).
+
+### 🛑 O AC0-rev2 reprovou a story DUAS VEZES em desenhos diferentes
+
+**A rev.1 (10/08)** morreu porque a regra pedia ZONA e so 28,2% tinham zona.
+**A rev.2 (hoje)** trocou o criterio para *cidade de SP + completou o roteiro*, e
+o gate reprovou **de novo, por outro motivo**:
+
+1. **Nenhum dos 5 campos tem lista de opcoes** — todos `type: text`,
+   `options: null`. O risco nº2 da story ("casar por opcao exata") **nao se
+   aplica: nao existe opcao**. Cardinalidade: `ondeReside` 66 distintos em 75
+   preenchimentos (88% unicos), `haQuantoTempo` 55 em 70.
+2. **So UM dos cinco criterios e computavel** sem interpretar texto livre —
+   completou o roteiro. Os outros exigem classificacao: *"Sapopemba"* **e** a
+   capital e nao casa; *"Campinas sp"* casa e **nao e**.
+   ⇒ *Uma escala de 1 a 5 com um criterio calculavel e um booleano com fantasia
+   de precisao* — o risco nº3 se materializando.
+3. **Cobertura bimodal:** de 318 cards, **210 com zero criterio** e **64 com os
+   cinco**.
+
+### 🔑 Mas o cruzamento com o board salvou a story
+
+| Estagio | Cards | Com os 5 | Com zero |
+|---|---|---|---|
+| `Lead novo` | 131 | 11 | **115** (88%) |
+| **`Qualificado`** | **67** | **40** (60%) | 5 |
+| `Contato Realizado` | 57 | 3 | 50 |
+
+**O dado nao esta espalhado — esta concentrado onde ela escolhe.** `Lead novo`
+esta vazio porque o lead abandonou o roteiro, *e isso ja e informacao*.
+
+🎯 **O achado que paga a story: 16 cards parados em `Lead novo` COMPLETARAM o
+roteiro inteiro.** Leads qualificados na coluna fria, invisiveis sem abrir um a
+um. A nota diz o que a coluna nao diz.
+
+### Decisoes arbitradas pelo Filipe
+
+| Pergunta | Decisao |
+|---|---|
+| Normalizar campo por IA fere o "fora de escopo"? | **Nao** — *"a IA adivinhar a NOTA"* e que esta fora. Normalizar dado mantem a regra deterministica |
+| Alcance | **So onde ha dado, com denominador visivel** (`★ 1/1` × `★ 1/5`) |
+
+### O que subiu
+
+- `lead_score` + **`lead_score_known`** (o denominador) + `source` + `detail`.
+  Constraint impede `score > known` — seria afirmar criterio que nao se mediu.
+- `computeLeadScore` — funcao pura, **tres estados** por criterio
+  (bateu/refutado/desconhecido). **12 testes; a implementacao ingenua reprova em 3.**
+- Badge `★ N/M` no card. Sem nota ⇒ sem badge.
+- Backfill: **101 cards `1/1`**, **217 `0/1`**.
+- 🚨 **Cron de 10 em 10 min** (`recalcular-lead-score`, minutos :07..:57) — sem
+  ele, **todo lead novo nasceria sem nota e ficaria assim**, que e o BANT de novo
+  (198 deals, zero). Guarda `is distinct from` evita reescrever card que nao
+  mudou (o WAL do Realtime e o maior custo deste banco).
+
+### ⏳ Gate @qa: CONCERNS — o que NAO foi feito
+
+1. **AC4 — nota manual pela TELA nao existe.** O banco respeita
+   `lead_score_source = 'manual'` (o recalculo e o cron nao sobrescrevem), mas
+   **nao ha interface para ela mudar**. A metade de baixo esta pronta.
+2. **AC5 — a explicacao nao aparece no card.** O `lead_score_detail` grava
+   matched/refuted/unknown; a tela ainda nao mostra.
+3. **Ordenar/filtrar por nota** — indice criado, UI nao.
+4. **AC8 — nao provado em uso.**
+5. ⚠️ **Alcance honesto:** com um criterio so, a nota se parece muito com a
+   coluna `Qualificado` (risco nº5). Os outros 4 entram na **2.18b**.
+
+### 🎁 2.18b — e a mesma peca que a 2.19 precisa
+
+Normalizar `ondeReside`, `haQuantoTempo`, `jaFezReabilitacao` e `paraQuemE` em
+valores canonicos (~200 valores distintos no total) resolve **os 4 criterios que
+faltam AQUI e o AC4 (SP × fora) da story 2.19**. Caminho decidido: **rota de
+backfill protegida**, disparada pelo Filipe — o app nao roda nesta maquina
+(sem `.env.local`).
+
+### 🚩 Divergencia repo × banco encontrada nesta sessao
+
+Outra sessao criou a **story 2.34** (coluna `Clientes` no board): a migracao
+`20260812210000_board_ganha_coluna_clientes.sql` **ja esta aplicada no banco**
+(`Clientes` em `order 10`; `Profissional`/`Projeto Social` foram para 11/12) e o
+arquivo **segue sem commit**. ⚠️ E o timestamp **colide** com o
+`20260812210000_metricas_de_atendimento_bloco_b.sql` desta sessao. Nao toquei nos
+arquivos dela. **Decisao pendente do Filipe.**
+
+---
+
 ## Sessao 2026-08-12 (6) — 📊 story 2.19 BLOCO B: o painel que ela apresenta
 
 > Commit **`f90b814`** · ✅ **NO AR, provado**: o alias de producao
