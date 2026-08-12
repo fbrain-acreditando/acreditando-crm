@@ -128,7 +128,14 @@ export const useBoardsController = () => {
   // Filter State (declared before AI context useEffect that uses them)
   const [searchTerm, setSearchTerm] = useState('');
   const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
-  const [statusFilter, setStatusFilter] = useState<'open' | 'won' | 'lost' | 'all'>('open');
+  // O board abre mostrando TUDO, inclusive ganhos e perdidos (story 2.31).
+  // Por que 'all' e nao 'open': com 'open', `matchesStatus = !isWon && !isLost` apaga da tela
+  // exatamente o card que a pessoa acabou de classificar — mover para Ganho/Perdido marca
+  // isWon/isLost, entao CLASSIFICAR virava DESAPARECER. E como isto e useState (nao preferencia
+  // salva), o filtro voltava para 'open' a cada carregamento: o trabalho "sumia da noite para o
+  // dia" sem ninguem mexer em nada. Medido em 12/08: 18 cards em Perdido e 4 em Ganho vivos no
+  // banco, 16 deles movidos pela usuaria no dia anterior, nenhum visivel para ela.
+  const [statusFilter, setStatusFilter] = useState<'open' | 'won' | 'lost' | 'all'>('all');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
   // Track last context signature to avoid unnecessary setContext calls
