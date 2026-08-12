@@ -141,6 +141,15 @@ export const queryKeys = {
     },
 
     /**
+     * Métricas de atendimento — Bloco B do painel da Fernanda (story 2.19).
+     */
+    metricasDeAtendimento: {
+        all: ['metricasDeAtendimento'] as const,
+        byPeriod: (orgId: string, period: string) =>
+            ['metricasDeAtendimento', orgId, period] as const,
+    },
+
+    /**
      * Organization members query keys (for filters/dropdowns).
      */
     orgMembers: {

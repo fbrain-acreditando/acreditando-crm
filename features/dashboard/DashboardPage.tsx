@@ -7,29 +7,26 @@ import { useLifecycleStages } from '@/lib/query/hooks/useLifecycleStagesQuery';
 import { useContacts } from '@/lib/query/hooks/useContactsQuery';
 import { useBoards } from '@/lib/query/hooks/useBoardsQuery';
 import { useToast } from '@/context/ToastContext';
-import { TrendingUp, TrendingDown, Users, DollarSign, Target, Clock, MoreVertical, AlertTriangle } from 'lucide-react';
-import { StatCard } from './components/StatCard';
+import { Users, Clock, AlertTriangle } from 'lucide-react';
 import { ActivityFeedItem } from './components/ActivityFeedItem';
 import { PipelineAlertsModal } from './components/PipelineAlertsModal';
 import { AIMetricsSection } from './components/AIMetricsSection';
 import { MessagingMetricsSection } from './components/MessagingMetricsSection';
-import { useDashboardMetrics, PeriodFilter, COMPARISON_LABELS } from './hooks/useDashboardMetrics';
+import { useDashboardMetrics, PeriodFilter } from './hooks/useDashboardMetrics';
 import { PeriodFilterSelect } from '@/components/filters/PeriodFilterSelect';
 import { LazyFunnelChart, ChartWrapper } from '@/components/charts';
-import { SkeletonStatCard } from '@/components/ui/Skeleton';
-
+import { BlocoBSection } from './components/BlocoBSection';
 
 /**
- * Formata a variação percentual para exibição
+ * AC6 da story 2.19 — as métricas herdadas do fork (CRM de venda recorrente)
+ * ficam fora da tela.
+ *
+ * É uma constante, e não uma feature flag de banco, de propósito: ninguém pediu
+ * para ligar isso de volta por organização. Se um dia pedirem, o lugar de mudar
+ * é aqui, com o histórico do porquê logo acima. Ligar de novo é trocar para
+ * `true` — o cálculo nunca foi removido.
  */
-function formatChange(value: number): { text: string; isPositive: boolean } {
-  const isPositive = value >= 0;
-  const sign = isPositive ? '+' : '';
-  return {
-    text: `${sign}${value.toFixed(1)}%`,
-    isPositive,
-  };
-}
+const MOSTRAR_METRICAS_DE_CARTEIRA = false;
 
 /**
  * Componente React `DashboardPage`.
@@ -66,16 +63,12 @@ const DashboardPage: React.FC = () => {
   }, [contacts]);
 
 
+  // O hook segue calculando tudo — o AC6 tira da TELA, não do cálculo. O que é
+  // desestruturado aqui é só o que a tela ainda usa: funil, alertas de pipeline
+  // e os números da carteira, que voltam se `MOSTRAR_METRICAS_DE_CARTEIRA` virar
+  // `true`.
   const {
-    isLoading,
-    deals,
-    wonDeals,
-    wonRevenue,
-    winRate,
-    pipelineValue,
-    topDeals,
     funnelData,
-    trendData,
     activePercent,
     inactivePercent,
     churnedPercent,
@@ -86,22 +79,8 @@ const DashboardPage: React.FC = () => {
     stagnantDealsCount,
     stagnantDealsValue,
     avgLTV,
-    avgSalesCycle,
-    fastestDeal,
-    slowestDeal,
-    actualWinRate,
-    lostDeals,
-    topLossReasons,
-    wonDealsWithDates,
-    changes,
     activeSnapshotDeals,
   } = useDashboardMetrics(period, selectedBoardId);
-
-  // Formatar variações para exibição
-  const pipelineChangeInfo = formatChange(changes.pipeline);
-  const dealsChangeInfo = formatChange(changes.deals);
-  const winRateChangeInfo = formatChange(changes.winRate);
-  const revenueChangeInfo = formatChange(changes.revenue);
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)] space-y-4">
@@ -147,57 +126,26 @@ const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-          {Array.from({ length: 4 }).map((_, i) => <SkeletonStatCard key={i} />)}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-          <StatCard
-            title="Pipeline Total"
-            value={`$${pipelineValue.toLocaleString()}`}
-            subtext={pipelineChangeInfo.text}
-            subtextPositive={pipelineChangeInfo.isPositive}
-            icon={DollarSign}
-            variant="info"
-            onClick={() => router.push('/boards')}
-            comparisonLabel={COMPARISON_LABELS[period]}
-          />
-          <StatCard
-            title="Negócios Ativos"
-            value={`${deals.length - wonDeals.length}`}
-            subtext={dealsChangeInfo.text}
-            subtextPositive={dealsChangeInfo.isPositive}
-            icon={Users}
-            variant="purple"
-            onClick={() => router.push('/boards?status=open')}
-            comparisonLabel={COMPARISON_LABELS[period]}
-          />
-          <StatCard
-            title="Conversão"
-            value={`${winRate.toFixed(1)}%`}
-            subtext={winRateChangeInfo.text}
-            subtextPositive={winRateChangeInfo.isPositive}
-            icon={Target}
-            variant="success"
-            onClick={() => router.push('/reports')}
-            comparisonLabel={COMPARISON_LABELS[period]}
-          />
-          <StatCard
-            title="Receita (Ganha)"
-            value={`$${wonRevenue.toLocaleString()}`}
-            subtext={revenueChangeInfo.text}
-            subtextPositive={revenueChangeInfo.isPositive}
-            icon={TrendingUp}
-            variant="warning"
-            onClick={() => router.push('/boards?status=won&view=list')}
-            comparisonLabel={COMPARISON_LABELS[period]}
-          />
-        </div>
-      )}
+      {/*
+        Bloco B da story 2.19 — os números que ela apresenta.
+        Ficam ANTES de tudo: é o que ela abre a tela para ver.
+      */}
+      <div className="shrink-0">
+        <BlocoBSection period={period} />
+      </div>
 
-      {/* Wallet Health Section - Compact */}
+      {/*
+        AC6 da story 2.19 — as métricas de VENDA RECORRENTE saem da tela dela.
+        "Saúde da carteira", "Negócios parados", "LTV médio", "Pipeline Total" em
+        dólar e "Receita ganha" vieram do fork, que era um CRM de carteira. Ela
+        leu isso ao vivo em 07/08 e reagiu: "Eita, que vão controlar minha vida
+        agora" — a métrica não fala do trabalho dela, que é uma fila de WhatsApp.
+
+        O código NÃO foi apagado: `useDashboardMetrics` segue calculando tudo, e
+        os alertas de pipeline continuam acessíveis pelo botão do cabeçalho. O
+        que mudou é o que ocupa a tela de quem abre o painel.
+      */}
+      {MOSTRAR_METRICAS_DE_CARTEIRA && (
       <div className="space-y-3 shrink-0">
         <h2 className="text-lg font-bold text-slate-900 dark:text-white font-display flex items-center gap-2">
           <Users className="text-primary-500" size={20} />
@@ -287,6 +235,7 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
 
       {/* Messaging Metrics Section */}
       <MessagingMetricsSection period={period} />

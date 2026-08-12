@@ -162,6 +162,12 @@ export {
   type MessagingMetrics,
 } from './useMessagingMetricsQuery';
 
+// Métricas de atendimento (Bloco B — story 2.19)
+export {
+  useMetricasDeAtendimentoQuery,
+  type MetricasDeAtendimento,
+} from './useMetricasDeAtendimentoQuery';
+
 // Org Members
 export {
   useOrgMembersQuery,
