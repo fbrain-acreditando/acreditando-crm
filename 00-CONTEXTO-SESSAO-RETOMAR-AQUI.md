@@ -69,6 +69,106 @@ Fork do **`nossocrm`** (Thales Laray) — CRM open-source com IA nativa. Stack: 
 
 ---
 
+## Sessão 2026-08-11 (noite) — 🟢 story 2.17 no ar · 🛑 o AC0 matou o T1 e travou o AC4 da 2.19
+
+> SDC completo (@sm → @po → @dev → @qa → @devops). Destravada pelas **respostas da Fernanda**,
+> que chegaram por WhatsApp no fim do dia.
+
+### 📥 O insumo que destravou tudo — respostas literais dela
+
+> *"1. 24 horas"* · *"2. Onde mora e o tipo de lesão"* · *"3. todos as opções"*
+> *"O lead que eu ligo primeiro: SP e se chega até o final de conversa com a IA já dizendo como quer conversar"*
+> *"Reunião: diretoria e MKT"*
+
+E a definição que faltava, dada pelo **Filipe**: **"SP" = a CIDADE de São Paulo** (não Grande SP, não o estado).
+
+⇒ Fecha 3 bloqueios antigos: as duas definições da **2.17**, a lista de métricas da **2.19** e a
+pergunta *"com quem é a reunião de 14/08?"*, aberta desde 07/08 — **é diretoria + MKT**.
+
+### ✅ Story 2.17 — NO AR (`38a027e`, deploy `success`, HTTP 200 no alias dela)
+
+**O `AC0` mudou a story DUAS vezes antes de existir uma linha de código:**
+
+1. 🛑 **O destino do `T1` não existe.** O board tem **12 estágios e nenhum é "sem resposta"**; o
+   candidato pelo nome (`Aguardando retorno`) está em **`order` 5, DEPOIS de `Qualificado`** ⇒ usá-lo
+   contradiz a regra de não-regressão e **prenderia o lead no fundo do funil para sempre**.
+   **Decisão do Filipe: o T1 sai da story e vira número de painel na 2.19.**
+   🎁 **De graça:** sem o T1 caiu a necessidade de **`pg_cron`** (o job existia só para ele — T2 e T3
+   são por evento), sumiu o risco de corrida job×webhook e a estimativa foi de **G para M**.
+2. 🔑 **`Lead novo` tinha 141 cards e 124 JÁ HAVIAM RESPONDIDO — 88% mentindo.** A única movimentação
+   automática existente (story 2.5) só dispara **na transferência para humano**, e a maioria dos leads
+   responde **sem nunca ser transferida**. É o vão que o T2 cobre — e a explicação de por que ela
+   seguia classificando na mão *mesmo com automação no ar*.
+
+**O gate do @qa pegou um erro de ORDEM que teria matado a 2.5 em silêncio:** o webhook passou a ler
+`replied_stage_id`; deploy **antes** da migração faria o PostgREST errar a coluna, o
+`getTransferRoutingRule` cair no `return null` e **`moveDealOnTransfer` parar de mover o card** — sem
+exceção, sem alarme, respondendo 200. ⇒ **migração primeiro, deploy depois.** Foi nessa ordem.
+
+⛔ **NASCEU DESLIGADA (AC10), e isso é schema:** `replied_stage_id` e `qualified_stage_id` estão
+**`NULL` em produção** (read-back conferido; `transfer_stage_id` intacto). **Nada se move até alguém
+configurar.** Quando ligar, **185 de 242 cards (77%)** se reorganizam de uma vez.
+
+**Provas:** testes por **mutação nos dois runtimes** (desliguei a trava de não-regressão → 2 reprovam
+de cada lado; religuei → verde). O **contrato entre os gêmeos** Deno/Node (a definição de
+"qualificado" existe duas vezes porque os runtimes não compartilham import) está **travado por teste
+campo a campo**. Gates: lint 0 · typecheck · **651 testes (+31)** · build.
+
+⚠️ **Declarado, não marcado como ✅:** o **AC3** é **parcial** — a monotonicidade protege tudo que ela
+**avançou**, mas se ela mover um card **para trás** de propósito, a automação pode empurrá-lo de volta.
+Não há registro de "quem moveu por último" no schema. **A 2.5 vive com o mesmo limite desde 03/08.**
+O **AC8** segue aberto: falta uso real.
+
+### 🛑 Story 2.19 — @po revalidou (🟡 GO condicional) e o `AC0` travou o AC4
+
+**"São Paulo × fora" não é implementável como está.** Dois problemas medidos:
+
+| Medida | Valor |
+|---|---|
+| Deals vivos no board | 299 |
+| Com `ondeReside` preenchido | **69 (23%)** |
+| Valores **distintos** entre os 69 | **62 (90% únicos)** |
+| Casam com texto "São Paulo"/"SP" | 19 — **a maioria NÃO é a capital** |
+
+🪤 **O filtro óbvio erra nas DUAS direções, com exemplos reais:**
+*falsos positivos* → `Cotia São Paulo` · `Mauá São Paulo` · `Campinas sp` · `Jundiaí-SP` ·
+`Praia Grande SP` · `Araçatuba, SP` · `Interior (4 horas de São Paulo)`
+*falsos negativos* → `Sapopemba` · `Morumbi` · `Butantã` · `Itaquera zona leste` ·
+`São Miguel Paulista` · `Brooklin Paulista` · `Zona leste` (4×)
+
+🔑 *Não erra "um pouco": erra quase inteiro, e erra parecendo funcionar.*
+
+**🔴 DECISÃO PENDENTE DO FILIPE — 3 caminhos:** (a) dicionário de bairros/municípios · (b) campo
+estruturado novo na extração (só vale para lead futuro) · (c) **entregar o que existe + "não
+classificável" explícito**. 📌 O próprio AC4 já mandava o **(c)**; recomendação registrada:
+**(c) agora, (a) depois de 14/08** — número geográfico errado na frente da diretoria custa mais que
+a ausência dele.
+
+✅ **Não dependem dessa decisão e seguem prontos para implementar:** Blocos **A** e **B** inteiros +
+o ranking de motivos de perda.
+
+⚠️ **Duas definições continuam SEM resposta** — *o que conta como "lead que chegou"* e *"lead que eu
+falei"*. **As perguntas nunca foram enviadas.** O @po liberou o @dev a escolher a mais defensável **e
+escrevê-la na tela** (o AC1 já exige isso), mas o **AC7 continua sendo o gate real**: bater com a
+anotação manual de agosto dela antes de a tela ir para uma reunião.
+
+### 🧰 Ferramenta nova: `scripts/db/aplicar-migracao.mjs`
+
+Aplica **um** arquivo de migração seguindo o contrato de escrita segura. Extrai as colunas prometidas
+**do próprio SQL** (para o read-back não depender de eu redigitar a lista e errar), **recusa
+`DROP`/`TRUNCATE`**, exige `--eu-autorizo` e **sai com erro se o read-back não achar tudo**.
+Existe porque `supabase/migrations/` **não é a fonte da verdade** neste projeto (pendência nº 14).
+
+### 🔑 Para retomar amanhã
+
+1. 🔴 **Decidir o caminho do AC4** da 2.19 (a/b/c) — destrava "SP × fora" e "prontos para ligar"
+2. 🟢 **Implementar Blocos A e B** da 2.19 — não dependem de nada
+3. ⛔ **Decidir QUANDO ligar a 2.17** (configurar os dois `stage_id`) — provavelmente **depois de 14/08**
+4. 🚨 **Os dois P0 da Fernanda** (topo deste arquivo) — chegaram depois e **não foram corrigidos**
+5. 📩 **Perguntar a ela as 2 definições** que faltam ("lead que chegou" / "lead que eu falei")
+
+---
+
 ## Sessão 2026-08-11 (tarde) — 🗑️ julho apagado · 🫥 soft delete ligado · 🫨 3 pedidos da Fernanda
 
 > **4 stories no ar em uma tarde: 2.24 · 2.25 · 2.26 · 2.27.** Commits `d1f75c6`, `a0d4277`,
