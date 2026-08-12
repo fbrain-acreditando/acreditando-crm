@@ -12,8 +12,24 @@ export interface FocusTrapProps {
   initialFocus?: string | React.RefObject<HTMLElement> | false;
   /** Return focus to this element on deactivate */
   returnFocus?: boolean;
-  /** Allow clicks outside the trap */
+  /** Clicking outside DESATIVA o trap (default: false) */
   clickOutsideDeactivates?: boolean;
+  /**
+   * Cliques fora do container são PERMITIDOS sem desativar o trap (default: true).
+   *
+   * ⚠️ Story 2.28 — este default já foi `clickOutsideDeactivates` (ou seja, `false`),
+   * e isso matava qualquer camada renderizada em **portal** por cima do trap: o
+   * `focus-trap` dá `stopImmediatePropagation` no clique "de fora", e todo conteúdo
+   * de portal está, por definição, fora do container. Custo real: o aviso "Você não
+   * salvou" (2.27) e o "Excluir negócio" ficavam com os botões **mortos** dentro do
+   * `DealDetailModal` — o segundo desde o primeiro commit, sem ninguém notar.
+   *
+   * Separar as duas opções é o ponto: `clickOutsideDeactivates: false` continua
+   * dizendo "clicar fora não me desliga"; `allowOutsideClick: true` diz "mas eu não
+   * cancelo o clique de ninguém". Confinamento de Tab — que é para o que o trap
+   * existe — não muda.
+   */
+  allowOutsideClick?: boolean;
 }
 
 /**
@@ -40,6 +56,7 @@ export const FocusTrap: React.FC<FocusTrapProps> = ({
   initialFocus,
   returnFocus = true,
   clickOutsideDeactivates = false,
+  allowOutsideClick = true,
 }) => {
   const getInitialFocus = (): string | HTMLElement | (() => HTMLElement | null) | false | undefined => {
     if (initialFocus === false) {
@@ -65,7 +82,7 @@ export const FocusTrap: React.FC<FocusTrapProps> = ({
           return false; // Don't deactivate, let parent handle it
         } : true,
         clickOutsideDeactivates,
-        allowOutsideClick: clickOutsideDeactivates,
+        allowOutsideClick,
         // Fallback to container if no focusable elements found
         fallbackFocus: () => {
           const container = document.querySelector('[data-focus-trap-fallback]');

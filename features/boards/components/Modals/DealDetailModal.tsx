@@ -1439,7 +1439,14 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   }
 
   return (
-    <FocusTrap active={isOpen} onEscape={tentarFechar}>
+    // Story 2.28 — o trap do card CEDE enquanto há um diálogo em portal por cima.
+    // Motivo: o Radix (`AlertDialog`) traz o próprio confinamento de foco, e dois
+    // traps ativos ao mesmo tempo disputam o `focusin` — o de fora puxa o foco de
+    // volta para o card e o usuário não consegue percorrer os botões do diálogo
+    // pelo teclado. Ceder não afrouxa a acessibilidade: transfere-a para quem está
+    // por cima, que é quem deve mandar. Enquanto NÃO há diálogo, o trap é o mesmo
+    // de sempre (AC5).
+    <FocusTrap active={isOpen && !avisoPendencia && !deleteId} onEscape={tentarFechar}>
       <div
         // Backdrop + positioning wrapper. Clicking outside the panel should close the modal.
         // No desktop, este modal não deve cobrir a sidebar de navegação.

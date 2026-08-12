@@ -128,8 +128,27 @@ vi.mock('@/hooks/usePersistedState', () => ({
   usePersistedState: (_key: string, initial: unknown) => [initial, vi.fn()],
 }));
 
+/**
+ * ⚠️ Story 2.28 — este mock é PASSTHROUGH de propósito, e essa escolha tem histórico:
+ * ele arrancava o `FocusTrap` real, e por isso 602 testes ficaram verdes enquanto os
+ * botões do aviso "Você não salvou" e do "Excluir negócio" estavam MORTOS na tela da
+ * Fernanda (o `focus-trap` cancelava o clique, porque conteúdo de portal fica fora do
+ * container do trap).
+ *
+ * ⇒ O comportamento com o trap REAL é coberto pelo teste irmão
+ *   `FecharComPendenciasDialog.trap.test.tsx`. Não apague um sem olhar o outro.
+ *
+ * O mock também REGISTRA o `active` recebido, para travar a segunda metade do conserto:
+ * o trap do card tem de CEDER enquanto houver diálogo em portal por cima.
+ */
+// `vi.hoisted` porque o `vi.mock` é içado para o topo do arquivo: uma `const` comum
+// ainda não existiria quando a fábrica do mock roda.
+const { focusTrapActiveSpy } = vi.hoisted(() => ({ focusTrapActiveSpy: vi.fn() }));
 vi.mock('@/lib/a11y', () => ({
-  FocusTrap: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  FocusTrap: ({ children, active }: { children: React.ReactNode; active: boolean }) => {
+    focusTrapActiveSpy(active);
+    return <>{children}</>;
+  },
   useFocusReturn: () => undefined,
 }));
 
@@ -364,5 +383,40 @@ describe('DealDetailModal — Salvar explícito (story 2.27)', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Onde reside')).toHaveValue('Guarulhos');
+  });
+});
+
+/**
+ * Story 2.28 — a segunda metade do conserto: o trap do card CEDE enquanto há um
+ * diálogo em portal por cima. Sem isso, dois traps disputam o `focusin` e o
+ * teclado não alcança os botões do aviso.
+ *
+ * Este teste vê o `active` que o modal PASSA ao trap; quem prova o comportamento
+ * do trap de verdade é `FecharComPendenciasDialog.trap.test.tsx`.
+ */
+describe('DealDetailModal — o trap cede ao diálogo por cima (story 2.28)', () => {
+  const ultimoActive = () => {
+    const calls = focusTrapActiveSpy.mock.calls;
+    return calls[calls.length - 1]?.[0];
+  };
+
+  it('sem diálogo, o trap do card está ATIVO', async () => {
+    focusTrapActiveSpy.mockClear();
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(ultimoActive()).toBe(true);
+  });
+
+  it('🎯 com o aviso "Você não salvou" aberto, o trap do card fica INATIVO', async () => {
+    const user = userEvent.setup();
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={vi.fn()} />);
+
+    await user.type(screen.getByLabelText('Onde reside'), 'Guarulhos');
+    focusTrapActiveSpy.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Fechar modal' }));
+    expect(await screen.findByText(/você não salvou/i)).toBeInTheDocument();
+
+    expect(ultimoActive()).toBe(false);
   });
 });
