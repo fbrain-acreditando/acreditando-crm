@@ -237,6 +237,15 @@ const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
   if (deal.tags !== undefined) db.tags = deal.tags;
   if (deal.lastStageChangeDate !== undefined) db.last_stage_change_date = deal.lastStageChangeDate || null;
   if (deal.customFields !== undefined) db.custom_fields = deal.customFields;
+
+  // Story 2.18 AC4 — a nota que a pessoa define na mão.
+  // `!== undefined` e não truthy: `leadScore: 0` e `leadScore: null` são valores
+  // que ela pode querer gravar ("nenhum critério bateu" e "voltar ao automático"),
+  // e um teste de verdade descartaria os dois.
+  if (deal.leadScore !== undefined) db.lead_score = deal.leadScore;
+  if (deal.leadScoreKnown !== undefined) db.lead_score_known = deal.leadScoreKnown;
+  if (deal.leadScoreSource !== undefined) db.lead_score_source = deal.leadScoreSource;
+
   if (deal.ownerId !== undefined) db.owner_id = sanitizeUUID(deal.ownerId);
 
   return db;

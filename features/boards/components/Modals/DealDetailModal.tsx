@@ -63,6 +63,7 @@ import { ActivityRow } from '@/features/activities/components/ActivityRow';
 import { formatPriorityPtBr } from '@/lib/utils/priority';
 import { BriefingDrawer } from '@/features/deals/components/BriefingDrawer';
 import { AIExtractedFields } from '@/features/deals/components/AIExtractedFields';
+import { PainelDaNota } from '@/features/deals/components/PainelDaNota';
 
 interface DealDetailModalProps {
   dealId: string | null;
@@ -450,6 +451,38 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
    * barra, ela acharia que salvou. Com salvamento automático isso era invisível;
    * com botão explícito, é promessa quebrada.
    */
+  /**
+   * Story 2.18 AC4 — ela define a nota na mão, e a alteração GANHA.
+   *
+   * `source = 'manual'` é o que faz o recálculo (a RPC e o cron de 10 min)
+   * pular este card para sempre. Sem isso, a nota dela seria desfeita sozinha
+   * em minutos — e ela concluiria, com razão, que o sistema desfaz o trabalho
+   * dela. Foi exatamente o que aconteceu no board em 11/08 (story 2.31).
+   *
+   * O denominador vira 5 porque a escala dela é de 1 a 5 — quando ela decide,
+   * ela decide sobre o todo, não sobre "o que a conversa revelou".
+   *
+   * Voltar ao automático limpa a nota e devolve o card ao cálculo: o cron
+   * repõe em no máximo 10 minutos.
+   */
+  const alterarNota = async (nota: number | null) => {
+    try {
+      await updateDeal(deal.id, {
+        leadScore: nota,
+        leadScoreKnown: nota === null ? null : 5,
+        leadScoreSource: nota === null ? null : 'manual',
+      });
+      addToast(
+        nota === null
+          ? 'Nota devolvida ao cálculo automático.'
+          : `Prioridade definida como ${nota} de 5.`,
+        'success'
+      );
+    } catch {
+      addToast('Não deu para salvar a prioridade.', 'error');
+    }
+  };
+
   const salvarCampos = async (): Promise<boolean> => {
     if (!temPendencia) return true;
     // UMA escrita com todos os campos de uma vez. Um UPDATE por campo geraria
@@ -894,6 +927,17 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                       </div>
                     )}
                   </div>
+                </div>
+
+                {/* Story 2.18 — a nota, o porquê dela (AC5) e o direito de discordar (AC4) */}
+                <div className="pt-4 border-t border-slate-100 dark:border-white/5">
+                  <PainelDaNota
+                    score={deal.leadScore}
+                    known={deal.leadScoreKnown}
+                    source={deal.leadScoreSource}
+                    detail={deal.leadScoreDetail}
+                    onAlterar={alterarNota}
+                  />
                 </div>
 
                 {/* AI EXTRACTED FIELDS (Zero Config BANT) */}
