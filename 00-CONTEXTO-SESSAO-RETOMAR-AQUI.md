@@ -8,6 +8,40 @@
 
 ---
 
+## Sessao 2026-08-12 (3) — ✅ story 2.30: o piscar do valor antigo depois de salvar
+
+> Commit **`8c20ba9`**, deployment `state=success`, alias **HTTP 200**.
+> ✅ Fecha o **AC7 da 2.29** — o valor salvo passou a aparecer **sem F5**.
+
+**Relato:** *"aparece rapidamente o antigo e muda para o novo"*.
+
+🔑 **O residuo era pista, nao cosmetica.** Antes da 2.29 o campo ficava PRESO no valor velho;
+agora aparece e **e corrigido** ⇒ alguem seguia escrevendo a leitura velha no cache, e o que
+mudou foi passar a existir quem corrigisse. **O piscar era o conserto ficando visivel.**
+
+**Causa:** `useUpdateDeal.onSettled` refetchava o board inteiro. O refetch parte logo apos a
+escrita e aterrissa com leitura stale por cima do otimismo.
+
+📌 **Ja estava diagnosticado no repo — no hook irmao:** `useMoveDeal.ts:336-343` descreve o
+mecanismo palavra por palavra e por isso NAO invalida. O caminho de mover card resolveu; o de
+editar campo manteve. **O defeito nao era desconhecido, era desigual.**
+
+**Conserto:** `refetchType: 'none'` — a rede de seguranca fica (query segue marcada stale, e o
+`refetchOnMount` do `useDealsByBoard` reconcilia na proxima montagem), sai so a corrida. De
+quebra some um refetch de 4 consultas a cada campo salvo.
+
+**Oraculo:** `git stash` do conserto ⇒ o teste reprova com
+`expected 'Santos' to be 'Guarulhos'` — o sintoma relatado, **literalmente**.
+
+⚖️ **Fora de escopo de proposito:** `useCreateDeal` e `useDeleteDeal` seguem refetchando — la o
+refetch TRAZ o enriquecimento (`contactName`, `companyName`, `stageLabel`) que o otimismo nao
+tem, em vez de competir com ele.
+
+Gates: lint 0 · typecheck · **674 testes** · build. ⏳ **AC4 ABERTO:** falta ela salvar e nao ver
+o piscar.
+
+---
+
 ## Sessao 2026-08-12 (2) — ✅ story 2.29: UMA traducao so do banco para a tela
 
 > Commit **`538e6fb`**, deployment `state=success`, alias **HTTP 200**. SDC completo.
