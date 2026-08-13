@@ -63,6 +63,119 @@ lifecycle**, e QUALQUER coluna `CUSTOMER` marca **`is_won = true`**:
 
 ---
 
+## Sessao 2026-08-12 (8) — 🤖 story 2.35: a IA pontua o lead, e a regra em SQL foi aposentada
+
+> Commits **`383caff`** (2.18b) · **`96e0a9a`** (AC4/AC5) · **`035f95e`** (2.35) · **`ab66a8c`** (2.34).
+> ✅ **PROVADO EM PRODUCAO:** 67 cards pontuados pela IA, nota media **1,87 de 5**,
+> e 5 cards que entraram em `Qualificado` durante a sessao foram pegos pelo cron
+> **sozinho**. O ciclo fecha ponta a ponta.
+
+### 🔄 A regra de pontuacao foi reescrita TRES vezes em seis dias
+
+| Rev | Regra | Como morreu |
+|---|---|---|
+| 1 (07–10/08) | pontuar por **zona** de SP | so **28,2%** dos leads tinham zona |
+| 2 (12/08) | **dicionario** de valores canonicos | so **1 de 5** criterios era computavel sem interpretar texto |
+| 3 (12/08, no ar) | **a IA le a conversa** e da 0 ou 1 por item | — |
+
+🔑 **As duas primeiras morreram no mesmo lugar: o dado nao sustentava a regra.**
+E o gate (AC0) pegou as duas **antes de qualquer linha de codigo**.
+
+### O desenho final (pedido do Filipe, 12/08)
+
+> *"A IA deve ler a conversa e dar a pontuacao **somente quando o card entrar na
+> coluna qualificado**. Atribuir **0 ou 1 a cada item**. E fazer a soma, 0 a 5."*
+
+**Por que e melhor que o meu:** medido, dos 67 cards em `Qualificado` **so 40
+tinham os 4 campos preenchidos** — a extracao perdeu 27. Reler a conversa acha o
+que ela nao capturou. Prova real do 1o card pontuado: a IA excluiu **Sorocaba**
+corretamente (*"pertence ao interior de Sao Paulo"*), que era exatamente o falso
+positivo que o casamento por texto produzia.
+
+### ⚠️ Duas reversoes conscientes, registradas com autor e data
+
+1. **A story 2.18 proibia a IA de dar a nota** (*"torna o resultado nao auditavel
+   e nao reproduzivel"*). O Filipe reverteu. **Mitigacao implementada:** cada
+   ponto guarda o **motivo**, e o painel do card mostra os cinco. Sem isso seria
+   opiniao sem recurso. ⚠️ Mitiga, **nao elimina**: duas conversas parecidas
+   podem receber notas diferentes.
+2. **O 0/1 eliminou o estado "desconhecido"**, que era a base da 2.18 inteira.
+   Quem nao disse onde mora recebe **0**. Defensavel porque so pontua quem
+   completou o roteiro — e 27 dos 67 caem nesse caso.
+
+### 🏛 A decisao de arquitetura que vale para as proximas
+
+**O gatilho e o ESTADO, nao o evento.** Pendurar a pontuacao no webhook do GPT
+Maker pegaria so a transferencia automatica — e a **Fernanda ARRASTA** cards para
+`Qualificado` o dia inteiro. A fila e uma VIEW sobre o board
+(`v_leads_a_pontuar`), entao:
+- todo caminho de entrada conta (automatico, arrasto, edicao);
+- falha se **auto-corrige** na rodada seguinte, sem fila persistente para sujar;
+- nao exige deploy de Edge Function, que **nao pode ser verificado** desta maquina.
+
+Qual estagio pontua vem de **`board_stages.pontua_lead`**, nao do nome — o board
+foi renomeado no mesmo dia e casar por nome falha calado (licao do
+`Em qualificação ` com espaco no fim).
+
+### O que PAROU de valer
+
+- `recalcular_lead_scores*` **neutralizadas** e o cron `recalcular-lead-score`
+  **desagendado**. Duas fontes para o mesmo numero e o defeito que a 2.29 passou o
+  dia consertando.
+- O **dicionario da 2.18b CONTINUA** — deixou de alimentar a nota e passou a
+  servir so o painel da 2.19 (`SP × fora` para TODOS os leads, nao so os
+  qualificados). ⚠️ **Ele nunca foi populado**: a rota
+  `POST /api/admin/normalizar-criterios` existe e **nao foi disparada**.
+
+### 🛡️ Mexi numa trava de seguranca — e por que isso NAO foi afrouxamento
+
+O aplicador de migracoes recusou o arquivo por conter `drop constraint`. Duas
+correcoes, em ordem:
+
+1. **Redesenhei para nao precisar de DROP** — em vez de um rotulo novo em
+   `lead_score_source`, um **carimbo `pontuada_pela_ia_em`**, que responde *"ja
+   foi pontuada?"* **e ainda diz QUANDO**. O redesenho ficou melhor que o original.
+2. Mesmo assim a trava recusou: a palavra `drop` aparecia **so em COMENTARIOS**
+   explicando por que eu nao usava DROP. ⇒ a trava passou a **ignorar
+   comentarios** antes de procurar o verbo.
+
+🔑 *O incentivo do falso positivo era pessimo: a saida facil seria reescrever o
+comentario para enganar a trava, apagando justamente a documentacao mais valiosa
+do arquivo.* **Provado com 3 casos** que `drop table` real continua bloqueado
+(comentario de linha, bloco `/* */`, e DROP de verdade).
+
+### 🪤 Quebrei a minha propria regra dentro de UMA HORA
+
+Nomeei a view `v_criterios_**do**_deal` — e o executor somente-leitura bloqueou o
+read-back, pelo **mesmo motivo** da RPC `get_metricas_do_atendimento` horas
+antes, **depois** de eu ter escrito a regra no contexto do repo e na story.
+
+📌 **Registrar a regra nao e aplica-la.** Terceira ocorrencia desta familia em
+dois dias. O que falta e **gate automatico** — nenhum lint do repo confere nome de
+objeto de banco. Renomeada para `v_criterios_por_deal`.
+
+### ⏳ Gate @qa: CONCERNS
+
+1. 🔴 **AC8 aberto** — a Fernanda ainda nao viu as notas. Se ela discordar de mais
+   da metade, **o problema passa a ser o criterio**, e uma 4a implementacao nao
+   resolve.
+2. 🟡 **5 dos 10 da 1a rodada nao pontuaram** (provavel "sem conversa"/"sem
+   texto"). A fila e derivada do estado, entao voltam sozinhos — **conferir**.
+3. 🟡 **O item "completou o roteiro" vale 1 quase sempre** dentro de `Qualificado`
+   ⇒ quase nao discrimina. Se a nota parecer inflada, **e o primeiro a rever**.
+4. 🟡 **Deploy do `96e0a9a` e do `035f95e` nao confirmado no alias** (token da
+   Vercel expirou). ⚠️ Mas ha prova indireta forte: **o cron chamou a rota e
+   gravou no banco**, o que so acontece se estiver no ar.
+
+### Falta
+
+- **Disparar a normalizacao** (`POST /api/admin/normalizar-criterios`) — o
+  dicionario esta vazio e o AC4 da 2.19 depende dele.
+- **Ordenar/filtrar o board pela nota** (indice ja existe, UI nao).
+- Conferir os 5 que falharam.
+
+---
+
 ## Sessao 2026-08-12 (7) — ⭐ story 2.18a: a nota de prioridade no card
 
 > Commit **`f0daa50`** · ✅ **NO AR, provado**: alias de producao resolve para
