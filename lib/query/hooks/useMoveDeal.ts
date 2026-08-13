@@ -17,6 +17,13 @@ import { dealsService } from '@/lib/supabase';
 import { boardsService } from '@/lib/supabase/boards'; // Added
 import { activitiesService } from '@/lib/supabase/activities';
 import { contactsService } from '@/lib/supabase/contacts';
+import { useOptionalToast } from '@/context/ToastContext';
+import {
+  deveAvisarDeFalha,
+  mensagemDeFalhaAoMover,
+  nomeDoEstagioDestino,
+  resumoTecnico,
+} from '@/features/deals/avisoDeMovimentacao';
 import type { Deal, DealView, Board, Activity } from '@/types';
 
 interface MoveDealParams {
@@ -49,6 +56,10 @@ interface MoveDealContext {
  */
 export const useMoveDeal = () => {
   const queryClient = useQueryClient();
+  // `useOptionalToast` (e não `useToast`) de propósito: este hook é exercitado em
+  // teste sem ToastProvider, e um erro "must be used within a ToastProvider"
+  // DENTRO do tratamento de falha trocaria o card silencioso por tela branca.
+  const { showToast } = useOptionalToast();
 
   return useMutation<MoveDealResult, Error, MoveDealParams, MoveDealContext>({
     mutationFn: async ({ dealId, targetStageId, lossReason, deal, board, lifecycleStages, explicitWin, explicitLost }) => {
@@ -325,10 +336,33 @@ export const useMoveDeal = () => {
       return { previousDeals };
     },
 
-    // Rollback on error
-    onError: (_err, _variables, context) => {
+    // Rollback on error — E O AVISO (story 2.37)
+    //
+    // 🛑 Até 13/08 este bloco recebia o erro como `_err` e o DESCARTAVA: o card
+    // voltava para a coluna de origem e nada era dito. A Fernanda moveu um card
+    // às 14:58, saiu para apresentar a um casal, e só ~1h30 depois viu o card
+    // fora do lugar — refez o trabalho e, ao refazer, SOBRESCREVEU o motivo da
+    // perda (`vaquinha` -> `pedido de ajuda`).
+    //
+    // 📌 Era a pendência nº 3 do CRM, registrada em 12/08 como "próxima
+    // armadilha da mesma família". Mordeu no dia seguinte. Silêncio em
+    // tratamento de erro não é neutro: transforma falha do sistema em
+    // desconfiança da gravação.
+    onError: (erro, variables, context) => {
       if (context?.previousDeals) {
         queryClient.setQueryData(DEALS_VIEW_KEY, context.previousDeals);
+      }
+
+      // O detalhe técnico continua existindo — só não vai para a tela dela.
+      console.error('[useMoveDeal] falha ao mover card:', resumoTecnico(erro));
+
+      // Abortar por navegação/desmontagem não é falha de gravação: avisar aí
+      // ensinaria a ignorar o aviso.
+      if (deveAvisarDeFalha(erro)) {
+        showToast(
+          mensagemDeFalhaAoMover(nomeDoEstagioDestino(variables?.board, variables?.targetStageId)),
+          'error'
+        );
       }
     },
 

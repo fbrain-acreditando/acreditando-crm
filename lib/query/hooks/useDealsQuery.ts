@@ -151,6 +151,12 @@ export const useDealsView = (filters?: DealsFilters) => {
       });
     },
     staleTime: 2 * 60 * 1000, // 2 minutes
+    // Story 2.37 — igual ao `useDealsByBoard`, e igual DE PROPÓSITO: sem filtro,
+    // este hook compartilha a MESMA query key do board (`DEALS_VIEW_KEY`).
+    // Observadores da mesma query com opções divergentes tornam o comportamento
+    // no foco dependente de qual componente está montado — que é exatamente o
+    // tipo de "depende" que a story 2.29 passou o dia removendo.
+    refetchOnWindowFocus: true,
     enabled: !authLoading && !!user, // Only fetch when auth is ready
   });
 };
@@ -193,9 +199,20 @@ export const useDealsByBoard = (boardId: string) => {
     // Um MOVE não deve disparar refetch de deals — o otimismo + o Realtime (setQueryData
     // direto) são a fonte de verdade; um refetch aqui competiria com o otimismo e podia
     // trazer leitura stale. Mudanças ao vivo (outra aba/usuário) chegam pelo Realtime
-    // global (RealtimeBridge). Mesmo padrão do useBoards. (Obs.: refetchOnWindowFocus é
-    // `false` no default global — não há reconciliação por foco de aba.)
+    // global (RealtimeBridge). Mesmo padrão do useBoards.
     refetchOnMount: (query) => query.state.dataUpdatedAt === 0 || query.state.isInvalidated,
+    // ⚡ Story 2.37 — RECONCILIAÇÃO AO VOLTAR PARA A ABA (era `false` no default global).
+    //
+    // A Fernanda moveu um card às 14:58, saiu para apresentar a um casal e voltou
+    // ~1h30 depois: o board ainda mostrava a coluna VELHA, enquanto o banco tinha
+    // a nova (medido). A sincronização dependia inteiramente de o evento de
+    // Realtime chegar — e aba em segundo plano por 1h30 derruba essa aposta.
+    //
+    // 🔑 Por que isto NÃO reintroduz a corrida que o comentário acima teme: o
+    // refetch por foco só acontece com dado STALE, e o `staleTime` é de 2 min —
+    // que o `setQueryData` do otimismo e do Realtime RENOVA. Ela move e troca de
+    // aba: dado fresco, nada acontece. Ela fica 1h30 fora: dado velho, reconcilia.
+    refetchOnWindowFocus: true,
     enabled: !authLoading && !!user && !!boardId && !boardId.startsWith('temp-'),
   });
 };
