@@ -168,6 +168,11 @@ export {
   type MetricasDeAtendimento,
 } from './useMetricasDeAtendimentoQuery';
 
+export {
+  useFilaDeAtendimentoQuery,
+  type FilaDeAtendimento,
+} from './useFilaDeAtendimentoQuery';
+
 // Org Members
 export {
   useOrgMembersQuery,

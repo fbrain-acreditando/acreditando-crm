@@ -150,6 +150,16 @@ export const queryKeys = {
     },
 
     /**
+     * Fila de atendimento — Bloco A do painel (story 2.19).
+     *
+     * Sem `period` na chave de propósito: fila de trabalho é sempre "agora".
+     */
+    filaDeAtendimento: {
+        all: ['filaDeAtendimento'] as const,
+        byOrg: (orgId: string) => ['filaDeAtendimento', orgId] as const,
+    },
+
+    /**
      * Organization members query keys (for filters/dropdowns).
      */
     orgMembers: {

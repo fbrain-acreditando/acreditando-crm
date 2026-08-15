@@ -15,6 +15,7 @@ import { MessagingMetricsSection } from './components/MessagingMetricsSection';
 import { useDashboardMetrics, PeriodFilter } from './hooks/useDashboardMetrics';
 import { PeriodFilterSelect } from '@/components/filters/PeriodFilterSelect';
 import { LazyFunnelChart, ChartWrapper } from '@/components/charts';
+import { BlocoASection } from './components/BlocoASection';
 import { BlocoBSection } from './components/BlocoBSection';
 
 /**
@@ -127,8 +128,21 @@ const DashboardPage: React.FC = () => {
       </div>
 
       {/*
-        Bloco B da story 2.19 — os números que ela apresenta.
-        Ficam ANTES de tudo: é o que ela abre a tela para ver.
+        Bloco A da story 2.19 — a fila viva: o que ela faz AGORA.
+
+        Vem antes do Bloco B de propósito, e a ordem foi decidida por um áudio
+        dela (14/08): lendo só o retrospectivo, ela concluiu que "meu chefe vai
+        me substituir por uma IA (…) o que a Fernanda faz? Nada". O Bloco B mede
+        o que a IA fez; este mede a fila que nenhuma automação resolve.
+
+        Não recebe `period`: fila de trabalho é sempre "agora".
+      */}
+      <div className="shrink-0">
+        <BlocoASection />
+      </div>
+
+      {/*
+        Bloco B da story 2.19 — os números que ela apresenta no fechamento.
       */}
       <div className="shrink-0">
         <BlocoBSection period={period} />
