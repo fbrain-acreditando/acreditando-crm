@@ -8,6 +8,131 @@
 
 ---
 
+## Sessao 2026-08-14 (12) — 🛑 tres AC0 seguidos derrubaram tres candidatos a story
+
+> **Nada foi implementado nesta rodada, e o resultado dela vale mais que uma story.**
+> Os tres itens que a lista de pendencias dava como proximos **nao tem vitima hoje**.
+
+| Candidato | Premissa registrada | O que a medicao (14/08) diz |
+|---|---|---|
+| **Divida da 2.25** (pendencia nº 1 do CRM) | *"a IA e a API publica enxergam deal excluido"* | **0 deals excluidos** — os 431 de julho foram apagados FISICAMENTE (2.24). Nao ha o que vazar. Real e **inerte**, a uma acao dela de existir |
+| **Cifrao de dolar** (12 instancias) | `$` num CRM brasileiro | **0 dos 379 deals tem valor.** Mostra `$0`. Real, sem vitima |
+| **Crash do `next/image`** (`KanbanList.tsx:100`) | *"crash garantido na visao de lista"* | Guarda faltando e real (**3 dos 4 usos guardam**), mas **o crash NAO foi provado** — o app nao roda nesta maquina (sem `.env.local`). Herdei a palavra "garantido" de um registro, nao de uma medicao |
+
+📌 **O padrao comum aos tres primeiros: o defeito nao e desconhecido, e DESIGUAL.** O `DealCard`
+guarda o avatar, o `DealCockpit` formata em BRL, e os vizinhos nao receberam. **Terceira ocorrencia
+no mesmo dia** (a 2.39 foi a mesma coisa). ⇒ Isso nao e uma story, e **divida de varredura de
+classe**, e merece uma so.
+
+### 🎯 O que TEM vitima hoje — medido, e e o proximo candidato
+
+Ela classificou **7 perdas hoje** (`Perdido` 38 → **45**). Motivos, medidos:
+
+| Achado | Numero |
+|---|---|
+| **`Distancia`** | **15 de 45 (33%)** — o dobro de `Preco muito alto` (7). ✅ **Confirma o que ela disse em 07/08:** *"a objecao e logistica, nao preco — nao tem quem me leve"* |
+| **Duplicatas de grafia** | `cliente bom dia` · `cliente de bom dia` · `cliente bom dia e oracao` (4) · `livre` × `Livre` (2) · 3 variantes de *atendimento domiciliar* · 2 de *idade minima* |
+| 🔑 **"Nao era lead" escondido dentro de "perdido"** | ~**8 de 45 (18%)**: *"mandou mensagem somente para elogiar"* · *"relata ja ter um fisio, contato para elogiar o ACR"* · *"assunto aleatorio"* · *"clicou errado"* · as 4 variantes de *"cliente bom dia"* |
+
+⚠️ **O ranking do Bloco C e implementavel AGORA** (nao depende da normalizacao, que so trava o
+`SP × fora`). **Mas se subir como esta, o nº 2 depois de `Distancia` vai ser ruido de gente que
+nunca quis comprar.**
+
+🛑 **DECISAO PENDENTE DO FILIPE, e nao e de codigo:** separar *"nao era lead"* de *"perdemos a
+venda"* **muda o que o funil dela significa** e derruba a taxa de perda em ~18% de uma vez, num
+numero que vai a diretoria. **E decisao de operacao.** Opcoes registradas: (1) Bloco C com a
+categoria separada, ela validando a classificacao; (2) Bloco C cru, so normalizando grafia.
+
+---
+
+## Sessao 2026-08-14 (11) — 🩹 story 2.40: arquivar em `Clientes` APAGAVA a venda
+
+> Commit **`c68ee30`** · ✅ **NO AR:** alias `acreditando-crm-sandy.vercel.app` resolve para
+> `c68ee30`, `READY`, `target: production`, `aliasError: null`, dominio **HTTP 200**.
+
+`useMoveDeal` tinha um ramo *"reopen if was closed"* que zerava `is_won`/`is_lost` e anulava
+`closed_at` ao mover card fechado para coluna comum. A intencao e legitima — arrastar de volta ao
+funil **e** reabrir. O problema: **3 das 13 colunas nao sao etapa, sao CATEGORIA** (`Clientes`,
+`Profissional`, `Projeto Social` — 2.33 e 2.34).
+
+### 🛑 Ja mordeu, e o lote foi medido
+
+| contato | marcado `Ganho` | arquivado |
+|---|---|---|
+| (sem nome) | 11/08 10:43 | **13/08 11:53:30** |
+| Paulo | 11/08 16:19 | 13/08 11:53:36 |
+| Fillipe (profissional) | 11/08 16:26 | 13/08 11:53:59 |
+| Edir | 12/08 09:47 | 13/08 11:53:33 |
+
+Os quatro arquivados **dentro de 29 segundos** (lote), e hoje com `is_won = false`, `closed_at = null`.
+
+⚠️ **A story NAO afirma que eram vendas de agosto.** Se eram clientes antigos que passaram por
+`Ganho` de passagem, o *"Ganho: 1"* continua certo — e **quem sabe e a Fernanda**. Em 13/08 eu
+afirmei que um numero dela estava errado e **ela me corrigiu com a tela aberta na frente**. O que
+esta provado e o **MECANISMO**; o significado e dela. ❓ **Perguntar a ela.**
+
+### A decisao de arquitetura
+
+O sinal virou **`board_stages.arquiva_sem_reabrir`** (coluna do banco), nao inferencia:
+- por `linked_lifecycle_stage is null` **nao da**: `Lead novo` tambem e null e ali reabrir e o
+  CERTO — **ha um teste so para travar isso**;
+- por **nome** e proibido neste repo, com cicatriz (`Em qualificacao ` tem espaco no fim, 2.33).
+⇒ Mesma arquitetura do `pontua_lead` (2.35): *qual estagio faz o que vem da coluna, nao do nome.*
+Default `false`, as tres marcadas **por UUID**.
+
+Gates: lint 0 · typecheck 0 · **778 testes** (+6) · build ok. Read-back: coluna existe (o aplicador
+detectou 1 de 1 **desta vez**) e so as 3 colunas de categoria marcadas.
+
+### ⏳ Aberto
+
+- 🔴 **NAO restaurei as 4 vendas apagadas.** `closed_at` e recuperavel pelo `activities` (a data do
+  *"Moveu para Ganho"*), mas **reescrever o numero de vendas de um mes que ela ja apresentou e
+  decisao dela**. Dado esta na tabela acima.
+- 🟡 Falta ela arquivar uma venda **do mes corrente** e ver o numero de pe (prova em uso).
+
+---
+
+## Sessao 2026-08-14 (11b) — 📝 story 2.39: a nota que ela escreve e nao acha
+
+> Commit **`1f9f4e5`** · ✅ **NO AR**, alias resolvido, HTTP 200.
+
+Pergunta dela, em audio: *"as informacoes que eu coloco ali na timeline do cliente, **onde fica?
+Onde que eu visualizo depois?** Quando eu tiver que fazer um **follow-up**, onde que eu consigo
+olhar essas notas?"*
+
+### ✅ MEDIDO PRIMEIRO: a nota NAO se perde
+
+A dela estava integra — card do **Francisco Melo**, `NOTE`, **14/08 11:10:44**, texto
+*"Informacoes enviadas, vai avaliar o financeiro pois reside em Cubatao"*. **O defeito era de
+RECUPERACAO.**
+
+### 🛑 E eram QUATRO portas fechadas, nao uma
+
+| # | Porta | Medida |
+|---|---|---|
+| 1 | Filtro por tipo sem "Nota" | Oferecia `Ligacoes`·`Reunioes`·`Emails`·`Tarefas` — **0 linhas cada**. Os unicos tipos existentes: `NOTE` **54** e `STATUS_CHANGE` **839** ⇒ *as 4 opcoes devolviam vazio, SEMPRE* |
+| 2 | Texto invisivel | `ActivityRow` renderizava `title`, **nunca** `description`. **54 de 54** notas tem texto |
+| 3 | Nota aparecia **riscada e esmaecida** | **54 de 54** tem `completed = true`, e a linha tachava tudo que fosse concluido ⇒ *o trabalho dela parecia tarefa cancelada* |
+| 4 | Busca cega | So olhava `title`, e ha **1 unico titulo distinto** entre as 54 (*"Nota Adicionada"*) ⇒ procurar *"Cubatao"* nao achava nada |
+
+🔑 **Cada uma sozinha seria contornavel. Juntas, fechavam todos os caminhos** — e e por isso que ela
+perguntou *"onde fica?"* em vez de reclamar de um botao.
+
+**Decisao que governa o resto: nota e REGISTRO, nao tarefa.** O `completed = true` e detalhe de
+armazenamento; trata-lo como estado de tarefa foi o que fez o trabalho dela parecer cancelado.
+⇒ nota nao risca, nao tem botao de concluir, nao ganha selo de ATRASADO.
+
+⚖️ **Fora de escopo de proposito:** as 4 opcoes sem linha nenhuma **ficam** — o modal de criar
+atividade ainda as oferece, e remove-las esconderia um caminho que existe. **Se em 30 dias
+continuarem em zero, saem.**
+
+Gates: lint 0 · typecheck 0 · **772 testes** (+12) · build ok. Oraculo: **3 dos 12 reprovam** com o
+comportamento antigo (um por defeito real), **9 controles** passam dos dois lados.
+
+⏳ **AC5-b ABERTO:** ela filtrar por *"Minhas anotacoes"* e achar a do Francisco Melo **sem abrir o card**.
+
+---
+
 ## Sessao 2026-08-14 (10) — 📊 story 2.19 BLOCO A: o painel passou a medir o lado dela
 
 > ⚠️ **Esta story nao nasceu de backlog. Nasceu de um audio da Fernanda, e o motivo importa mais
