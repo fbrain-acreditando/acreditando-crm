@@ -50,7 +50,19 @@ export const ActivitiesFilters: React.FC<ActivitiesFiltersProps> = ({
           value={filterType}
           onChange={e => setFilterType(e.target.value as Activity['type'] | 'ALL')}
         >
+          {/*
+            ⚠️ `NOTE` e `STATUS_CHANGE` faltavam aqui — e são os DOIS ÚNICOS tipos
+            que existem na base (54 notas e 839 movimentações, medidos em 14/08).
+            As quatro opções abaixo tinham ZERO linha cada uma: o filtro inteiro
+            devolvia vazio, sempre. Elas ficam porque o modal de criar atividade
+            ainda as oferece — mas as duas primeiras são as que ela usa.
+
+            "Minhas anotações" vem primeiro de propósito: é a pergunta que
+            originou esta story (*"onde que eu consigo olhar essas notas?"*).
+          */}
           <option value="ALL">Todos os tipos</option>
+          <option value="NOTE">Minhas anotações</option>
+          <option value="STATUS_CHANGE">Movimentações de card</option>
           <option value="CALL">Ligações</option>
           <option value="MEETING">Reuniões</option>
           <option value="EMAIL">Emails</option>

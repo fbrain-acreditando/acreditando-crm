@@ -1,8 +1,9 @@
 import React from 'react';
 import Link from 'next/link';
-import { Phone, Users, Mail, CheckSquare, Clock, Trash2, Edit2, CheckCircle2, Circle, Building2 } from 'lucide-react';
+import { Phone, Users, Mail, CheckSquare, Clock, Trash2, Edit2, CheckCircle2, Circle, Building2, StickyNote } from 'lucide-react';
 import { useBoards } from '@/lib/query/hooks/useBoardsQuery';
 import { Activity, Deal, Contact, Company } from '@/types';
+import { ehNota, deveRiscar, corpoDaLinha } from '../regrasDaLista';
 
 interface ActivityRowProps {
     activity: Activity;
@@ -37,6 +38,7 @@ const ActivityRowComponent: React.FC<ActivityRowProps> = ({
             case 'MEETING': return <Users size={16} className="text-purple-500" />;
             case 'EMAIL': return <Mail size={16} className="text-green-500" />;
             case 'TASK': return <CheckSquare size={16} className="text-orange-500" />;
+            case 'NOTE': return <StickyNote size={16} className="text-amber-500" />;
             case 'STATUS_CHANGE': return <CheckCircle2 size={16} className="text-slate-500" />;
             default: return <Circle size={16} className="text-slate-400" />;
         }
@@ -101,7 +103,11 @@ const ActivityRowComponent: React.FC<ActivityRowProps> = ({
     };
 
     const isSystemActivity = activity.type === 'STATUS_CHANGE';
-    const isOverdue = new Date(activity.date) < new Date() && !activity.completed;
+    const isNote = ehNota(activity);
+    const riscado = deveRiscar(activity);
+    const corpo = corpoDaLinha(activity);
+    // Nota não vence: ela é registro do que aconteceu, não compromisso futuro.
+    const isOverdue = !isNote && new Date(activity.date) < new Date() && !activity.completed;
 
     if (isSystemActivity) {
         return (
@@ -127,7 +133,7 @@ const ActivityRowComponent: React.FC<ActivityRowProps> = ({
     }
 
     return (
-        <div className={`group flex items-center gap-4 p-4 bg-white dark:bg-dark-card border border-slate-200 dark:border-white/5 rounded-xl hover:border-primary-500/50 dark:hover:border-primary-500/50 transition-all ${activity.completed ? 'opacity-60' : ''} ${isSelected ? 'border-primary-500 dark:border-primary-500 bg-primary-50/50 dark:bg-primary-500/10' : ''}`}>
+        <div className={`group flex items-center gap-4 p-4 bg-white dark:bg-dark-card border border-slate-200 dark:border-white/5 rounded-xl hover:border-primary-500/50 dark:hover:border-primary-500/50 transition-all ${riscado ? 'opacity-60' : ''} ${isSelected ? 'border-primary-500 dark:border-primary-500 bg-primary-50/50 dark:bg-primary-500/10' : ''}`}>
             {onSelect && (
                 <input
                     type="checkbox"
@@ -137,22 +143,30 @@ const ActivityRowComponent: React.FC<ActivityRowProps> = ({
                 />
             )}
 
-            <button
-                onClick={() => onToggleComplete(activity.id)}
-                className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${activity.completed
-                    ? 'bg-green-500 border-green-500 text-white'
-                    : 'border-slate-300 dark:border-slate-600 hover:border-green-500 text-transparent hover:text-green-500'
-                    }`}
-            >
-                <CheckCircle2 size={14} fill="currentColor" />
-            </button>
+            {/*
+              Nota não tem o que "concluir" — é registro, não compromisso. O
+              botão some para ela em vez de ficar marcado de verde: as 54 notas
+              nascem com `completed = true`, e o botão dava a entender que ela
+              tinha marcado como feito algo que nunca foi tarefa.
+            */}
+            {!isNote && (
+                <button
+                    onClick={() => onToggleComplete(activity.id)}
+                    className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${activity.completed
+                        ? 'bg-green-500 border-green-500 text-white'
+                        : 'border-slate-300 dark:border-slate-600 hover:border-green-500 text-transparent hover:text-green-500'
+                        }`}
+                >
+                    <CheckCircle2 size={14} fill="currentColor" />
+                </button>
+            )}
 
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                     <span className="p-1.5 bg-slate-100 dark:bg-white/5 rounded-lg">
                         {getActivityIcon(activity.type)}
                     </span>
-                    <h3 className={`font-medium text-slate-900 dark:text-white truncate ${activity.completed ? 'line-through text-slate-500' : ''}`}>
+                    <h3 className={`font-medium text-slate-900 dark:text-white truncate ${riscado ? 'line-through text-slate-500' : ''}`}>
                         {formatTitle(activity.title)}
                     </h3>
                     {isOverdue && (
@@ -161,6 +175,21 @@ const ActivityRowComponent: React.FC<ActivityRowProps> = ({
                         </span>
                     )}
                 </div>
+
+                {/*
+                  🔑 O TEXTO DA NOTA. Ele nunca foi para a tela — e é a única
+                  coisa que importa numa nota. As 54 existentes compartilham o
+                  título "Nota Adicionada", então sem esta linha a lista mostrava
+                  54 vezes a mesma frase e nada do conteúdo. Foi por isso que a
+                  pergunta dela ("onde eu olho essas notas?") não tinha resposta.
+                  `whitespace-pre-line` preserva as quebras que ela digitou.
+                */}
+                {corpo && (
+                    <p className="text-sm text-slate-700 dark:text-slate-300 mb-1.5 whitespace-pre-line break-words">
+                        {corpo}
+                    </p>
+                )}
+
                 <div className="flex items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
                     {deal && (
                         <span className="flex items-center gap-1.5 text-primary-600 dark:text-primary-400 font-medium">

@@ -12,6 +12,7 @@ import {
 import { useDeals } from '@/lib/query/hooks/useDealsQuery';
 import { useContacts, useCompanies } from '@/lib/query/hooks/useContactsQuery';
 import { useRealtimeSync } from '@/lib/realtime/useRealtimeSync';
+import { combinaComABusca } from '../regrasDaLista';
 
 /**
  * Hook React `useActivitiesController` que encapsula uma lógica reutilizável.
@@ -91,7 +92,10 @@ export const useActivitiesController = () => {
     return activities
       .map((activity) => ({ activity, ts: Date.parse(activity.date) }))
       .filter(({ activity, ts }) => {
-        const matchesSearch = (activity.title || '').toLowerCase().includes(q);
+        // Busca no título E no texto: as 54 notas compartilham o título
+        // "Nota Adicionada", então procurar só por título nunca acha uma nota.
+        // O que distingue uma da outra vive inteiramente na `description`.
+        const matchesSearch = combinaComABusca(activity, q);
         const matchesType = filterType === 'ALL' || activity.type === filterType;
         const isPending = !activity.completed;
 
