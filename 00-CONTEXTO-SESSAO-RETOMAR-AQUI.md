@@ -8,6 +8,210 @@
 
 ---
 
+## Sessao 2026-08-14 (10) — 📊 story 2.19 BLOCO A: o painel passou a medir o lado dela
+
+> ⚠️ **Esta story nao nasceu de backlog. Nasceu de um audio da Fernanda, e o motivo importa mais
+> que o codigo.**
+
+### O relato que reordenou a prioridade
+
+Lendo **so o Bloco B**, ela concluiu, em audio, na manha de 14/08:
+
+> *"336 lits que chegaram, 115 chegaram ate mim, 221 a IA resolveu sozinha e eu abordei 19. Falei
+> assim: **meu chefe vai me substituir por um IA**, basicamente, por esses dados aqui. Ele vai
+> falar: **o que a Fernanda faz? Nada.**"*
+
+🔑 **Ela nao interpretou mal — o painel disse aquilo mesmo.** O Bloco B mede **o que a IA fez** e
+nao media **o que so ela faz**, entao o numero dela parece pequeno **por construcao**. E os
+*"19 abordados"* contam quem ela **INICIOU**, nao quem ela **ATENDEU** (as 115).
+
+⇒ **O Bloco A deixou de ser "o proximo bloco do painel" e virou o que impede o painel de prejudicar
+a usuaria que o encomendou.** Fonte: `06-Fontes-Raw/Transcricoes/2026-08-14 - Audios Fernanda...`
+
+⚠️ **E ja houve efeito de 2a ordem:** ela passou a **segurar a propria entrada** num lead *"para ver
+se depois a gente consegue muda-la naqueles numeros"*. O indicador comecou a governar o trabalho
+**antes de existir uma leitura combinada**. ❓ Frase truncada na transcricao — **confirmar com ela**.
+
+### AC0 — medido antes de escrever, e reproduz entre dois dias
+
+| Numero | 13/08 | 14/08 |
+|---|---|---|
+| Conversas transferidas | 157 | **162** |
+| Esperando resposta dela | 64 | **67** |
+| Passou de 24h | 54 | **61** |
+| Prontos para ligar | 23 | **23** |
+
+### 🛑 O AC0 achou a ressalva que foi para a TELA
+
+*"23 prontos para ligar"* e **23 de 68 cards que a IA leu** — a IA da 2.35 so pontua quem entra em
+`Qualificado`, e sao **68 de 370** vivos. Sem o denominador, `23` se le como *"de tudo que existe,
+23 prestam"*. **Mesma licao que a 2.18 pagou com o `★ 1/1` × `★ 1/5`.**
+
+E quando **nada** foi pontuado, o card escreve **`—`**, nao `0`: zero seria afirmacao sobre os LEADS
+(*"nao ha ninguem pronto"*), quando o fato e sobre o SISTEMA (*"ninguem foi lido"*). Tem teste.
+
+### Tres decisoes de desenho
+
+1. **O Bloco A NAO recebe periodo.** Fila de trabalho e sempre "agora" — filtrar por *"mes passado"*
+   produz numero que ninguem usa. A RPC nem aceita intervalo.
+2. **Fica ACIMA do Bloco B** na pagina. Se a tela abre pelo retrospectivo, ela abre contando o que a
+   IA fez.
+3. **`staleTime` 30s** (contra 60s do Bloco B): numero de fila velho manda ligar para quem ja
+   respondeu.
+
+### 🪤 O aplicador de migracao deu VERDE VAZIO
+
+`aplicar-migracao.mjs` imprimiu *"OK — read-back confere: todas as colunas prometidas existem"* —
+**conferindo 0 de 0**. O read-back dele so olha **colunas**, e esta migracao cria **view + funcao**.
+⇒ Para qualquer migracao de view/RPC ele **sempre** passa. 📌 **Mesma familia do `exit 0` de gate
+cego do NeuroIA (13/08): um instrumento que responde nao e um instrumento que mede.** O read-back
+real foi feito na mao (`view_existe: 1`, `funcao_existe: 1`, 162 linhas, e os 3 numeros reproduzidos
+pela view).
+
+### ✅ Conferido de quebra: o gate `tsc` DESTE repo nao e cego
+
+Depois do achado do NeuroIA, medi: `tsconfig.json` usa `include` (sem `files: []`) e o `tsc`
+compila **2.130 arquivos**. **A armadilha nao existe aqui.**
+
+### Gates
+
+lint **0** · typecheck **0** (e enxergando) · **760 testes** (+13, zero regressao) · build ok.
+**Oraculo: 8 dos 13 reprovam com a implementacao ingenua**; os **5 controles** passam dos dois lados.
+
+### ⏳ Aberto
+
+- 🔴 **AC1 — so ela fecha:** falta a Fernanda VER a tela. ⚠️ **E o `61 passou de 24h` vai aparecer
+  em tom de ALARME** (a regra vira alarme com metade da fila estourada; hoje e 61 de 67) **para uma
+  pessoa que hoje de manha achou que o painel a estava expondo.** Vale olhar antes dela.
+- 🟡 **A RPC nunca rodou de ponta a ponta com sessao** — `auth.uid()` e nulo fora de sessao, entao a
+  checagem de org so foi exercitada ate a excecao. **Mesma ressalva do Bloco B**; fecha quando a
+  tela abrir.
+- 🟡 **Bloco C segue travado** na normalizacao (`POST /api/admin/normalizar-criterios`, nunca
+  disparada — o dicionario esta vazio).
+- 📌 **Divida de ferramenta:** fazer o `aplicar-migracao.mjs` conferir tambem view/funcao, ou dizer
+  em voz alta *"nao havia o que conferir"* em vez de "OK".
+
+---
+
+## Sessao 2026-08-13 (9) — 🩹 story 2.37: o board mostrava a coluna velha, e o rollback era mudo
+
+> Commit **`bb7bf1a`** · ✅ **NO AR, PROVADO EM QUATRO PONTOS:** o alias
+> `acreditando-crm-sandy.vercel.app` resolve para **`bb7bf1a`** (`/v13/deployments/{dominio}`),
+> `readyState: READY`, `target: production`, `aliasError: null`, dominio em **HTTP 200**.
+> Deployment `dpl_9pEkE6FvZGkD3xDvNEjnqzSZ3JDu`, pronto **19:51:46 (SP)**.
+> 🔑 **A lacuna de 12/08 foi fechada: o token da Vercel agora vive em
+> `.credenciais/vercel.token`** (conta `fbrainacreditando-3497`) — antes o read-back de deploy era
+> impossivel e todo deploy terminava em *"a confirmar"*. Conferido que `.credenciais/` e `*.token`
+> estao no `.gitignore` do vault, que tem **auto-commit de 15 min**.
+
+### O caso real, e ele veio da Fernanda por audio
+
+Ela moveu o card do **Arkley** para `Perdido` as **14:58**, saiu para **apresentar a um casal** e
+voltou ~1h30 depois: o board mostrava **`Lead novo`**, mas *dentro* do card a classificacao ja era
+**perdido**. Pergunta dela: *"por que que ele volta?"*
+
+**MEDIDO: nao voltou.** A gravacao das 14:58 persistiu — uma leitura independente as ~15:35 pegou
+**38 perdidos, todos na coluna `Perdido`**, com o motivo `vaquinha` presente — e **nao havia
+atividade nem evento de webhook** de volta entre 14:58 e 16:38. **O banco estava certo; a tela nao
+se atualizou.**
+
+🎯 **O detalhe do relato foi o que resolveu:** *"dentro dele ja estava como perdido, mas ele estava
+na coluna do `Lead novo`"* ⇒ **duas verdades na mesma tela** (board le cache, card aberto le o
+servidor). Sem essa metade da frase, o caso pareceria perda de gravacao (como em 12/08) e a
+investigacao comecaria no lugar errado.
+
+💸 **Custo ja cobrado:** ela refez o trabalho e, ao refazer, **sobrescreveu o motivo da perda**
+(`vaquinha` → `pedido de ajuda`). O original so sobrevive em `activities` — e e o campo que
+alimenta o *"por que a gente perde"* do Bloco C da story 2.19.
+
+### 🛑 As duas metades do defeito estavam DOCUMENTADAS no proprio codigo
+
+1. **`onError` fazia rollback e descartava o erro** (`_err`, `useMoveDeal.ts:328-333`) ⇒ o card
+   voltava para a coluna de origem **em silencio**. Era a **pendencia n. 3 do CRM**, escrita em
+   12/08 como *"proxima armadilha da mesma familia"*. **Mordeu no dia seguinte.**
+2. **`refetchOnWindowFocus` era `false`** no client global (`lib/query/index.tsx:150`) — e o
+   comentario do `useDealsByBoard` dizia literalmente *"nao ha reconciliacao por foco de aba"*.
+
+📌 **Mesmo padrao da story 2.30:** *o defeito estava descrito no repo e nao fechado*.
+
+### O conserto, e por que ele e barato
+
+- `features/deals/avisoDeMovimentacao.ts` — **regras puras**: a mensagem (diz **o que aconteceu com
+  o card** e **o que fazer**), o filtro de abort (cancelamento nao e falha) e `resumoTecnico` para o
+  console. **Texto tecnico nao vai para a tela** (a licao cobrada da IA da Livre em 06/08).
+- `useMoveDeal.onError` — avisa via toast **e** loga o diagnostico. **`useOptionalToast`** de
+  proposito: `useToast` lancaria *"must be used within a ToastProvider"* **dentro do tratamento de
+  erro**, trocando card silencioso por tela branca.
+- **`refetchOnWindowFocus: true` nos DOIS hooks** que compartilham `DEALS_VIEW_KEY`
+  (`useDealsByBoard` e `useDealsView`) — observadores divergentes na mesma query fariam o
+  comportamento no foco depender de qual componente esta montado.
+
+🔑 **Por que isso NAO reintroduz a corrida que o comentario original temia:** o refetch por foco so
+ocorre com dado **stale**, e o `staleTime` de 2 min e **renovado** pelo `setQueryData` do otimismo e
+do Realtime. Ela move e troca de aba ⇒ dado fresco, **nada acontece**. Fica 1h30 fora ⇒ reconcilia.
+***A trava contra a corrida ja existia; faltava ligar a reconciliacao que ela mesma protege.***
+
+### 🪤 O oraculo pegou um defeito NO MEU PROPRIO TESTE
+
+A 1a versao do teste de foco **passou com o codigo antigo**: um `QueryClient` cru usa o default da
+**biblioteca** (`true`), nao o de **producao** (`false`). O teste media um ambiente que nao existe.
+Corrigido reproduzindo o client real — com o motivo escrito dentro do arquivo.
+
+📌 **Regra que fica:** teste de opcao de query tem de **replicar os defaults do client de
+producao**, senao mede a biblioteca.
+
+**Estado final do oraculo:** **3 testes reprovam com o codigo antigo** (AC1 aviso, AC2 sem
+vazamento tecnico, AC4 reconciliacao) e os **3 controles** (abort nao avisa · dado fresco nao busca
+· rollback continua) passam **dos dois lados**.
+
+### Gates
+
+lint **0 warnings** · typecheck **0** · **747 testes** (+15, zero regressao) · build **ok**.
+
+### ⏳ Aberto
+
+- 🔴 **AC9 — provado em uso: so a Fernanda fecha.** Mover um card, sair, voltar e ver o card onde
+  deixou. ⚠️ *Provada em producao com read-back nao e provada em uso* — a distancia entre as duas
+  ja custou uma story inteira neste repo (a 2.16, cujo read-back foi em SQL e a usuaria seguiu
+  vendo os 431 cards).
+- ✅ **AVISADO — o Filipe falou com ela em 13/08** (noite): a movimentacao das 14:58 nao se perdeu,
+  era a tela, e ja esta corrigido. Isso tira o risco de ela entrar na reuniao de 14/08 achando que
+  o sistema perde o que ela classifica. **A resposta dela ainda nao foi registrada aqui.**
+- ✏️ **Perguntar a ela qual motivo vale no card do Arkley** — o 1o foi `vaquinha`, o 2o
+  `pedido de ajuda`; o refazer sobrescreveu, e o original so existe em `activities`.
+- ⚠️ **A correcao NAO cobre o caso todo:** se o Realtime falhar **e** ela nao sair da aba, o board
+  segue velho ate remontar. Tirar a aposta no Realtime **fica para depois de 14/08** (decisao
+  registrada: mexer no caminho de arrastar card na vespera e risco maior que o defeito).
+- 🆕 **Story: arquivar em `Clientes` nao pode APAGAR a venda** — `useMoveDeal.ts:88-94` (ramo
+  *"reopen if was closed"*) zera `is_won` e anula `closed_at`. Em 13/08 nao mordeu (os 3 cards eram
+  clientes de meses anteriores, **confirmado por ela**), mas morde no 1o mes em que ela fechar e
+  arquivar a venda no mesmo mes. Custo ja pago: o `closed_at` da venda da **Joyce**.
+- 🧭 **`loss_reason` aceita texto livre e a cauda voltou pelo USO:** a story 2.26 normalizou 9 → 8;
+  hoje sao **19 motivos em 38 perdidos**, com duplicatas de grafia de novo (`cliente bom dia` ×
+  `cliente de bom dia`). 💡 E ha uma categoria real escondida: *"so cumprimentou/elogiou"* aparece
+  **5 vezes** — **nao e perda, e "nao era lead"**.
+- ✏️ **Correcao de registro:** `docs/stories/` **NAO** e gitignored (34 stories rastreadas). A nota
+  *"pendencia n. 9"* neste arquivo estava desatualizada.
+
+### 📊 AC0 do Bloco A e C da story 2.19 — medido nesta sessao (13/08, 15:07 SP)
+
+| Bloco A | Valor |
+|---|---|
+| Conversas transferidas | **157** |
+| A bola esta com ela (o lead falou por ultimo) | **64** |
+| Passou de 24h | **54** |
+| **Prontos para ligar** (SP capital + roteiro, julgados pela IA da 2.35) | **23** |
+
+🔑 **A story 2.35 destravou o que estava preso desde 11/08:** o *"prontos para ligar"* dependia do
+`SP × fora`, que o casamento por texto errava **nas duas direcoes**. A IA ja julga a capital
+corretamente ⇒ **o Bloco A ficou inteiro implementavel**.
+
+**Board em 13/08** (ela trabalhou pesado na vespera): `Lead novo` 139 → **32** · `Contato
+Realizado` 55 → **114** · `Perdido` 18 → **38** · `Qualificado` 67 → **79** · `Clientes` **12** ·
+`Profissional` **14**. ⚠️ **13 dos 79 em `Qualificado` seguem sem nota da IA.**
+
+---
+
 ## Sessao 2026-08-12 (7) — 🆕 coluna `Clientes` no board (4º pedido da Fernanda no dia)
 
 > **Aplicado no banco, read-back conferido. NAO commitado, NAO pushado** — os 2 arquivos de
