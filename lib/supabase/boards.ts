@@ -147,6 +147,8 @@ export interface DbBoardStage {
   is_default: boolean;
   /** Estágio de lifecycle vinculado. */
   linked_lifecycle_stage: string | null;
+  /** Story 2.40 — coluna de categoria: arquiva sem reabrir a venda. */
+  arquiva_sem_reabrir?: boolean | null;
   /** Data de criação. */
   created_at: string;
 }
@@ -164,6 +166,7 @@ const transformStage = (db: DbBoardStage): BoardStage => ({
   label: db.label || db.name, // label pode ser null, usar name como fallback
   color: db.color || 'bg-gray-500',
   linkedLifecycleStage: db.linked_lifecycle_stage || undefined,
+  arquivaSemReabrir: db.arquiva_sem_reabrir === true,
 });
 
 /**

@@ -25,6 +25,7 @@ import {
   resumoTecnico,
 } from '@/features/deals/avisoDeMovimentacao';
 import type { Deal, DealView, Board, Activity } from '@/types';
+import { preservaVendaAoArquivar } from '@/features/deals/arquivamentoDeCard';
 
 interface MoveDealParams {
   dealId: string;
@@ -96,6 +97,16 @@ export const useMoveDeal = () => {
         isLost = true;
         isWon = false;
         closedAt = new Date().toISOString();
+      } else if (preservaVendaAoArquivar(targetStage)) {
+        // ARQUIVAR ≠ REABRIR (story 2.40).
+        //
+        // `Clientes`, `Profissional` e `Projeto Social` não são etapa de funil,
+        // são CATEGORIA. Mover uma venda ganha para lá é dizer "esta pessoa
+        // agora é cliente" — não é reabrir a negociação. O ramo de baixo apagava
+        // `is_won` e `closed_at` nesses casos, e já mordeu 4 vezes (lote de
+        // 13/08 11:53). Aqui o card muda de coluna e a venda fica de pé:
+        // deixamos `isWon`/`isLost`/`closedAt` como `undefined`, que o objeto de
+        // updates abaixo não inclui.
       } else {
         // Moving to a regular stage - reopen if was closed
         if (deal.isWon || deal.isLost) {

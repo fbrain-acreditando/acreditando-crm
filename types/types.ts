@@ -310,6 +310,14 @@ export interface BoardStage {
   label: string;
   color: string;
   linkedLifecycleStage?: string; // ID do LifecycleStage
+  /**
+   * Coluna de CATEGORIA: arquiva em vez de reabrir (story 2.40).
+   *
+   * Quando `true`, mover um card FECHADO para esta coluna preserva
+   * `isWon`/`isLost`/`closedAt`. `Clientes`, `Profissional` e `Projeto Social`
+   * não são etapa de funil — arquivar uma venda ali não é reabrir a negociação.
+   */
+  arquivaSemReabrir?: boolean;
 }
 
 // Metas do Board (Revenue Ops)
