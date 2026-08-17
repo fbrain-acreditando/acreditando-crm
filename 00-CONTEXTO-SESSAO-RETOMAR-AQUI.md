@@ -8,6 +8,97 @@
 
 ---
 
+## Sessao 2026-08-17 (14) — ⚡ a pontuacao deixa de ser cron e vira SOB DEMANDA
+
+> **Branch:** `story/2.41-pontuacao-na-entrada-da-coluna` — **4 commits, no remoto.**
+> 🛑 **Nada foi aplicado em producao.** Migration, deploy e chave seguem pendentes.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
+> falta aplicar as migrations da 2.41 e 2.42 no `nossocrmv2`."*
+
+### O que aconteceu
+
+A sessao comecou para retomar o conserto do custo (2.41) e **mudou de rumo no meio**: o Filipe
+pediu que a analise da IA **nao use cron** — *"quero sob demanda"*. Isso virou a story 2.42.
+
+| Story | O que faz | Estado |
+|---|---|---|
+| **2.41** | fila com contador de tentativas (mata o laco infinito de R$ 197,83) | codigo pronto, no remoto |
+| **2.42** | o trigger **chama a IA na hora** via `pg_net`; o cron de 12x/hora morre | codigo pronto, no remoto |
+
+```
+ANTES:  trigger enfileira -> cron varre de 5 em 5 min -> pontua   (288 rodadas/dia)
+AGORA:  trigger enfileira -> trigger CHAMA (pg_net)   -> pontua   (1 rodada/dia, so rede)
+```
+
+### Decisoes do Filipe nesta sessao
+
+1. **Sem cron no caminho da IA** — disparo por evento, na entrada da coluna
+2. **Rede de seguranca 1x/dia** (03:17 BRT) — so cata o disparo que se perdeu; em dia sem falha
+   processa ZERO. `pg_net` e fire-and-forget: sem rede, trocariamos *"gasta demais"* por
+   *"perde em silencio"*
+3. **Card que NASCE em `Qualificado` tambem pontua** (trigger de INSERT mantido) — risco aceito:
+   importacao em massa vira rajada
+
+### 🔑 Tres detalhes tecnicos que so aparecem em producao (e ja estao cobertos)
+
+- **`timeout_milliseconds := 30000` explicito.** O default do `pg_net` e **5s** e a pontuacao
+  leva **6s em media (p99 16s)** ⇒ com o default, o pg_net cortaria a conexao no meio de TODA
+  pontuacao
+- **Disparo dentro de `EXCEPTION WHEN OTHERS`** ⇒ arrastar card funciona **mesmo com o app fora
+  do ar**; o motivo vai para `last_error` e a rede do dia seguinte recupera
+- **`RETURNING id` devolve NULL** quando ja existe item pendente ⇒ e isso que impede um segundo
+  disparo para um card com pontuacao a caminho
+
+### 📏 Medido em producao (Management API, so SELECT — projeto `nossocrmv2`)
+
+- ⚠️ **Producao e o `nossocrmv2` (`jmjhtprnxjffaqhdzfmc`)**, nao o `nossocrm` antigo (responde 544)
+- **Um unico** estagio com `pontua_lead`: **`Qualificado`**
+- `v_leads_a_pontuar`: **40** cards sem nota (eram 30 em 16/08; cresce ~3/dia com a IA desligada).
+  ⚠️ O backfill da 2.41 limita em **50** — hoje cobre com folga de 10, mas **trunca se demorar**
+- ✅ **Pendencia nº 41 fechada:** `stage-evaluations-1min` roda de fato `*/5` — o nome mente,
+  mas **para o lado seguro**
+- Pior caso por card passa a **9 requisicoes HTTP** (3 tentativas x `maxRetries: 2`), **limitado**
+
+### 🔴 DIVIDA QUE ESTA SESSAO CRIOU — story 2.43 (reaper)
+
+O gate da 2.41 classificou *"item preso em `processing`"* como "nao bloqueia". **Com a 2.42 isso
+piora e a avaliacao foi corrigida:** o caminho normal agora e uma funcao com `maxDuration = 60`;
+se for cortada no meio de uma pontuacao, o item fica `processing` — e **a rede de seguranca
+filtra `pending`, entao nao enxerga `processing`**. O card ficaria sem nota **para sempre**.
+
+⇒ **Story 2.43:** devolver a `pending` item em `processing` ha mais de N minutos, contando a
+tentativa. Vale tambem para o cron irmao `stage-evaluations`, que tem a mesma lacuna.
+
+### ⚠️ O QUE FALTA — e a ORDEM importa
+
+| # | Acao | Por que a ordem |
+|---|---|---|
+| 1 | **Aplicar as 2 migrations** no `nossocrmv2` | deploy antes disso = codigo novo consulta tabela inexistente ⇒ **500 a cada 5 min** |
+| 2 | **Deploy** (merge em `main`) | — |
+| 3 | **Repor a chave** | antes do deploy, o codigo velho volta a varrer a view ⇒ **o sangramento recomeca na mesma hora** |
+
+🔑 **A chave nova:** projeto Google **separado so do CRM** + restricao de API + **cota diaria** +
+alerta de orcamento em **R$ 20**. A cota diaria e a unica trava que sobrevive a qualquer bug
+futuro desta classe.
+
+### Read-back obrigatorio (pos-migration)
+
+1. `cron.job` → `pontuar-leads-qualificados` **sumiu**; `pontuar-leads-rede-de-seguranca` em `17 6 * * *`
+2. Arrastar **um** card → `dispatched_at` e `request_id` preenchidos, depois `completed` com nota
+   ⚠️ Este e o item nº 1: prova que o trigger consegue ler o segredo do `vault`
+3. Deixar a **IA** qualificar outro → mesma conferencia (fecha o AC1, hoje provado so por desenho)
+4. `count(*) where status='processing'` → deve ser **0**; qualquer numero e a divida da 2.43
+
+### 🛑 A Fernanda ainda nao foi avisada
+
+A IA segue desligada, os leads seguem sem nota, e ela continua vendo cards em `Qualificado`
+sem nota. Isso **nao** foi resolvido nesta sessao — segue na fila de pendencias dela.
+
+---
+
 ## Sessao 2026-08-16 (13) — 💸 R$ 197,83 na API do Google, e o log da IA e cego
 
 > **Nenhum codigo foi alterado.** A sessao inteira foi investigacao + registro.
