@@ -10,13 +10,15 @@
 
 ## Sessao 2026-08-17 (14) — ⚡ a pontuacao deixa de ser cron e vira SOB DEMANDA
 
-> **Branch:** `story/2.41-pontuacao-na-entrada-da-coluna` — **4 commits, no remoto.**
-> 🛑 **Nada foi aplicado em producao.** Migration, deploy e chave seguem pendentes.
+> ✅ **NO AR.** PR #2 mergeado (`635ec7f`), **3 migrations aplicadas** no `nossocrmv2` e deploy
+> confirmado. O polling de 288 rodadas/dia **morreu**.
+> 🔑 **Falta UMA coisa: repor a chave de IA.** Sem ela nada e pontuado — o sistema esta pronto e
+> esperando.
 
 ### Como retomar
 
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
-> falta aplicar as migrations da 2.41 e 2.42 no `nossocrmv2`."*
+> falta repor a chave de IA com as 4 travas."*
 
 ### O que aconteceu
 
@@ -84,13 +86,60 @@ Cobre as **duas** filas: `ai_pending_lead_scores` e `ai_pending_evaluations` (o 
 ainda mais exposto — 10 itens em paralelo com maxDuration 60). **Nenhum cron novo:** o resgate
 pega carona no disparo sob demanda, na rede diaria e no cron irmao.
 
-### ⚠️ O QUE FALTA — e a ORDEM importa
+### ✅ O QUE JA FOI FEITO EM PRODUCAO (17/08, com read-back)
 
-| # | Acao | Por que a ordem |
+| # | Acao | Read-back |
 |---|---|---|
-| 1 | **Aplicar as 3 migrations** no `nossocrmv2` | deploy antes disso = codigo novo consulta tabela inexistente ⇒ **500 a cada 5 min** |
-| 2 | **Deploy** (merge em `main`) | — |
-| 3 | **Repor a chave** | antes do deploy, o codigo velho volta a varrer a view ⇒ **o sangramento recomeca na mesma hora** |
+| 1 | **3 migrations aplicadas** no `nossocrmv2`, uma a uma | tabela criada · **34 cards no backfill** (nao bateu no limite de 50) · 2 triggers `enabled` · `processing_since` nas 2 filas |
+| 2 | **`pontuar-leads-qualificados` REMOVIDO** | `cron.job` agora tem `pontuar-leads-rede-de-seguranca` em `17 6 * * *`. **O polling de 288 rodadas/dia morreu** |
+| 3 | **Merge do PR #2 + deploy** | `/api/ai/pontuar-lead` responde **401** (existe e a trava de auth funciona) |
+
+### 🎯 As duas provas que so eram possiveis depois do deploy
+
+**1. O trigger LE o segredo do vault e alcanca o app** (era a ressalva nº 1 do gate da 2.42):
+disparo pelo mesmo caminho do trigger com `item_id` inexistente ⇒ o `pg_net` recebeu
+**404 `{"error":"Item nao encontrado na fila"}`**. Esse 404 e do NOSSO endpoint, e so e alcancado
+**depois** da checagem de auth ⇒ **o segredo do vault e igual ao `CRON_SECRET` da Vercel.**
+
+**2. O resgate da 2.43 funciona** — forcado um item a `processing` com carimbo de 1h atras:
+```
+antes:   status=processing  attempts=0
+resgate: {"pontuacoes": 1, "avaliacoes": 0}
+depois:  status=pending     attempts=1   ← o que importa
+```
+O item de teste foi **restaurado** (`attempts=0`, `last_error=null`) para nao carregar tentativa
+queimada.
+
+### 🍀 E um card real provou o AC1 sozinho, sem ninguem pedir
+
+As **17:52:17** um card entrou em `Qualificado` de verdade. O trigger enfileirou
+(`origem='trigger'`) e **disparou** (`request_id=30955`) — mas o deploy so subiu ~4 min depois,
+entao a resposta foi **404 (pagina HTML do Next)**. O item ficou `pending`, `attempts=0`.
+
+📌 **E exatamente o cenario que a rede de seguranca existe para cobrir**, acontecendo na primeira
+hora de vida do desenho. Os dois 404 contam historias diferentes: HTML = a rota nao existia;
+JSON = a rota existe e recusou o item. **Ao investigar, o corpo importa tanto quanto o codigo.**
+
+### 🔑 O QUE FALTA — so isto
+
+**Repor a chave de IA**, e com as 4 travas: projeto Google **separado so do CRM** · restricao de
+API (so Generative Language) · **cota diaria** · alerta de orcamento em **R$ 20**.
+A cota diaria e a unica trava que sobrevive a qualquer bug futuro desta classe.
+
+⚠️ **Depois de repor a chave, os 35 itens da fila NAO pontuam na hora:** o trigger so dispara na
+ENTRADA, e eles entraram por backfill. Esperariam a rede das **03:17 BRT**. Para a nota sair no
+mesmo dia, chamar a rede uma vez a mao:
+
+```
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://acreditando-crm-sandy.vercel.app/api/cron/pontuar-leads
+```
+
+### 🧾 Divida nova descoberta hoje: este projeto NAO tem registro de migrations
+
+O schema `supabase_migrations` **nao existe** no `nossocrmv2` ⇒ o banco nao sabe dizer quais
+migrations ja rodaram. Nao atrapalhou (as 3 sao idempotentes), mas *"o que ja foi aplicado?"* so
+se responde olhando o resultado, nunca um historico.
 
 🔑 **A chave nova:** projeto Google **separado so do CRM** + restricao de API + **cota diaria** +
 alerta de orcamento em **R$ 20**. A cota diaria e a unica trava que sobrevive a qualquer bug
