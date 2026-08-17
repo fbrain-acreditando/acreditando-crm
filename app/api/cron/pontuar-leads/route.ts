@@ -1,33 +1,70 @@
 /**
  * GET /api/cron/pontuar-leads
  *
- * Story 2.35 — drena a fila de leads a pontuar.
+ * Story 2.35 — pontua o lead que entrou em `Qualificado`.
+ * Story 2.41 — drena uma FILA, não varre o board.
+ * Story 2.42 — **deixa de ser o motor e vira a REDE DE SEGURANÇA, 1× por dia.**
  *
- * ⏱️ CADÊNCIA: a cada 5 minutos. A nota aparece em até 5 min depois de o card
- *    entrar em `Qualificado`, não instantaneamente.
+ * ============================================================================
+ * ⚠️ O QUE MUDOU, E POR QUE (custou R$ 197,83)
+ * ============================================================================
+ * Na 2.35 este endpoint lia uma VIEW derivada do estado, de 5 em 5 minutos. Card
+ * que FALHAVA não recebia carimbo e **não contava tentativa**: voltava na rodada
+ * seguinte, para sempre.
  *
- * 🏛 POR QUE FILA POR ESTADO, E NÃO GATILHO NO WEBHOOK:
- *    pendurar a pontuação no webhook do GPT Maker pegaria só a transferência
- *    automática. A Fernanda **arrasta** cards para `Qualificado` o dia inteiro, e
- *    esse caminho ficaria de fora. A fila é uma VIEW sobre o board
- *    (`v_leads_a_pontuar`), então todo caminho de entrada conta — e uma falha se
- *    auto-corrige na rodada seguinte, sem fila persistente para ficar suja.
+ *   12 rodadas/hora × 24h = 288 rodadas/dia × 10 cards = 2.880 chamadas/dia
+ *   O Google mediu ~3.000/dia, de 13/08 a 16/08 02:00 (quando a chave caiu).
+ *
+ * A 2.41 pôs contador de tentativas. A 2.42 tirou o polling: **quem dispara o
+ * trabalho agora é o trigger do banco**, via `pg_net`, no instante da entrada
+ * (`POST /api/ai/pontuar-lead`).
+ *
+ * ============================================================================
+ * ENTÃO POR QUE ESTE ARQUIVO AINDA EXISTE?
+ * ============================================================================
+ * Porque `pg_net` é fire-and-forget: se o POST falhar — app em cold start, deploy
+ * no meio, 500, timeout —, **nada tenta de novo**. Sem uma rede, trocar polling
+ * por evento trocaria *"gasta demais"* por *"perde em silêncio"* — a classe de
+ * defeito que mordeu este repo três vezes só em agosto.
+ *
+ * Então: **1 rodada por dia**, agindo só sobre quem ficou para trás. Em dia sem
+ * falha, processa **zero**. De 288 rodadas/dia para 1.
+ *
+ * 📌 A pontuação de cada item vive em `processarItemDaFila` — a MESMA função que
+ *    o disparo por evento usa. Duas implementações do mesmo trabalho é o defeito
+ *    que a story 2.29 passou o dia consertando.
  *
  * Protegido por CRON_SECRET, mesmo contrato de `/api/cron/stage-evaluations`.
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { getOrgAIConfig } from '@/lib/ai/agent/agent.service';
-import { pontuarLead } from '@/lib/ai/scoring/pontuarLead';
-import { orderConversationWindow } from '@/lib/ai/extraction/conversationWindow';
+import { MAX_TENTATIVAS } from '@/lib/ai/scoring/filaDePontuacao';
+import {
+    processarItemDaFila,
+    type CacheDeConfig,
+    type Desfecho,
+} from '@/lib/ai/scoring/processarItemDaFila';
+import { resgatarItensPresos } from '@/lib/ai/scoring/resgatarItensPresos';
 
 export const maxDuration = 300;
 
-/** Teto por rodada: uma chamada de IA por card, e o cron roda de 5 em 5 min. */
-const MAX_POR_RODADA = 10;
+/**
+ * Teto por rodada.
+ *
+ * ⚠️ O limite aqui **não** é de custo — é de RELÓGIO. Cada item leva ~6s (p99
+ * 16s) e `maxDuration` é 300s. Pedir 50 de uma vez faria a função morrer no meio,
+ * deixando itens presos em `processing` — de onde nada os resgata.
+ */
+const MAX_POR_RODADA = 25;
 
-/** Quantas mensagens da conversa vão para o modelo. Média medida: 30. */
-const MAX_MENSAGENS = 60;
+/**
+ * Para de pegar item novo quando faltam ~60s do teto da função.
+ *
+ * Sair pela porta é diferente de morrer no meio: o que não foi processado
+ * continua `pending` e a rodada de amanhã o pega. Sem esta guarda, o item que
+ * estivesse em voo no segundo 300 ficaria `processing` para sempre.
+ */
+const ORCAMENTO_MS = (maxDuration - 60) * 1000;
 
 function json<T>(body: T, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -37,6 +74,8 @@ function json<T>(body: T, status = 200): Response {
 }
 
 export async function GET(request: Request) {
+    const comecouEm = Date.now();
+
     const cronSecret = process.env.CRON_SECRET;
     const authHeader = request.headers.get('authorization');
     if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -51,9 +90,22 @@ export async function GET(request: Request) {
     // explicitamente — defense-in-depth, porque a RLS não protege aqui.
     const supabase = createClient(url, serviceKey);
 
+    // Story 2.43 — a faxina vem ANTES de ler a fila: item que ficou preso em
+    // `processing` volta a `pending` (consumindo tentativa) e já é pego nesta
+    // mesma rodada. Em regime normal afeta ZERO linhas.
+    //
+    // 📌 Esta é a garantia de pior caso: mesmo sem tráfego nenhum no dia, o
+    //    resgate acontece pelo menos uma vez.
+    const resgate = await resgatarItensPresos(supabase);
+
+    // A fila, em FIFO. `attempts < MAX_TENTATIVAS` é o que impede o laço infinito:
+    // card que falhou 3 vezes já está `failed` e não volta mais.
     const { data: fila, error: erroFila } = await supabase
-        .from('v_leads_a_pontuar')
-        .select('deal_id, organization_id, contact_id')
+        .from('ai_pending_lead_scores')
+        .select('id, deal_id, organization_id, attempts')
+        .eq('status', 'pending')
+        .lt('attempts', MAX_TENTATIVAS)
+        .order('created_at', { ascending: true })
         .limit(MAX_POR_RODADA);
 
     if (erroFila) {
@@ -62,109 +114,54 @@ export async function GET(request: Request) {
     }
 
     if (!fila || fila.length === 0) {
-        return json({ ok: true, pontuados: 0, mensagem: 'Fila vazia.' });
+        // O caso NORMAL depois da 2.42: o evento deu conta de tudo.
+        return json({ ok: true, pontuados: 0, mensagem: 'Nada ficou para trás.', resgate });
     }
 
-    const configPorOrg = new Map<string, Awaited<ReturnType<typeof getOrgAIConfig>>>();
-    let pontuados = 0;
-    const falhas: string[] = [];
+    const cacheDeConfig: CacheDeConfig = new Map();
+    const contagem: Record<Desfecho, number> = {
+        pontuado: 0,
+        dispensado: 0,
+        falhou: 0,
+        sem_chave: 0,
+        ignorado: 0,
+    };
+    const motivos: string[] = [];
+    let naoAlcancados = 0;
 
     for (const item of fila) {
-        try {
-            if (!configPorOrg.has(item.organization_id)) {
-                configPorOrg.set(
-                    item.organization_id,
-                    await getOrgAIConfig(supabase, item.organization_id)
-                );
-            }
-            const aiConfig = configPorOrg.get(item.organization_id);
-            if (!aiConfig?.apiKey) {
-                falhas.push(`${item.deal_id}: IA não configurada`);
-                continue;
-            }
+        if (Date.now() - comecouEm > ORCAMENTO_MS) {
+            // O resto continua `pending`: amanhã a rodada o pega. Melhor um item
+            // adiado do que um item preso em `processing`.
+            naoAlcancados = fila.length - (contagem.pontuado + contagem.dispensado
+                + contagem.falhou + contagem.sem_chave + contagem.ignorado);
+            break;
+        }
 
-            // --- conversa do contato ---
-            const { data: conversas } = await supabase
-                .from('messaging_conversations')
-                .select('id')
-                .eq('contact_id', item.contact_id)
-                .eq('organization_id', item.organization_id);
-
-            const ids = (conversas ?? []).map(c => c.id);
-            if (ids.length === 0) {
-                falhas.push(`${item.deal_id}: sem conversa`);
-                continue;
-            }
-
-            // Seleciona o que `orderConversationWindow` precisa: ela ordena por
-            // `sent_at ?? created_at` (o instante em que foi DITA, não em que
-            // chegou) e descarta reações por `content_type`. Selecionar menos e
-            // resolver com cast esconderia as duas coisas.
-            const { data: mensagens } = await supabase
-                .from('messaging_messages')
-                .select('id, direction, content, content_type, created_at, sent_at')
-                .in('conversation_id', ids)
-                // As MAIS RECENTES, e depois reordenadas em ordem cronológica.
-                // Pegar as mais ANTIGAS foi o defeito corrigido em 03/08 na
-                // extração de campos: o trecho de qualificação vem no FIM do
-                // roteiro, e a janela nunca chegava nele.
-                .order('created_at', { ascending: false })
-                .limit(MAX_MENSAGENS);
-
-            const janela = orderConversationWindow(mensagens ?? []);
-
-            const texto = janela
-                .map(m => {
-                    const quem = m.direction === 'inbound' ? 'Lead' : 'Atendimento';
-                    const c = (m.content ?? {}) as { text?: string; caption?: string; type?: string };
-                    const corpo = c.text ?? c.caption ?? `[${c.type ?? 'mídia'}]`;
-                    return `${quem}: ${corpo}`;
-                })
-                .join('\n');
-
-            if (!texto.trim()) {
-                falhas.push(`${item.deal_id}: conversa sem texto`);
-                continue;
-            }
-
-            const nota = await pontuarLead(texto, aiConfig);
-
-            const { error: erroUpdate } = await supabase
-                .from('deals')
-                .update({
-                    lead_score: nota.score,
-                    lead_score_known: nota.known,
-                    lead_score_source: 'auto',
-                    lead_score_detail: {
-                        itens: nota.itens,
-                        origem: 'ia:pontuarLead',
-                        // Mantém a forma que o painel já lê (story 2.18 AC5).
-                        matched: nota.itens.filter(i => i.atende === 1).map(i => i.id),
-                        refuted: nota.itens.filter(i => i.atende === 0).map(i => i.id),
-                        unknown: [],
-                    },
-                    pontuada_pela_ia_em: new Date().toISOString(),
-                    lead_score_updated_at: new Date().toISOString(),
-                })
-                .eq('id', item.deal_id)
-                .eq('organization_id', item.organization_id)
-                // Corrida: se a Fernanda definiu a nota na mão entre a leitura da
-                // fila e esta escrita, a dela ganha (AC3).
-                .neq('lead_score_source', 'manual');
-
-            if (erroUpdate) {
-                falhas.push(`${item.deal_id}: ${erroUpdate.message}`);
-                continue;
-            }
-
-            pontuados++;
-        } catch (e) {
-            // Um card que falha não derruba a rodada, e ele volta para a fila na
-            // próxima — a fila é derivada do estado, não consumida.
-            console.error(`[pontuar-leads] falha no deal ${item.deal_id}:`, e);
-            falhas.push(`${item.deal_id}: ${(e as Error).message}`);
+        const resultado = await processarItemDaFila(supabase, item, cacheDeConfig);
+        contagem[resultado.desfecho]++;
+        if (resultado.motivo && resultado.desfecho !== 'pontuado') {
+            motivos.push(`${item.deal_id}: ${resultado.motivo}`);
         }
     }
 
-    return json({ ok: true, pontuados, naFila: fila.length, falhas });
+    // O corpo da resposta é o que aparece no log da Vercel — e foi a falta dele
+    // que fez a investigação de 16/08 concluir "o cron não está rodando" quando
+    // ele rodava e falhava. Cada contador aqui responde uma pergunta diferente.
+    return json({
+        ok: true,
+        papel: 'rede de seguranca diaria (story 2.42)',
+        pontuados: contagem.pontuado,
+        dispensados: contagem.dispensado,
+        falhados: contagem.falhou,
+        semChave: contagem.sem_chave,
+        ignorados: contagem.ignorado,
+        naoAlcancados,
+        naFila: fila.length,
+        motivos,
+        // Se a faxina falhar, o motivo precisa aparecer no log da Vercel — não
+        // pode virar `console.error` mudo (AC6).
+        resgate,
+        duracaoMs: Date.now() - comecouEm,
+    });
 }

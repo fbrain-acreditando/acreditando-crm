@@ -8,6 +8,202 @@
 
 ---
 
+## Sessao 2026-08-17 (14) — ⚡ a pontuacao deixa de ser cron e vira SOB DEMANDA
+
+> **Branch:** `story/2.41-pontuacao-na-entrada-da-coluna` — **4 commits, no remoto.**
+> 🛑 **Nada foi aplicado em producao.** Migration, deploy e chave seguem pendentes.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
+> falta aplicar as migrations da 2.41 e 2.42 no `nossocrmv2`."*
+
+### O que aconteceu
+
+A sessao comecou para retomar o conserto do custo (2.41) e **mudou de rumo no meio**: o Filipe
+pediu que a analise da IA **nao use cron** — *"quero sob demanda"*. Isso virou a story 2.42.
+
+| Story | O que faz | Estado |
+|---|---|---|
+| **2.41** | fila com contador de tentativas (mata o laco infinito de R$ 197,83) | codigo pronto, no remoto |
+| **2.42** | o trigger **chama a IA na hora** via `pg_net`; o cron de 12x/hora morre | codigo pronto, no remoto |
+| **2.43** | item preso em `processing` volta pra fila **contando a tentativa** | codigo pronto, no remoto |
+
+```
+ANTES:  trigger enfileira -> cron varre de 5 em 5 min -> pontua   (288 rodadas/dia)
+AGORA:  trigger enfileira -> trigger CHAMA (pg_net)   -> pontua   (1 rodada/dia, so rede)
+```
+
+### Decisoes do Filipe nesta sessao
+
+1. **Sem cron no caminho da IA** — disparo por evento, na entrada da coluna
+2. **Rede de seguranca 1x/dia** (03:17 BRT) — so cata o disparo que se perdeu; em dia sem falha
+   processa ZERO. `pg_net` e fire-and-forget: sem rede, trocariamos *"gasta demais"* por
+   *"perde em silencio"*
+3. **Card que NASCE em `Qualificado` tambem pontua** (trigger de INSERT mantido) — risco aceito:
+   importacao em massa vira rajada
+
+### 🔑 Tres detalhes tecnicos que so aparecem em producao (e ja estao cobertos)
+
+- **`timeout_milliseconds := 30000` explicito.** O default do `pg_net` e **5s** e a pontuacao
+  leva **6s em media (p99 16s)** ⇒ com o default, o pg_net cortaria a conexao no meio de TODA
+  pontuacao
+- **Disparo dentro de `EXCEPTION WHEN OTHERS`** ⇒ arrastar card funciona **mesmo com o app fora
+  do ar**; o motivo vai para `last_error` e a rede do dia seguinte recupera
+- **`RETURNING id` devolve NULL** quando ja existe item pendente ⇒ e isso que impede um segundo
+  disparo para um card com pontuacao a caminho
+
+### 📏 Medido em producao (Management API, so SELECT — projeto `nossocrmv2`)
+
+- ⚠️ **Producao e o `nossocrmv2` (`jmjhtprnxjffaqhdzfmc`)**, nao o `nossocrm` antigo (responde 544)
+- **Um unico** estagio com `pontua_lead`: **`Qualificado`**
+- `v_leads_a_pontuar`: **40** cards sem nota (eram 30 em 16/08; cresce ~3/dia com a IA desligada).
+  ⚠️ O backfill da 2.41 limita em **50** — hoje cobre com folga de 10, mas **trunca se demorar**
+- ✅ **Pendencia nº 41 fechada:** `stage-evaluations-1min` roda de fato `*/5` — o nome mente,
+  mas **para o lado seguro**
+- Pior caso por card passa a **9 requisicoes HTTP** (3 tentativas x `maxRetries: 2`), **limitado**
+
+### ✅ A DIVIDA QUE ESTA SESSAO CRIOU E FECHOU NA MESMA SESSAO — story 2.43
+
+O gate da 2.41 classificou *"item preso em `processing`"* como "nao bloqueia". O gate da 2.42
+**corrigiu a propria avaliacao**: o caminho normal virou uma funcao com `maxDuration = 60`; se
+cortada no meio de uma pontuacao o item fica `processing` — e a rede de seguranca filtra
+`pending`, entao **nao o enxerga**. O card ficaria sem nota **para sempre**.
+
+A 2.43 fecha isso, e a decisao que a define e esta: **o resgate CONSOME tentativa.** Resgatar sem
+contar recriaria o laco infinito com outro nome — *"uma falha se auto-corrige na rodada
+seguinte"* e a frase da 2.35 que custou R$ 197,83.
+
+🧱 **O obstaculo que ninguem tinha visto:** nao existia "desde quando esta em `processing`".
+`created_at` e quando entrou na fila; `processed_at` so e escrito no fim. Sem carimbo, resgatar
+item **em voo** faria a IA ser paga duas vezes. Por isso a story cria `processing_since`, escrito
+no MESMO UPDATE que trava. **Usar `created_at` como aproximacao esta descartado, e o descarte
+ficou registrado dentro da migration** para nao ser "simplificado" numa proxima leitura.
+
+Cobre as **duas** filas: `ai_pending_lead_scores` e `ai_pending_evaluations` (o cron irmao, que e
+ainda mais exposto — 10 itens em paralelo com maxDuration 60). **Nenhum cron novo:** o resgate
+pega carona no disparo sob demanda, na rede diaria e no cron irmao.
+
+### ⚠️ O QUE FALTA — e a ORDEM importa
+
+| # | Acao | Por que a ordem |
+|---|---|---|
+| 1 | **Aplicar as 3 migrations** no `nossocrmv2` | deploy antes disso = codigo novo consulta tabela inexistente ⇒ **500 a cada 5 min** |
+| 2 | **Deploy** (merge em `main`) | — |
+| 3 | **Repor a chave** | antes do deploy, o codigo velho volta a varrer a view ⇒ **o sangramento recomeca na mesma hora** |
+
+🔑 **A chave nova:** projeto Google **separado so do CRM** + restricao de API + **cota diaria** +
+alerta de orcamento em **R$ 20**. A cota diaria e a unica trava que sobrevive a qualquer bug
+futuro desta classe.
+
+### Read-back obrigatorio (pos-migration)
+
+1. `cron.job` → `pontuar-leads-qualificados` **sumiu**; `pontuar-leads-rede-de-seguranca` em `17 6 * * *`
+2. Arrastar **um** card → `dispatched_at` e `request_id` preenchidos, depois `completed` com nota
+   ⚠️ Este e o item nº 1: prova que o trigger consegue ler o segredo do `vault`
+3. Deixar a **IA** qualificar outro → mesma conferencia (fecha o AC1, hoje provado so por desenho)
+4. `count(*) where status='processing'` → deve ser **0** em regime
+5. **Provar o resgate da 2.43 de verdade:** forcar um item a `processing` com `processing_since`
+   de 1 hora atras, rodar `select resgatar_itens_presos()`, e conferir que voltou a `pending`
+   **com `attempts` incrementado** — nao basta ter voltado. Repetir 3x e ver virar `failed`
+
+### 📄 Migrations a aplicar, NESTA ordem
+
+```
+1. 20260817120000_pontuacao_dispara_na_entrada.sql   (2.41 — fila + trigger + backfill)
+2. 20260817160000_pontuacao_sob_demanda.sql          (2.42 — pg_net + unschedule + rede diaria)
+3. 20260817180000_resgate_de_itens_presos.sql        (2.43 — processing_since + resgate)
+```
+
+### 🛑 A Fernanda ainda nao foi avisada
+
+A IA segue desligada, os leads seguem sem nota, e ela continua vendo cards em `Qualificado`
+sem nota. Isso **nao** foi resolvido nesta sessao — segue na fila de pendencias dela.
+
+---
+
+## Sessao 2026-08-16 (13) — 💸 R$ 197,83 na API do Google, e o log da IA e cego
+
+> **Nenhum codigo foi alterado.** A sessao inteira foi investigacao + registro.
+> 📄 Mapa tecnico completo: **`docs/observability/MAPA-CHAMADAS-IA.md`**
+
+### O que aconteceu
+
+O Filipe recebeu uma cobranca fora da curva do Google e **apagou todas as chaves de API**
+antes de abrir a sessao. Pediu para medir o gasto dos ultimos 5 dias.
+
+### O que a fatura diz (lido no console, nao inferido)
+
+| Item | Valor |
+|---|---|
+| Projeto | **`bot foto`** (`gen-lang-client-0589801559`) — os outros ~18 projetos: R$ 0,00 |
+| Custo 1–15/ago | **R$ 197,83** |
+| SKU dominante | saida (`output token count`) do `gemini-3-flash` — **R$ 174,66** |
+| `GenerateContent` em 30d | **8.557** |
+| Credencial | **uma so**: `apikey:519caf23-d675-418a-8142-ba2b1bc38059` |
+| Padrao | plato **constante 24h/dia** de 13/08 ate **16/08 ~02:00**, ~3.000 req/dia |
+| Fim | caiu a zero quando as chaves foram apagadas ✅ **o sangramento parou** |
+
+### 🔑 O achado que muda tudo
+
+| Fonte | Chamadas |
+|---|---|
+| Google (30 dias) | **8.557** |
+| `ai_conversation_log` (40 dias) | **85** |
+
+**O log enxerga ~1%.** E so de UM tipo (`custom_fields_extraction`).
+**18 dos 24 arquivos** que chamam `generateText`/`streamText` **nao registram nada**.
+
+⚠️ **Por isso a sessao NAO conclui que o CRM e inocente.** Cheguei a escrever isso a partir
+do log — e o log e a testemunha que ja provamos ser cega. O Filipe corrigiu: *"acho que a
+origem pode ser o CRM, ele nao esta registrando todas as chamadas"*. **Ele esta certo: com
+esse log, o CRM nao pode ser nem acusado nem absolvido.**
+
+### Tres defeitos de CLASSE (nao bugs isolados) — detalhe no mapa
+
+1. **Log conta chamada logica, Google cobra requisicao HTTP.** Todo ponto usa `maxRetries: 2`
+   (e `app/api/ai/actions/route.ts` usa **3**, em 9 pontos) + `provider-failover.ts` percorre
+   providers em laco ⇒ **1 chamada de codigo = ate 3-4 requisicoes faturadas.**
+2. **`conversation_id` e `NOT NULL`** ⇒ `logAiTokens` **recusa** o que nao tem conversa —
+   justamente pontuacao de lead, normalizacao em lote, board e briefing. Instrumentar os 18
+   sem mexer no schema **nao funciona**.
+3. **`action_taken` tem CHECK fechado** (8 rotulos). Rotulo novo sem migration = `23514` mudo.
+   Ja mordeu na story 2.10.
+
+### Medicoes de estado (16/08)
+
+- Fila `v_leads_a_pontuar`: **30 leads parados**, sem nota
+- Ultima pontuacao da IA: **14/08 13:53** ⇒ **o cron `pontuar-leads` nao esta rodando**
+- `ai_pending_evaluations` e `ai_pending_stage_advances`: **0**
+- Mensagens/dia: ~100, estavel desde 06/08 (**sem pico** que explique a fatura)
+- Descartados com medicao: NeuroIA (usa OpenRouter, nao entra nesta fatura) · workflows n8n
+  (nenhum usa Gemini) · chave commitada no git (o unico `AIza` e o **placeholder** do campo)
+
+### ⚠️ Duas pendencias que ficaram abertas
+
+1. **Quem agenda `/api/cron/pontuar-leads` e `/api/cron/stage-evaluations`?**
+   Os dois **NAO estao no `vercel.json`** (so `daily-briefing` e `template-sync` estao).
+   Um agendador externo com cadencia errada vira fatura aqui. Procurei nos backups do n8n:
+   nenhuma referencia ao dominio do CRM.
+2. **`ALLOW_AI_TEST_ROUTE` / `ALLOW_UI_MOCKS_ROUTE`** — conferir se `app/api/test/ai-modes`
+   e `app/(protected)/ai-test` estao desligadas em producao. Ambas chamam o modelo sem log.
+
+### 🛑 Efeito colateral ATIVO — a IA do CRM esta desligada
+
+As chaves foram apagadas, entao **a extracao de campos e a pontuacao de lead pararam**.
+A Fernanda vai ver cards chegando em `Qualificado` **sem nota**. Ou avisa ela, ou repoe a chave.
+
+### Proximo passo (decisao do Filipe, ordem importa)
+
+O plano de 8 passos esta no mapa. O que **nao** da para pular:
+**migration do `conversation_id` (1) e do CHECK (2) vem ANTES** de instrumentar qualquer ponto —
+senao os 18 pontos novos falham calados, exatamente como em 2.9 e 2.10.
+
+Ao repor a chave: **projeto separado so do CRM** + restricao de API + cota diaria + alerta de
+orcamento em R$ 20. Assim a proxima fatura ja aponta o culpado sozinha.
+
+---
+
 ## Sessao 2026-08-14 (12) — 🛑 tres AC0 seguidos derrubaram tres candidatos a story
 
 > **Nada foi implementado nesta rodada, e o resultado dela vale mais que uma story.**
