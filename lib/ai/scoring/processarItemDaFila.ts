@@ -97,6 +97,8 @@ export async function processarItemDaFila(
                 status: desfecho.status,
                 attempts: desfecho.attempts,
                 last_error: motivo,
+                // Story 2.43 — saiu de `processing`, o carimbo da trava vai junto.
+                processing_since: null,
                 ...(desfecho.encerrado ? { processed_at: new Date().toISOString() } : {}),
             })
             .eq('id', item.id);
@@ -118,6 +120,8 @@ export async function processarItemDaFila(
             .update({
                 status: 'completed',
                 processed_at: new Date().toISOString(),
+                // Story 2.43 — saiu de `processing`, o carimbo da trava vai junto.
+                processing_since: null,
                 ...(motivo ? { last_error: motivo } : {}),
             })
             .eq('id', item.id);
@@ -135,7 +139,10 @@ export async function processarItemDaFila(
         // diária. Sem ele, um item pego pelos dois pagaria a IA duas vezes.
         const { data: travado, error: erroLock } = await supabase
             .from('ai_pending_lead_scores')
-            .update({ status: 'processing' })
+            // Story 2.43 — `processing_since` no MESMO UPDATE que trava, nunca em
+            // passo separado: a janela entre dois passos é exatamente o caso que
+            // o resgate precisa cobrir.
+            .update({ status: 'processing', processing_since: new Date().toISOString() })
             .eq('id', item.id)
             .eq('status', 'pending')
             .select('id');

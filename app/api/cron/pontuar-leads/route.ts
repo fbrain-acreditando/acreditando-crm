@@ -44,6 +44,7 @@ import {
     type CacheDeConfig,
     type Desfecho,
 } from '@/lib/ai/scoring/processarItemDaFila';
+import { resgatarItensPresos } from '@/lib/ai/scoring/resgatarItensPresos';
 
 export const maxDuration = 300;
 
@@ -89,6 +90,14 @@ export async function GET(request: Request) {
     // explicitamente — defense-in-depth, porque a RLS não protege aqui.
     const supabase = createClient(url, serviceKey);
 
+    // Story 2.43 — a faxina vem ANTES de ler a fila: item que ficou preso em
+    // `processing` volta a `pending` (consumindo tentativa) e já é pego nesta
+    // mesma rodada. Em regime normal afeta ZERO linhas.
+    //
+    // 📌 Esta é a garantia de pior caso: mesmo sem tráfego nenhum no dia, o
+    //    resgate acontece pelo menos uma vez.
+    const resgate = await resgatarItensPresos(supabase);
+
     // A fila, em FIFO. `attempts < MAX_TENTATIVAS` é o que impede o laço infinito:
     // card que falhou 3 vezes já está `failed` e não volta mais.
     const { data: fila, error: erroFila } = await supabase
@@ -106,7 +115,7 @@ export async function GET(request: Request) {
 
     if (!fila || fila.length === 0) {
         // O caso NORMAL depois da 2.42: o evento deu conta de tudo.
-        return json({ ok: true, pontuados: 0, mensagem: 'Nada ficou para trás.' });
+        return json({ ok: true, pontuados: 0, mensagem: 'Nada ficou para trás.', resgate });
     }
 
     const cacheDeConfig: CacheDeConfig = new Map();
@@ -150,6 +159,9 @@ export async function GET(request: Request) {
         naoAlcancados,
         naFila: fila.length,
         motivos,
+        // Se a faxina falhar, o motivo precisa aparecer no log da Vercel — não
+        // pode virar `console.error` mudo (AC6).
+        resgate,
         duracaoMs: Date.now() - comecouEm,
     });
 }

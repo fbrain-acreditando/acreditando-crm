@@ -12,6 +12,7 @@ import {
   itemElegivelParaRodada,
   motivoParaDispensar,
   type EstadoDoCard,
+  type StatusDaFila,
 } from './filaDePontuacao';
 
 const CARD_OK: EstadoDoCard = {
@@ -85,6 +86,65 @@ describe('AC5 — falha de ambiente não queima o card', () => {
     // Repor a chave não pode encontrar a fila morta.
     expect(itemElegivelParaRodada(estado)).toBe(true);
     expect(estado.attempts).toBe(0);
+  });
+});
+
+/**
+ * Story 2.43 — o resgate de item preso em `processing`.
+ *
+ * O resgate usa a MESMA decisão de uma falha (`decidirDesfechoDaTentativa` com
+ * `consomeTentativa = true`) — e é justamente isso que precisa ser provado:
+ * resgatar SEM contar recriaria o laço infinito de R$ 197,83 com outro nome.
+ */
+describe('story 2.43 — o resgate conta a tentativa', () => {
+  /** Modela um card que trava a função SEMPRE (conversa gigante, parser quebrado). */
+  function simularCardQueTravaSempre(rodadasDeResgate: number) {
+    let estado = { status: 'pending' as StatusDaFila, attempts: 0 };
+    let vezesQueTravou = 0;
+
+    for (let i = 0; i < rodadasDeResgate; i++) {
+      if (!itemElegivelParaRodada(estado)) continue;
+
+      // 1. o item é pego e travado em `processing`
+      // 2. a função morre — nada mais escreve nesse item
+      vezesQueTravou++;
+
+      // 3. o resgate o encontra e o devolve à fila, CONSUMINDO a tentativa
+      const desfecho = decidirDesfechoDaTentativa(estado.attempts, true);
+      estado = { status: desfecho.status, attempts: desfecho.attempts };
+    }
+
+    return { vezesQueTravou, estado };
+  }
+
+  it('um card que trava SEMPRE é resgatado no máximo MAX_TENTATIVAS vezes', () => {
+    const { vezesQueTravou } = simularCardQueTravaSempre(500);
+    expect(vezesQueTravou).toBe(MAX_TENTATIVAS);
+  });
+
+  it('depois do teto o card sai da fila em `failed` — não volta a ser resgatado', () => {
+    const { estado } = simularCardQueTravaSempre(500);
+    expect(estado.status).toBe('failed');
+    expect(itemElegivelParaRodada(estado)).toBe(false);
+  });
+
+  it('🪤 o antídoto: resgatar SEM contar tentativa recria o laço infinito', () => {
+    // Este teste existe para documentar o que NÃO fazer. Se alguém "consertar" o
+    // resgate para não queimar a tentativa do card (parece gentil), o resultado é
+    // exatamente o defeito da 2.35 com outro nome.
+    let estado = { status: 'pending' as StatusDaFila, attempts: 0 };
+    let vezesQueTravou = 0;
+
+    for (let i = 0; i < 288; i++) {
+      if (!itemElegivelParaRodada(estado)) continue;
+      vezesQueTravou++;
+      const desfecho = decidirDesfechoDaTentativa(estado.attempts, /* consomeTentativa */ false);
+      estado = { status: desfecho.status, attempts: desfecho.attempts };
+    }
+
+    // 288 = uma vez por rodada, para sempre. É o número da fatura de R$ 197,83.
+    expect(vezesQueTravou).toBe(288);
+    expect(itemElegivelParaRodada(estado)).toBe(true);
   });
 });
 

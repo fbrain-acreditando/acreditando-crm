@@ -25,6 +25,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { itemElegivelParaRodada, type StatusDaFila } from '@/lib/ai/scoring/filaDePontuacao';
 import { processarItemDaFila } from '@/lib/ai/scoring/processarItemDaFila';
+import { resgatarItensPresos } from '@/lib/ai/scoring/resgatarItensPresos';
 
 /**
  * 60s: a pontuação leva 6,0s em média (p99 16s, medido no console do Google em
@@ -67,6 +68,14 @@ export async function POST(request: Request) {
     // explicitamente — defense-in-depth, porque a RLS não protege aqui.
     const supabase = createClient(url, serviceKey);
 
+    // Story 2.43 — o resgate pega carona no tráfego real. É isto que o torna
+    // RÁPIDO na prática: qualquer lead novo entrando em `Qualificado` já devolve
+    // à fila o que ficou preso, sem esperar a rede diária.
+    //
+    // Um `UPDATE` que em regime normal afeta ZERO linhas — e que nunca lança, para
+    // não derrubar a pontuação por causa da faxina.
+    const resgate = await resgatarItensPresos(supabase);
+
     const { data: item, error: erroItem } = await supabase
         .from('ai_pending_lead_scores')
         .select('id, deal_id, organization_id, attempts, status')
@@ -91,6 +100,7 @@ export async function POST(request: Request) {
             ok: true,
             desfecho: 'ignorado',
             motivo: `item não elegível (status=${item.status}, attempts=${item.attempts})`,
+            resgate,
         });
     }
 
@@ -105,5 +115,5 @@ export async function POST(request: Request) {
     // (`last_error` + `attempts`), que é onde ela precisa estar. Devolver 5xx aqui
     // só faria o `pg_net` guardar um erro que ninguém lê — o mesmo silêncio que
     // escondeu o problema de 13–16/08.
-    return json({ ok: true, itemId: item.id, dealId: item.deal_id, ...resultado });
+    return json({ ok: true, itemId: item.id, dealId: item.deal_id, ...resultado, resgate });
 }

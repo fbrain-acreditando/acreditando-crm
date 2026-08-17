@@ -39,6 +39,7 @@ import { createClient } from '@/lib/supabase/server';
 import { evaluateStageAdvancement } from '@/lib/ai/agent/stage-evaluator';
 import { buildLeadContext } from '@/lib/ai/agent/context-builder';
 import { getConversationHistory, getOrgAIConfig } from '@/lib/ai/agent/agent.service';
+import { resgatarItensPresos } from '@/lib/ai/scoring/resgatarItensPresos';
 
 export const maxDuration = 60;
 
@@ -65,9 +66,16 @@ export async function GET(req: Request) {
   // Claim a batch of pending evaluations atomically.
   // We update status to 'processing' before reading to avoid double-processing
   // across concurrent cron invocations (Vercel may overlap on long queues).
+  // Story 2.43 — antes de reivindicar, devolve à fila o que ficou preso em
+  // `processing` numa execução anterior que morreu. Em regime normal afeta ZERO
+  // linhas. ⚠️ Esta fila é a MAIS exposta: reivindica 10 itens e os processa em
+  // PARALELO com maxDuration 60 — um estouro pode deixar 10 presos de uma vez.
+  const resgate = await resgatarItensPresos(supabase);
+
   const { data: claimed, error: claimError } = await supabase
     .from('ai_pending_evaluations')
-    .update({ status: 'processing' })
+    // `processing_since` no MESMO UPDATE que trava (story 2.43).
+    .update({ status: 'processing', processing_since: new Date().toISOString() })
     .eq('status', 'pending')
     .lt('attempts', MAX_ATTEMPTS)
     .order('created_at', { ascending: true })
@@ -85,7 +93,7 @@ export async function GET(req: Request) {
   console.log(`[Cron:stage-evaluations] Processing ${batch.length} evaluations`);
 
   if (batch.length === 0) {
-    return json({ processed: 0, failed: 0, skipped: 0 });
+    return json({ processed: 0, failed: 0, skipped: 0, resgate });
   }
 
   let processed = 0;
@@ -112,6 +120,7 @@ export async function GET(req: Request) {
               status: 'failed',
               last_error: 'Missing aiConfig or context at evaluation time',
               processed_at: new Date().toISOString(),
+              processing_since: null,
             })
             .eq('id', id);
           skipped++;
@@ -132,6 +141,7 @@ export async function GET(req: Request) {
               status: 'failed',
               last_error: 'Deal has no stage at evaluation time',
               processed_at: new Date().toISOString(),
+              processing_since: null,
             })
             .eq('id', id);
           skipped++;
@@ -153,6 +163,7 @@ export async function GET(req: Request) {
               status: 'completed',
               last_error: 'Stage AI not enabled at evaluation time',
               processed_at: new Date().toISOString(),
+              processing_since: null,
             })
             .eq('id', id);
           skipped++;
@@ -187,6 +198,7 @@ export async function GET(req: Request) {
           .update({
             status: 'completed',
             processed_at: new Date().toISOString(),
+            processing_since: null,
           })
           .eq('id', id);
 
@@ -212,6 +224,7 @@ export async function GET(req: Request) {
             attempts: nextAttempts,
             last_error: errorMessage,
             processed_at: nextStatus === 'failed' ? new Date().toISOString() : null,
+            processing_since: null,
           })
           .eq('id', id);
 
@@ -221,5 +234,8 @@ export async function GET(req: Request) {
   );
 
   console.log(`[Cron:stage-evaluations] Done — processed: ${processed}, failed: ${failed}, skipped: ${skipped}`);
-  return json({ processed, failed, skipped });
+  // `resgate` entra no corpo de propósito: se a faxina falhar, o motivo precisa
+  // aparecer no log da Vercel. `console.error` sozinho é o silêncio que escondeu
+  // o problema de 13–16/08 por três dias.
+  return json({ processed, failed, skipped, resgate });
 }
