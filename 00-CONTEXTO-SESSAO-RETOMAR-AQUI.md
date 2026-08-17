@@ -27,6 +27,7 @@ pediu que a analise da IA **nao use cron** — *"quero sob demanda"*. Isso virou
 |---|---|---|
 | **2.41** | fila com contador de tentativas (mata o laco infinito de R$ 197,83) | codigo pronto, no remoto |
 | **2.42** | o trigger **chama a IA na hora** via `pg_net`; o cron de 12x/hora morre | codigo pronto, no remoto |
+| **2.43** | item preso em `processing` volta pra fila **contando a tentativa** | codigo pronto, no remoto |
 
 ```
 ANTES:  trigger enfileira -> cron varre de 5 em 5 min -> pontua   (288 rodadas/dia)
@@ -62,21 +63,32 @@ AGORA:  trigger enfileira -> trigger CHAMA (pg_net)   -> pontua   (1 rodada/dia,
   mas **para o lado seguro**
 - Pior caso por card passa a **9 requisicoes HTTP** (3 tentativas x `maxRetries: 2`), **limitado**
 
-### 🔴 DIVIDA QUE ESTA SESSAO CRIOU — story 2.43 (reaper)
+### ✅ A DIVIDA QUE ESTA SESSAO CRIOU E FECHOU NA MESMA SESSAO — story 2.43
 
-O gate da 2.41 classificou *"item preso em `processing`"* como "nao bloqueia". **Com a 2.42 isso
-piora e a avaliacao foi corrigida:** o caminho normal agora e uma funcao com `maxDuration = 60`;
-se for cortada no meio de uma pontuacao, o item fica `processing` — e **a rede de seguranca
-filtra `pending`, entao nao enxerga `processing`**. O card ficaria sem nota **para sempre**.
+O gate da 2.41 classificou *"item preso em `processing`"* como "nao bloqueia". O gate da 2.42
+**corrigiu a propria avaliacao**: o caminho normal virou uma funcao com `maxDuration = 60`; se
+cortada no meio de uma pontuacao o item fica `processing` — e a rede de seguranca filtra
+`pending`, entao **nao o enxerga**. O card ficaria sem nota **para sempre**.
 
-⇒ **Story 2.43:** devolver a `pending` item em `processing` ha mais de N minutos, contando a
-tentativa. Vale tambem para o cron irmao `stage-evaluations`, que tem a mesma lacuna.
+A 2.43 fecha isso, e a decisao que a define e esta: **o resgate CONSOME tentativa.** Resgatar sem
+contar recriaria o laco infinito com outro nome — *"uma falha se auto-corrige na rodada
+seguinte"* e a frase da 2.35 que custou R$ 197,83.
+
+🧱 **O obstaculo que ninguem tinha visto:** nao existia "desde quando esta em `processing`".
+`created_at` e quando entrou na fila; `processed_at` so e escrito no fim. Sem carimbo, resgatar
+item **em voo** faria a IA ser paga duas vezes. Por isso a story cria `processing_since`, escrito
+no MESMO UPDATE que trava. **Usar `created_at` como aproximacao esta descartado, e o descarte
+ficou registrado dentro da migration** para nao ser "simplificado" numa proxima leitura.
+
+Cobre as **duas** filas: `ai_pending_lead_scores` e `ai_pending_evaluations` (o cron irmao, que e
+ainda mais exposto — 10 itens em paralelo com maxDuration 60). **Nenhum cron novo:** o resgate
+pega carona no disparo sob demanda, na rede diaria e no cron irmao.
 
 ### ⚠️ O QUE FALTA — e a ORDEM importa
 
 | # | Acao | Por que a ordem |
 |---|---|---|
-| 1 | **Aplicar as 2 migrations** no `nossocrmv2` | deploy antes disso = codigo novo consulta tabela inexistente ⇒ **500 a cada 5 min** |
+| 1 | **Aplicar as 3 migrations** no `nossocrmv2` | deploy antes disso = codigo novo consulta tabela inexistente ⇒ **500 a cada 5 min** |
 | 2 | **Deploy** (merge em `main`) | — |
 | 3 | **Repor a chave** | antes do deploy, o codigo velho volta a varrer a view ⇒ **o sangramento recomeca na mesma hora** |
 
@@ -90,7 +102,18 @@ futuro desta classe.
 2. Arrastar **um** card → `dispatched_at` e `request_id` preenchidos, depois `completed` com nota
    ⚠️ Este e o item nº 1: prova que o trigger consegue ler o segredo do `vault`
 3. Deixar a **IA** qualificar outro → mesma conferencia (fecha o AC1, hoje provado so por desenho)
-4. `count(*) where status='processing'` → deve ser **0**; qualquer numero e a divida da 2.43
+4. `count(*) where status='processing'` → deve ser **0** em regime
+5. **Provar o resgate da 2.43 de verdade:** forcar um item a `processing` com `processing_since`
+   de 1 hora atras, rodar `select resgatar_itens_presos()`, e conferir que voltou a `pending`
+   **com `attempts` incrementado** — nao basta ter voltado. Repetir 3x e ver virar `failed`
+
+### 📄 Migrations a aplicar, NESTA ordem
+
+```
+1. 20260817120000_pontuacao_dispara_na_entrada.sql   (2.41 — fila + trigger + backfill)
+2. 20260817160000_pontuacao_sob_demanda.sql          (2.42 — pg_net + unschedule + rede diaria)
+3. 20260817180000_resgate_de_itens_presos.sql        (2.43 — processing_since + resgate)
+```
 
 ### 🛑 A Fernanda ainda nao foi avisada
 
