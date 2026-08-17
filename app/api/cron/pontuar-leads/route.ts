@@ -2,62 +2,68 @@
  * GET /api/cron/pontuar-leads
  *
  * Story 2.35 — pontua o lead que entrou em `Qualificado`.
- * Story 2.41 — **drena uma FILA, não varre o board.**
+ * Story 2.41 — drena uma FILA, não varre o board.
+ * Story 2.42 — **deixa de ser o motor e vira a REDE DE SEGURANÇA, 1× por dia.**
  *
  * ============================================================================
- * ⚠️ O QUE MUDOU NA 2.41, E POR QUE (custou R$ 197,83)
+ * ⚠️ O QUE MUDOU, E POR QUE (custou R$ 197,83)
  * ============================================================================
- * Antes, este cron lia a VIEW `v_leads_a_pontuar` — derivada do estado do board.
- * Um card só saía dela ao receber o carimbo `pontuada_pela_ia_em`. Card que
- * FALHAVA não recebia carimbo e **não contava tentativa**: voltava na rodada
- * seguinte, para sempre. E a leitura não tinha `ORDER BY`, então os mesmos ~10
- * cards ocupavam todas as rodadas e os outros 20 nunca eram tentados.
+ * Na 2.35 este endpoint lia uma VIEW derivada do estado, de 5 em 5 minutos. Card
+ * que FALHAVA não recebia carimbo e **não contava tentativa**: voltava na rodada
+ * seguinte, para sempre.
  *
  *   12 rodadas/hora × 24h = 288 rodadas/dia × 10 cards = 2.880 chamadas/dia
  *   O Google mediu ~3.000/dia, de 13/08 a 16/08 02:00 (quando a chave caiu).
  *
- * O comentário original defendia isso como virtude — *"uma falha se auto-corrige
- * na rodada seguinte"*. Sem contador de tentativas, **"auto-corrigir" e
- * "reprocessar para sempre" são a mesma frase.**
+ * A 2.41 pôs contador de tentativas. A 2.42 tirou o polling: **quem dispara o
+ * trabalho agora é o trigger do banco**, via `pg_net`, no instante da entrada
+ * (`POST /api/ai/pontuar-lead`).
  *
- * Agora: quem enfileira é um TRIGGER no banco, na ENTRADA da coluna (cobre a
- * Fernanda arrastando, a IA qualificando, os webhooks, a API pública e o MCP —
- * todos terminam no mesmo UPDATE de `deals.stage_id`). Este arquivo só drena,
- * com teto de 3 tentativas por card.
+ * ============================================================================
+ * ENTÃO POR QUE ESTE ARQUIVO AINDA EXISTE?
+ * ============================================================================
+ * Porque `pg_net` é fire-and-forget: se o POST falhar — app em cold start, deploy
+ * no meio, 500, timeout —, **nada tenta de novo**. Sem uma rede, trocar polling
+ * por evento trocaria *"gasta demais"* por *"perde em silêncio"* — a classe de
+ * defeito que mordeu este repo três vezes só em agosto.
  *
- * 📌 `v_leads_a_pontuar` continua existindo, como DIAGNÓSTICO ("algum card ficou
- *    sem nota?"). Lê-la não dispara IA.
+ * Então: **1 rodada por dia**, agindo só sobre quem ficou para trás. Em dia sem
+ * falha, processa **zero**. De 288 rodadas/dia para 1.
+ *
+ * 📌 A pontuação de cada item vive em `processarItemDaFila` — a MESMA função que
+ *    o disparo por evento usa. Duas implementações do mesmo trabalho é o defeito
+ *    que a story 2.29 passou o dia consertando.
  *
  * Protegido por CRON_SECRET, mesmo contrato de `/api/cron/stage-evaluations`.
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { getOrgAIConfig } from '@/lib/ai/agent/agent.service';
-import { pontuarLead } from '@/lib/ai/scoring/pontuarLead';
-import { orderConversationWindow } from '@/lib/ai/extraction/conversationWindow';
-// As REGRAS da fila moram num módulo puro e testado (`filaDePontuacao.test.ts`).
-// Duplicar a trava aqui é como o `15` da carência acabou em dois lugares.
+import { MAX_TENTATIVAS } from '@/lib/ai/scoring/filaDePontuacao';
 import {
-    MAX_TENTATIVAS,
-    decidirDesfechoDaTentativa,
-    motivoParaDispensar,
-} from '@/lib/ai/scoring/filaDePontuacao';
+    processarItemDaFila,
+    type CacheDeConfig,
+    type Desfecho,
+} from '@/lib/ai/scoring/processarItemDaFila';
 
 export const maxDuration = 300;
 
-/** Teto por rodada: uma chamada de IA por card. */
-const MAX_POR_RODADA = 10;
+/**
+ * Teto por rodada.
+ *
+ * ⚠️ O limite aqui **não** é de custo — é de RELÓGIO. Cada item leva ~6s (p99
+ * 16s) e `maxDuration` é 300s. Pedir 50 de uma vez faria a função morrer no meio,
+ * deixando itens presos em `processing` — de onde nada os resgata.
+ */
+const MAX_POR_RODADA = 25;
 
-/** Quantas mensagens da conversa vão para o modelo. Média medida: 30. */
-const MAX_MENSAGENS = 60;
-
-/** Texto que vai para `last_error` quando o card é dispensado (não é falha). */
-const MOTIVO_DA_DISPENSA = {
-    deal_inexistente: 'dispensado: deal inexistente ou excluído',
-    ja_pontuado: 'dispensado: já pontuado (uma entrada, uma avaliação)',
-    nota_manual: 'dispensado: nota manual é intocável (AC3 da 2.35)',
-    saiu_da_coluna: 'dispensado: saiu da coluna de pontuação antes da rodada',
-} as const;
+/**
+ * Para de pegar item novo quando faltam ~60s do teto da função.
+ *
+ * Sair pela porta é diferente de morrer no meio: o que não foi processado
+ * continua `pending` e a rodada de amanhã o pega. Sem esta guarda, o item que
+ * estivesse em voo no segundo 300 ficaria `processing` para sempre.
+ */
+const ORCAMENTO_MS = (maxDuration - 60) * 1000;
 
 function json<T>(body: T, status = 200): Response {
     return new Response(JSON.stringify(body), {
@@ -67,6 +73,8 @@ function json<T>(body: T, status = 200): Response {
 }
 
 export async function GET(request: Request) {
+    const comecouEm = Date.now();
+
     const cronSecret = process.env.CRON_SECRET;
     const authHeader = request.headers.get('authorization');
     if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -97,248 +105,34 @@ export async function GET(request: Request) {
     }
 
     if (!fila || fila.length === 0) {
-        return json({ ok: true, pontuados: 0, mensagem: 'Fila vazia.' });
+        // O caso NORMAL depois da 2.42: o evento deu conta de tudo.
+        return json({ ok: true, pontuados: 0, mensagem: 'Nada ficou para trás.' });
     }
 
-    /**
-     * Registra a falha NA FILA — não só no console.
-     *
-     * ⚠️ `console.error` foi o que escondeu este problema por 3 dias: em produção
-     * ninguém lê. Agora o motivo fica em `last_error`, e a 3ª tentativa encerra
-     * o card em `failed` em vez de o deixar girando.
-     *
-     * `consomeTentativa: false` é para falha de AMBIENTE (chave de IA ausente):
-     * o card não tem culpa, e queimar as 3 tentativas dele faria com que repor a
-     * chave encontrasse a fila inteira morta.
-     */
-    async function registrarFalha(
-        item: { id: string; attempts: number },
-        motivo: string,
-        consomeTentativa = true
-    ) {
-        const desfecho = decidirDesfechoDaTentativa(item.attempts, consomeTentativa);
-
-        const { error } = await supabase
-            .from('ai_pending_lead_scores')
-            .update({
-                status: desfecho.status,
-                attempts: desfecho.attempts,
-                last_error: motivo,
-                ...(desfecho.encerrado ? { processed_at: new Date().toISOString() } : {}),
-            })
-            .eq('id', item.id);
-
-        if (error) {
-            // Se nem a contabilidade da falha grava, isso PRECISA aparecer: é o
-            // caminho que, calado, recriaria o laço infinito.
-            console.error(`[pontuar-leads] NÃO consegui registrar a falha do item ${item.id}:`, error.message);
-        }
-    }
-
-    /** Fecha o item como resolvido — pontuado ou dispensado. */
-    async function marcarConcluido(itemId: string, motivo?: string) {
-        const { error } = await supabase
-            .from('ai_pending_lead_scores')
-            .update({
-                status: 'completed',
-                processed_at: new Date().toISOString(),
-                ...(motivo ? { last_error: motivo } : {}),
-            })
-            .eq('id', itemId);
-
-        if (error) {
-            console.error(`[pontuar-leads] NÃO consegui fechar o item ${itemId}:`, error.message);
-        }
-    }
-
-    const configPorOrg = new Map<string, Awaited<ReturnType<typeof getOrgAIConfig>>>();
-    let pontuados = 0;
-    let falhados = 0;
-    let dispensados = 0;
-    let semChave = 0;
-    const falhas: string[] = [];
+    const cacheDeConfig: CacheDeConfig = new Map();
+    const contagem: Record<Desfecho, number> = {
+        pontuado: 0,
+        dispensado: 0,
+        falhou: 0,
+        sem_chave: 0,
+        ignorado: 0,
+    };
+    const motivos: string[] = [];
+    let naoAlcancados = 0;
 
     for (const item of fila) {
-        try {
-            // Lock otimista: só processa quem ainda está `pending`. Se duas rodadas
-            // se sobrepuserem (rodada anterior lenta), a segunda não repete o card
-            // — repetir aqui é gastar IA duas vezes pelo mesmo lead.
-            const { data: travado, error: erroLock } = await supabase
-                .from('ai_pending_lead_scores')
-                .update({ status: 'processing' })
-                .eq('id', item.id)
-                .eq('status', 'pending')
-                .select('id');
+        if (Date.now() - comecouEm > ORCAMENTO_MS) {
+            // O resto continua `pending`: amanhã a rodada o pega. Melhor um item
+            // adiado do que um item preso em `processing`.
+            naoAlcancados = fila.length - (contagem.pontuado + contagem.dispensado
+                + contagem.falhou + contagem.sem_chave + contagem.ignorado);
+            break;
+        }
 
-            if (erroLock || !travado || travado.length === 0) {
-                continue;
-            }
-
-            // --- o card ainda merece nota? ---
-            //
-            // Entre o enfileiramento e agora, a Fernanda pode ter arrastado o card
-            // para FORA da coluna, dado a nota na mão, ou excluído o lead. Pontuar
-            // nesse caso é gastar IA para escrever o que ninguém quer.
-            const { data: deal } = await supabase
-                .from('deals')
-                .select('id, contact_id, stage_id, pontuada_pela_ia_em, lead_score_source')
-                .eq('id', item.deal_id)
-                .eq('organization_id', item.organization_id)
-                .is('deleted_at', null)
-                .maybeSingle();
-
-            // Ainda está em estágio que pontua? Por COLUNA, nunca por nome (2.33).
-            let emEstagioQuePontua = false;
-            if (deal) {
-                const { data: stage } = await supabase
-                    .from('board_stages')
-                    .select('pontua_lead')
-                    .eq('id', deal.stage_id)
-                    .maybeSingle();
-                emEstagioQuePontua = stage?.pontua_lead === true;
-            }
-
-            // Dispensa NÃO é falha: fecha o item e não consome tentativa.
-            const dispensa = motivoParaDispensar({
-                existe: Boolean(deal),
-                jaPontuado: Boolean(deal?.pontuada_pela_ia_em),
-                notaManual: deal?.lead_score_source === 'manual',
-                emEstagioQuePontua,
-            });
-
-            if (dispensa) {
-                dispensados++;
-                await marcarConcluido(item.id, MOTIVO_DA_DISPENSA[dispensa]);
-                continue;
-            }
-
-            if (!deal) {
-                // Inalcançável: `motivoParaDispensar` devolve 'deal_inexistente'
-                // antes daqui. Fica como narrowing para o TypeScript e como rede
-                // de segurança — item nenhum pode ficar preso em `processing`.
-                await marcarConcluido(item.id, 'deal ausente (caminho inalcançável)');
-                continue;
-            }
-
-            // --- config de IA da org ---
-            if (!configPorOrg.has(item.organization_id)) {
-                configPorOrg.set(
-                    item.organization_id,
-                    await getOrgAIConfig(supabase, item.organization_id)
-                );
-            }
-            const aiConfig = configPorOrg.get(item.organization_id);
-            if (!aiConfig?.apiKey) {
-                // Falha de AMBIENTE: não queima tentativa (ver `registrarFalha`).
-                semChave++;
-                falhas.push(`${item.deal_id}: IA não configurada`);
-                await registrarFalha(item, 'IA não configurada (chave ausente)', false);
-                continue;
-            }
-
-            // --- conversa do contato ---
-            const { data: conversas } = await supabase
-                .from('messaging_conversations')
-                .select('id')
-                .eq('contact_id', deal.contact_id)
-                .eq('organization_id', item.organization_id);
-
-            const ids = (conversas ?? []).map(c => c.id);
-            if (ids.length === 0) {
-                falhados++;
-                falhas.push(`${item.deal_id}: sem conversa`);
-                await registrarFalha(item, 'sem conversa associada ao contato');
-                continue;
-            }
-
-            // Seleciona o que `orderConversationWindow` precisa: ela ordena por
-            // `sent_at ?? created_at` (o instante em que foi DITA, não em que
-            // chegou) e descarta reações por `content_type`. Selecionar menos e
-            // resolver com cast esconderia as duas coisas.
-            const { data: mensagens } = await supabase
-                .from('messaging_messages')
-                .select('id, direction, content, content_type, created_at, sent_at')
-                .in('conversation_id', ids)
-                // As MAIS RECENTES, e depois reordenadas em ordem cronológica.
-                // Pegar as mais ANTIGAS foi o defeito corrigido em 03/08 na
-                // extração de campos: o trecho de qualificação vem no FIM do
-                // roteiro, e a janela nunca chegava nele.
-                .order('created_at', { ascending: false })
-                .limit(MAX_MENSAGENS);
-
-            const janela = orderConversationWindow(mensagens ?? []);
-
-            const texto = janela
-                .map(m => {
-                    const quem = m.direction === 'inbound' ? 'Lead' : 'Atendimento';
-                    const c = (m.content ?? {}) as { text?: string; caption?: string; type?: string };
-                    const corpo = c.text ?? c.caption ?? `[${c.type ?? 'mídia'}]`;
-                    return `${quem}: ${corpo}`;
-                })
-                .join('\n');
-
-            if (!texto.trim()) {
-                falhados++;
-                falhas.push(`${item.deal_id}: conversa sem texto`);
-                await registrarFalha(item, 'conversa sem texto legível');
-                continue;
-            }
-
-            const nota = await pontuarLead(texto, aiConfig);
-
-            const { data: gravado, error: erroUpdate } = await supabase
-                .from('deals')
-                .update({
-                    lead_score: nota.score,
-                    lead_score_known: nota.known,
-                    lead_score_source: 'auto',
-                    lead_score_detail: {
-                        itens: nota.itens,
-                        origem: 'ia:pontuarLead',
-                        // Mantém a forma que o painel já lê (story 2.18 AC5).
-                        matched: nota.itens.filter(i => i.atende === 1).map(i => i.id),
-                        refuted: nota.itens.filter(i => i.atende === 0).map(i => i.id),
-                        unknown: [],
-                    },
-                    pontuada_pela_ia_em: new Date().toISOString(),
-                    lead_score_updated_at: new Date().toISOString(),
-                })
-                .eq('id', item.deal_id)
-                .eq('organization_id', item.organization_id)
-                // Corrida: se a Fernanda definiu a nota na mão entre a leitura da
-                // fila e esta escrita, a dela ganha (AC3).
-                .neq('lead_score_source', 'manual')
-                // Read-back (Rule 7): sem `.select()`, o PostgREST responde OK mesmo
-                // quando ZERO linhas mudaram — e "respondeu OK" não é "está feito".
-                // Era por aqui que a IA podia ser paga e a nota não aparecer.
-                .select('id');
-
-            if (erroUpdate) {
-                falhados++;
-                falhas.push(`${item.deal_id}: ${erroUpdate.message}`);
-                await registrarFalha(item, `erro ao gravar a nota: ${erroUpdate.message}`);
-                continue;
-            }
-
-            if (!gravado || gravado.length === 0) {
-                // A IA foi paga e a nota não entrou. Sem contar tentativa, este é
-                // exatamente o card que giraria para sempre.
-                falhados++;
-                falhas.push(`${item.deal_id}: update afetou 0 linhas`);
-                await registrarFalha(item, 'UPDATE afetou 0 linhas (nota manual em corrida ou RLS)');
-                continue;
-            }
-
-            await marcarConcluido(item.id);
-            pontuados++;
-        } catch (e) {
-            // Um card que falha não derruba a rodada — mas agora ele CONTA a
-            // tentativa e sai da fila na terceira. Era essa a diferença.
-            const motivo = (e as Error).message;
-            console.error(`[pontuar-leads] falha no deal ${item.deal_id}:`, e);
-            falhados++;
-            falhas.push(`${item.deal_id}: ${motivo}`);
-            await registrarFalha(item, motivo);
+        const resultado = await processarItemDaFila(supabase, item, cacheDeConfig);
+        contagem[resultado.desfecho]++;
+        if (resultado.motivo && resultado.desfecho !== 'pontuado') {
+            motivos.push(`${item.deal_id}: ${resultado.motivo}`);
         }
     }
 
@@ -347,11 +141,15 @@ export async function GET(request: Request) {
     // ele rodava e falhava. Cada contador aqui responde uma pergunta diferente.
     return json({
         ok: true,
-        pontuados,
-        falhados,
-        dispensados,
-        semChave,
+        papel: 'rede de seguranca diaria (story 2.42)',
+        pontuados: contagem.pontuado,
+        dispensados: contagem.dispensado,
+        falhados: contagem.falhou,
+        semChave: contagem.sem_chave,
+        ignorados: contagem.ignorado,
+        naoAlcancados,
         naFila: fila.length,
-        falhas,
+        motivos,
+        duracaoMs: Date.now() - comecouEm,
     });
 }
