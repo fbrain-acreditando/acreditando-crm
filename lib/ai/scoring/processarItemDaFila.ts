@@ -274,7 +274,21 @@ export async function processarItemDaFila(
             .eq('organization_id', item.organization_id)
             // Corrida: se a Fernanda definiu a nota na mão entre a leitura da fila
             // e esta escrita, a dela ganha (AC3 da 2.35).
-            .neq('lead_score_source', 'manual')
+            //
+            // 🩸 story 2.44 — POR QUE ISTO NÃO É `.neq(...)`:
+            // `.neq('lead_score_source','manual')` vira `lead_score_source <> 'manual'`,
+            // que em SQL é **NULL** (não TRUE) quando a coluna é NULL. E card nunca
+            // pontuado tem a coluna NULL — ou seja, a guarda que existe para proteger
+            // a nota manual bloqueava **exatamente o caso normal**.
+            //
+            // Medido em 18/08, com a IA recém-religada: os 37 cards da fila tinham
+            // `lead_score_source IS NULL`. Cada tentativa chamava (e PAGAVA) a IA e
+            // descartava a resposta no UPDATE de 0 linhas ⇒ 37 × 3 = 111 chamadas
+            // pagas inúteis, e a fila inteira morrendo em `failed`.
+            //
+            // 📌 Só apareceu porque o `.select()` abaixo existe. Sem o read-back, o
+            //    item teria sido fechado como pontuado.
+            .or('lead_score_source.is.null,lead_score_source.neq.manual')
             // Read-back (Rule 7): sem `.select()`, o PostgREST responde OK mesmo
             // quando ZERO linhas mudaram — e "respondeu OK" não é "está feito".
             // Era por aqui que a IA podia ser paga e a nota não aparecer.

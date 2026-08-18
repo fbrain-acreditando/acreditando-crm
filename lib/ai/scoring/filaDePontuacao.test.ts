@@ -11,6 +11,7 @@ import {
   decidirDesfechoDaTentativa,
   itemElegivelParaRodada,
   motivoParaDispensar,
+  iaPodeSobrescreverNota,
   type EstadoDoCard,
   type StatusDaFila,
 } from './filaDePontuacao';
@@ -182,5 +183,35 @@ describe('AC4 — dispensa não é falha', () => {
         emEstagioQuePontua: false,
       })
     ).toBe('deal_inexistente');
+  });
+});
+
+/**
+ * Story 2.44 — o NULL que custou 111 chamadas pagas (se ninguém tivesse olhado).
+ *
+ * Estes testes não existem para provar que a função é simples. Existem para que
+ * a próxima pessoa que for "otimizar" a query lembre que o caso NULL é o caso
+ * NORMAL, não a exceção.
+ */
+describe('story 2.44 — a IA pode sobrescrever a nota?', () => {
+  it('🩸 card NUNCA pontuado (source NULL) PODE ser pontuado — era este que falhava', () => {
+    expect(iaPodeSobrescreverNota(null)).toBe(true);
+    expect(iaPodeSobrescreverNota(undefined)).toBe(true);
+  });
+
+  it('nota manual continua intocável (AC3 da 2.35)', () => {
+    expect(iaPodeSobrescreverNota('manual')).toBe(false);
+  });
+
+  it('nota da própria IA pode ser reescrita', () => {
+    expect(iaPodeSobrescreverNota('auto')).toBe(true);
+  });
+
+  it('📌 os 37 cards da fila de 18/08 eram TODOS `source NULL`', () => {
+    // Medido em produção: `select lead_score_source ... group by 1` devolveu uma
+    // única linha, `(NULL)`, com 37. Ou seja, a guarda quebrada não afetava um
+    // caso de canto — afetava 100% da fila.
+    const filaReal = Array.from({ length: 37 }, () => null);
+    expect(filaReal.every(s => iaPodeSobrescreverNota(s))).toBe(true);
   });
 });

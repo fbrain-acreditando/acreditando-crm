@@ -104,3 +104,27 @@ export function motivoParaDispensar(
   if (!estado.emEstagioQuePontua) return 'saiu_da_coluna';
   return null;
 }
+
+/**
+ * A IA pode sobrescrever a nota deste card?
+ *
+ * 🩸 **Story 2.44 — a regra existe por causa de uma perda real.**
+ * A proteção da nota manual (AC3 da 2.35) vivia SÓ na query, como
+ * `.neq('lead_score_source','manual')`. Em SQL isso vira
+ * `lead_score_source <> 'manual'`, que é **NULL — não TRUE** — quando a coluna é
+ * NULL. E card nunca pontuado tem a coluna NULL.
+ *
+ * ⇒ A guarda que devia proteger a nota da Fernanda bloqueava **exatamente o caso
+ * normal**, e como a IA é chamada ANTES do UPDATE, cada tentativa era uma
+ * chamada **paga** cuja resposta ia para o lixo.
+ *
+ * 🔗 **Contrato com a query:** o filtro em `processarItemDaFila` precisa ser
+ * equivalente a esta função — hoje
+ * `.or('lead_score_source.is.null,lead_score_source.neq.manual')`.
+ * Se um dia divergirem, esta função é a verdade e a query está errada.
+ */
+export function iaPodeSobrescreverNota(
+  leadScoreSource: string | null | undefined
+): boolean {
+  return leadScoreSource !== 'manual';
+}
