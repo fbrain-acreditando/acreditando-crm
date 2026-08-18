@@ -8,6 +8,107 @@
 
 ---
 
+## Sessao 2026-08-18 (15) — 🟢 a IA do CRM VOLTOU, e um NULL quase custou 111 chamadas pagas
+
+> ✅ **A IA esta pontuando de novo.** Primeira nota desde **14/08 13:53**.
+> Provado com **card real**: entrada na coluna -> trigger -> pg_net -> IA -> nota gravada,
+> `attempts = 0` (acertou de primeira).
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
+> faltam os 38 leads da fila, o pre-pagamento no Google e avisar a Fernanda."*
+
+### O que aconteceu
+
+O Filipe criou a chave nova no Google e colou no CRM. Antes de soltar os 25 da fila, testei com
+**UM** lead — e foi esse teste que encontrou a story 2.44.
+
+### 🩸 Story 2.44 — o NULL que impedia a IA de gravar QUALQUER nota
+
+```ts
+.neq('lead_score_source', 'manual')   // guarda da nota manual (AC3 da 2.35)
+```
+
+Vira `lead_score_source <> 'manual'`, que em SQL e **NULL, nao TRUE**, quando a coluna e NULL.
+E card nunca pontuado tem a coluna NULL.
+
+⇒ **A guarda que devia PROTEGER a nota da Fernanda bloqueava exatamente o caso normal.**
+
+Medido: os **37 cards da fila tinham `lead_score_source IS NULL`** — uma unica linha no group by.
+Nao era caso de canto, era **100% da fila**.
+
+E a IA e chamada ANTES do UPDATE, entao cada tentativa era chamada **paga** jogada fora:
+
+```
+37 cards x 3 tentativas = 111 chamadas pagas inuteis, e a fila morta em `failed`
+```
+
+Teria acontecido **hoje as 03:17, em silencio**. Custo real: **1 chamada** (a do teste).
+
+Correcao: `.or('lead_score_source.is.null,lead_score_source.neq.manual')` + funcao pura
+`iaPodeSobrescreverNota` + 4 testes de regressao. Commit `06235b4`.
+
+### 📌 O QUE SALVOU — e vale mais que a correcao
+
+O `.select()` de read-back que a 2.41 introduziu. Foi ele que transformou *"o PostgREST
+respondeu OK"* em *"zero linhas mudaram"*. **Sem ele o item teria sido fechado como pontuado** e
+o defeito seguiria invisivel — a mesma classe de silencio que custou R$ 197,83.
+
+A regra nasceu nos criativos do Meta Ads, virou pratica aqui na 2.41, e nesta sessao **pagou a
+propria conta**.
+
+### ✅ Tambem provado em producao hoje
+
+- **A rede de seguranca das 03:17 RODOU** (3 itens processados as 03:17:02–03:17:05). O cron novo
+  funciona
+- Os 3 sairam como *"dispensado: saiu da coluna antes da rodada"* — nao gastou IA com quem nao
+  precisava
+- **28 itens com `IA nao configurada (chave ausente)` e `attempts = 0`** ⇒ a regra de nao queimar
+  tentativa em falha de AMBIENTE funcionou. Sem ela, a fila teria chegado hoje inteira morta
+
+### 🔑 A chave nova — o que foi feito no Google
+
+| Item | Estado |
+|---|---|
+| Projeto **`crm-acreditando-ia`** (ID limpo, so do CRM) | ✅ criado |
+| **Gemini API** ativada, e **so ela** | ✅ |
+| Conta de faturamento **MeuCRM** (separada do `bot foto`) | ✅ |
+| Credito de **R$ 30** via PIX | ✅ |
+| **Migracao para pre-pagamento** | ⬜ **PENDENTE** |
+| Chave `crm-acreditando-server` | ✅ criada pelo Filipe |
+
+⚠️ **A chave tem formato NOVO: `AQ.` + 53 caracteres** (nao e mais `AIza...` de 39). Funciona
+normalmente com o SDK — confirmado em producao.
+
+### ⚠️ DESCOBERTAS QUE MUDAM O PLANO DE CUSTO
+
+1. 🛑 **A cota diaria de requisicoes NAO EXISTE** para o uso normal no tier pago. Filtrei as
+   1.906 cotas do projeto: as unicas "per day" do `gemini-3` sao para **Map Grounding** e
+   **Search**. GenerateContent normal aparece como *Ilimitado*. ⇒ **A trava que eu havia
+   prometido como "a unica que funciona mesmo se tudo falhar" nao esta disponivel.**
+2. 🔒 **O pre-pagamento e a trava que sobrou** — e e melhor: acabou o credito, para. Teto fisico.
+   **Enquanto nao for ativado, o pos-pago segue cobrando ate R$ 200 depois que os R$ 30 acabarem.**
+3. 🤖 **Criar chave por automacao de navegador e bloqueado** pelo antifraude do Google
+   (*"The request is suspicious"*). Essa etapa e sempre manual — nao insistir.
+4. 🧾 **O projeto nao tem registro de migrations** (schema `supabase_migrations` inexistente).
+
+### ⚠️ O QUE FALTA
+
+| # | Acao | Quem |
+|---|---|---|
+| 1 | **Pre-pagamento no AI Studio** (botao "Mudar para pre-pagamento") — sem isso o teto de R$ 30 nao existe | Filipe |
+| 2 | **Pontuar os 38 da fila** — o trigger so dispara na ENTRADA; esses entraram por backfill | rede das 03:17, ou chamada manual |
+| 3 | 🛑 **Avisar a Fernanda** — e agora com um detalhe novo: **as notas comecaram a aparecer nos cards dela hoje**, sem ela saber por que | Filipe |
+
+Para pontuar os 38 sem esperar (processa 25 por rodada, entao 2 chamadas):
+
+```
+curl -H "Authorization: Bearer $CRON_SECRET"   https://acreditando-crm-sandy.vercel.app/api/cron/pontuar-leads
+```
+
+---
+
 ## Sessao 2026-08-17 (14) — ⚡ a pontuacao deixa de ser cron e vira SOB DEMANDA
 
 > ✅ **NO AR.** PR #2 mergeado (`635ec7f`), **3 migrations aplicadas** no `nossocrmv2` e deploy
