@@ -8,16 +8,68 @@
 
 ---
 
-## Sessao 2026-08-18 (15) — 🟢 a IA do CRM VOLTOU, e um NULL quase custou 111 chamadas pagas
+## Sessao 2026-08-18 (15) — 🟢 a IA do CRM VOLTOU, um NULL quase custou 111 chamadas pagas, e a fila de 37 foi zerada
 
 > ✅ **A IA esta pontuando de novo.** Primeira nota desde **14/08 13:53**.
 > Provado com **card real**: entrada na coluna -> trigger -> pg_net -> IA -> nota gravada,
 > `attempts = 0` (acertou de primeira).
+> ✅ **Continuacao da mesma sessao:** os 37 leads represados (entraram por backfill) foram
+> pontuados via 2 chamadas manuais ao endpoint `/api/cron/pontuar-leads` — **34 pontuados ·
+> 3 dispensados (ja tinham saido da coluna) · 0 falhas**. `CRON_SECRET` obtido com
+> `vercel link` + `vercel env pull` (nao estava em `.credenciais/`; a API do Vercel com
+> `?decrypt=true` devolveu o valor AINDA criptografado — so o CLI decripta de verdade).
+> `.env.production.local` apagado do disco logo apos cada chamada.
 
 ### Como retomar
 
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
-> faltam os 38 leads da fila, o pre-pagamento no Google e avisar a Fernanda."*
+> falta o pre-pagamento no Google (sexta, decisao do Filipe) e revisar o polling do
+> stage-evaluations."*
+> ✅ **Avisar a Fernanda: FEITO** (o Filipe avisou em 18/08).
+
+### 🔍 Auditoria de fim de sessao — "a IA esta pontuando SO o card que entra em Qualificado?"
+
+Verificado em codigo E no banco (nao de memoria):
+
+- ✅ **A pontuacao esta travada, por COLUNA e nao por nome.** Exatamente **uma** coluna com
+  `pontua_lead = true`: `Qualificado` (order 2), board **`Acreditando`** — o **unico board que
+  existe**. O board de teste "Gestao de Vendas - Experiencia Chile" nao esta mais la.
+- 🚪 **Dois portoes:** entrada = trigger no `UPDATE` de `deals.stage_id` (cobre as 8 portas, porque
+  todas terminam no mesmo UPDATE); saida = `processarItemDaFila` **rele o estagio** antes de gastar
+  IA e dispensa sem chamar o modelo.
+- 🧪 **Provado em producao:** 3 dos 12 da ultima rodada sairam como *"dispensado: saiu da coluna de
+  pontuacao antes da rodada"*. Zero IA gasta com eles.
+- 📊 **Fila:** 42 itens, **todos `completed`** — 0 pending, 0 failed, 0 preso. **9 vieram por
+  `trigger`** (nao backfill) ⇒ o disparo por evento funciona com card real.
+
+### ⚠️ Mas a IA do Google NAO faz so isso
+
+| Caminho | Gatilho | Gasta IA? |
+|---|---|---|
+| Pontuacao (`Qualificado`) | trigger + rede 1x/dia | 1 por card que entra |
+| **Extracao de campos** | webhook GPT Maker na **transferencia** — **nao olha coluna** | 1 por lead transferido |
+| `stage-evaluations` | pg_cron `* * * * *` (1.440x/dia) | **nao hoje** — fila vazia, sai no `batch.length === 0` |
+| `daily-briefing` | Vercel cron 08:00 dias uteis | so com reuniao agendada |
+| Chat / AI Hub | uso humano | sob demanda |
+
+A extracao rodou **2x em 18/08** (18:46 e 18:54 UTC). Desenho correto: dispara na transferencia,
+**1 chamada por lead**, nao por mensagem.
+
+🕳️ **E as 34 pontuacoes de hoje NAO aparecem no `ai_conversation_log`** — a cegueira dos ~1%
+medida em 16/08 segue identica. O que foi consertado foi o **desperdicio**, nao o **log**.
+
+### 🔁 ENFILEIRADO (decisao do Filipe) — revisar o polling do `stage-evaluations`
+
+`stage-evaluations-1min` roda `* * * * *` = **1.440 batidas/dia** no endpoint.
+
+- **Hoje e inofensivo:** a fila `ai_pending_evaluations` esta **vazia** (medido: 0 linhas), entao a
+  rota retorna em `batch.length === 0` **antes** de qualquer chamada de modelo.
+- **Mas e o mesmo desenho** que custou R$ 197,83. O que o salva e ter `attempts` + `MAX_ATTEMPTS`
+  desde abril — foi **dele** que a 2.41 copiou a trava que faltava na pontuacao.
+- 📌 **Divida de desenho, nao incendio:** o gatilho certo e **evento**, como a 2.42 fez com a
+  pontuacao. Sem pressa.
+- ⚠️ **O nome mente:** a migration `20260722120000` agenda `* * * * *`, o comentario do codigo diz
+  *5 min*. **Consultar `cron.job`** para saber a cadencia real antes de mexer.
 
 ### O que aconteceu
 

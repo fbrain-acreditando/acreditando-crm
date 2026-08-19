@@ -15,6 +15,7 @@
 import { supabase } from './client';
 import { Contact, CRMCompany, OrganizationId, PaginationState, PaginatedResponse, ContactsServerFilters } from '@/types';
 import { sanitizeUUID, sanitizeText, sanitizeNumber } from './utils';
+import { filtroDeBuscaDeContato } from './buscaDeContato';
 import { normalizePhoneE164 } from '@/lib/phone';
 
 async function getCurrentOrganizationId(): Promise<string | null> {
@@ -342,10 +343,14 @@ export const contactsService = {
 
       // Apply filters
       if (filters) {
-        // T007: Search filter (name OR email)
-        if (filters.search && filters.search.trim()) {
-          const searchTerm = filters.search.trim();
-          query = query.or(`name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
+        // T007 + story 2.45: busca por nome, e-mail OU TELEFONE.
+        //
+        // O telefone entrou porque 956 dos 957 contatos não têm e-mail e 52% têm
+        // nome de uma palavra só (pushName do WhatsApp) — o número é o único
+        // identificador confiável da base. Ver `buscaDeContato.ts`.
+        if (filters.search) {
+          const expressao = filtroDeBuscaDeContato(filters.search);
+          if (expressao) query = query.or(expressao);
         }
 
         // T008: Stage filter
