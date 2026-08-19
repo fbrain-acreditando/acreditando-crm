@@ -52,6 +52,23 @@ describe('filtroDeBuscaDeContato', () => {
         expect(filtroDeBuscaDeContato('Maria')).not.toContain('phone.ilike');
     });
 
+    // --- Achados na revisão do próprio diff, antes do deploy ---
+
+    it('IGNORA dígito solto no meio do texto — senão a busca acha TODO MUNDO', () => {
+        // Este é o caso que a 1ª versão errava: "Maria 2" tem um dígito, virava
+        // `phone.ilike.%2%` e casava com quase todo telefone da base. O sintoma
+        // seria o oposto do que a story conserta: em vez de "não acha ninguém",
+        // "acha todo mundo" — e igualmente inútil para ela.
+        expect(filtroDeBuscaDeContato('Maria 2')).not.toContain('phone.ilike');
+        expect(filtroDeBuscaDeContato('Ana 12')).not.toContain('phone.ilike');
+        expect(filtroDeBuscaDeContato('João 3º')).not.toContain('phone.ilike');
+    });
+
+    it('a partir de 4 dígitos passa a valer como telefone', () => {
+        expect(filtroDeBuscaDeContato('582')).not.toContain('phone.ilike');
+        expect(filtroDeBuscaDeContato('5826')).toContain('phone.ilike.%5826%');
+    });
+
     it('devolve null quando não há termo', () => {
         expect(filtroDeBuscaDeContato('')).toBeNull();
         expect(filtroDeBuscaDeContato('   ')).toBeNull();
@@ -72,5 +89,13 @@ describe('escaparParaOr — o parser do PostgREST não pode receber sintaxe crua
         // 2 condições (nome, email) = 1 vírgula separadora. Se o termo tivesse
         // vazado cru, haveria 2.
         expect(filtro!.split(',')).toHaveLength(2);
+    });
+
+    it('neutraliza os CURINGAS do ilike — % e * casariam com tudo', () => {
+        // Achado na revisão: `%` e `*` não são "texto que não acha nada", são
+        // "casa com TUDO". Buscar `%` devolveria a base inteira.
+        expect(escaparParaOr('%')).toBe('_');
+        expect(escaparParaOr('Maria*')).toBe('Maria_');
+        expect(filtroDeBuscaDeContato('%')).not.toContain('%%%');
     });
 });

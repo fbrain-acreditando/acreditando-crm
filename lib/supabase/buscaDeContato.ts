@@ -42,8 +42,25 @@ export function apenasDigitos(termo: string): string {
  * o caractere chegar ao parser.
  */
 export function escaparParaOr(termo: string): string {
-    return termo.replace(/[(),]/g, '_');
+    // `%` e `*` são os curingas do `ilike` no PostgREST. Digitados no campo, eles
+    // não são "texto que não acha nada" — são "casa com TUDO": buscar `%`
+    // devolveria a base inteira, que é o mesmo estrago do filtro sem limite
+    // abaixo. Viram `_` (curinga de um caractere) junto com a sintaxe do `.or()`.
+    return termo.replace(/[(),%*]/g, '_');
 }
+
+/**
+ * Mínimo de dígitos para a busca considerar que aquilo é um telefone.
+ *
+ * ⚠️ **Sem este piso a busca por telefone se autodestrói.** Buscar `Maria 2`
+ * produziria `phone.ilike.%2%`, que casa com praticamente TODO contato que tem
+ * telefone ⇒ a busca devolveria a base inteira e pareceria quebrada — trocando
+ * o "não acha ninguém" que estamos consertando por um "acha todo mundo".
+ *
+ * 4 é o menor fragmento que ainda identifica: é o final do número, que é como
+ * ela procura quando tem o contato aberto no WhatsApp e não sabe o nome salvo.
+ */
+export const MINIMO_DE_DIGITOS_PARA_TELEFONE = 4;
 
 /**
  * Monta a expressão do `.or()` do PostgREST para a busca de contatos.
@@ -58,11 +75,10 @@ export function filtroDeBuscaDeContato(termoBruto: string): string | null {
     const seguro = escaparParaOr(termo);
     const condicoes = [`name.ilike.%${seguro}%`, `email.ilike.%${seguro}%`];
 
-    // O telefone entra por DÍGITOS, não pelo texto digitado. Basta haver
-    // dígitos: "9819" acha o telefone terminado nisso, que é como ela procura
-    // quando tem o número na tela do WhatsApp e não o nome salvo.
+    // O telefone entra por DÍGITOS, não pelo texto digitado — e só a partir de
+    // um fragmento que de fato identifique alguém (ver a constante acima).
     const digitos = apenasDigitos(termo);
-    if (digitos.length > 0) {
+    if (digitos.length >= MINIMO_DE_DIGITOS_PARA_TELEFONE) {
         condicoes.push(`phone.ilike.%${digitos}%`);
     }
 

@@ -39,7 +39,7 @@ export interface DadosDeContatoParaValidar {
 }
 
 /** Motivo pelo qual o cadastro não pode ser salvo. `null` = pode salvar. */
-export type ImpedimentoDeContato = 'sem_nome' | 'sem_forma_de_contato';
+export type ImpedimentoDeContato = 'sem_nome' | 'sem_forma_de_contato' | 'email_invalido';
 
 /**
  * Mensagens em pt-BR, no lugar onde a pessoa erra — não em código de erro.
@@ -51,11 +51,27 @@ export type ImpedimentoDeContato = 'sem_nome' | 'sem_forma_de_contato';
 export const MENSAGEM_DO_IMPEDIMENTO: Record<ImpedimentoDeContato, string> = {
     sem_nome: 'Informe o nome do contato.',
     sem_forma_de_contato: 'Informe ao menos o telefone ou o e-mail — o telefone basta.',
+    email_invalido: 'Informe um e-mail válido, ou deixe o campo em branco.',
 };
 
 function vazio(valor?: string | null): boolean {
     return !valor || valor.trim() === '';
 }
+
+/**
+ * Formato mínimo de e-mail: `algo@algo.algo`.
+ *
+ * ⚠️ **Por que isto precisou existir.** O formulário passou a usar `noValidate`,
+ * porque com o `required` nativo ligado o navegador barra o envio ANTES do nosso
+ * handler — e as nossas mensagens em pt-BR nunca apareceriam. Só que `noValidate`
+ * desliga **toda** a validação nativa, inclusive a de formato do `type="email"`.
+ * Sem esta checagem, tirar a obrigatoriedade do e-mail teria, de brinde,
+ * **passado a aceitar `abc` como e-mail** — trocar um defeito por outro.
+ *
+ * Deliberadamente frouxa: validar e-mail por regex "de verdade" é folclore e gera
+ * falso negativo. Aqui só barra o que claramente não é endereço.
+ */
+const FORMATO_DE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Diz se o contato pode ser salvo, e por que não, quando não pode.
@@ -71,6 +87,11 @@ export function impedimentoParaSalvarContato(
     // 99,9% da base. E-mail sozinho também basta — é o que mantém editáveis os
     // 90 contatos que nasceram sem telefone.
     if (vazio(dados.phone) && vazio(dados.email)) return 'sem_forma_de_contato';
+
+    // E-mail em branco é válido (é o normal aqui). Preenchido, tem de parecer um.
+    if (!vazio(dados.email) && !FORMATO_DE_EMAIL.test(dados.email!.trim())) {
+        return 'email_invalido';
+    }
 
     return null;
 }

@@ -52,6 +52,33 @@ describe('impedimentoParaSalvarContato', () => {
         expect(impedimentoParaSalvarContato({ name: null, phone: null, email: null })).toBe('sem_nome');
     });
 
+    // --- Achado na revisão do próprio diff, antes do deploy ---
+
+    it('recusa e-mail malformado — o `noValidate` tirou a checagem do navegador', () => {
+        // O formulário passou a usar `noValidate` para que as mensagens em pt-BR
+        // apareçam (o `required` nativo barra antes do nosso handler). Isso
+        // desligou também a validação de formato do `type="email"`. Sem esta
+        // regra, tirar a obrigatoriedade do e-mail passaria a ACEITAR "abc".
+        expect(
+            impedimentoParaSalvarContato({ name: 'Maria', phone: '+5511999999999', email: 'abc' })
+        ).toBe('email_invalido');
+        expect(
+            impedimentoParaSalvarContato({ name: 'Maria', email: 'maria@sem-ponto' })
+        ).toBe('email_invalido');
+    });
+
+    it('e-mail em branco continua válido — é o normal desta base', () => {
+        expect(
+            impedimentoParaSalvarContato({ name: 'Maria', phone: '+5511999999999', email: '' })
+        ).toBeNull();
+    });
+
+    it('aceita e-mail comum sem frescura de regex', () => {
+        for (const email of ['a@b.co', 'maria.silva@acreditando.com.br', 'x+tag@dominio.org']) {
+            expect(impedimentoParaSalvarContato({ name: 'Maria', email })).toBeNull();
+        }
+    });
+
     it('toda mensagem diz o que fazer, não só o que faltou', () => {
         // Ela já relatou duas vezes no mês desconfiar da própria competência
         // diante de um aviso do sistema. Mensagem que só acusa piora isso.
