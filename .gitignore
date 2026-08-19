@@ -138,3 +138,7 @@ debug_navigation_failed_*.png
 !app/apple-icon.png
 .env*.local
 .dmux/
+
+# Definicoes capturadas antes de aplicar migracao (rede de seguranca local).
+# Nao versionar: e estado do banco num instante, nao fonte da verdade.
+.rollback/
