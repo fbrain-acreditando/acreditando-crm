@@ -71,9 +71,24 @@ Os `value` novos nao casam com o texto livre antigo. As 7 perdas de "bom dia" se
    nosso fail). Configurar o token daria DOIS previews por PR fazendo a mesma coisa.
    **Read-back:** no PR #4 o check `Deploy Preview to Vercel` **nao aparece** e o `Vercel` nativo
    seguiu verde ⇒ perdemos ruido, nao capacidade.
-   ⚠️ **Achado colateral (aberto):** o job `build` do `ci.yml` declara `secrets.NEXT_PUBLIC_SUPABASE_URL`
-   e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — **que tambem nao existem**, e o build passa mesmo assim
-   (5 runs verdes em `main`). O bloco `env:` declara algo que nao esta em uso. Decisao separada.
+   ✅ **O achado colateral tambem foi fechado** (PR #5, merge `33006ed`): o job `build` do `ci.yml`
+   declarava `secrets.NEXT_PUBLIC_SUPABASE_URL` e `..._PUBLISHABLE_KEY` — **que tambem nao existem** —
+   sob o comentario *"Next.js build requires these to be present"*. **Nao requer:** os tres clientes
+   Supabase degradam de proposito (`client.ts` retorna null, `middleware.ts` pula o auth). Provado
+   duas vezes: 5 runs verdes em `main` sem os secrets, e `npm run build` local com `env -u` nas tres
+   variaveis ⇒ **exit 0, build completo**. O bloco saiu; entrou comentario dizendo o que o job E:
+   compile-check em ambiente limpo, artefato descartado — o build que vai pro ar e o da Vercel.
+   **Read-back:** o job `build` so roda em push para `main`, entao a prova e o run do merge —
+   **success, step Build ✓, sem env alguma**.
+
+   🆕 **ABERTO, nascido deste run:** `Node.js 20 is deprecated` — `actions/checkout@v4`,
+   `actions/setup-node@v4`, `actions/cache@v4` e `pnpm/action-setup@v4` estao sendo **forcados a
+   rodar em Node 24**. Funciona hoje, e prazo correndo.
+
+   🤔 **ABERTO, decisao nao tomada:** o job `build` tem `if: push && ref == main` ⇒ **so roda depois
+   do merge**, nunca pode bloquear um PR ruim. E a Vercel builda **todo push em main e todo PR**
+   (`gh api .../deployments` confirma). O portao real do PR e o job `check`. Manter ou nao o `build`
+   e decisao a parte — o PR #5 so tirou a mentira, nao mexeu no escopo do job.
 2. 🤖 **CodeRabbit NAO RODOU** — plano `Free`, **assento `not assigned`**, e o acesso aponta para
    `fbraintech-stack/fbraintech-stack`, nao para este repo. ⚠️ **E o CLI falhou DUAS VEZES com
    exit code 0** (`--prompt-only` foi removido; agora e `--agent`). **Um CI que confiasse no exit
