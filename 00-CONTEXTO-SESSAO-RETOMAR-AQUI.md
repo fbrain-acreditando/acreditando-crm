@@ -63,9 +63,17 @@ Os `value` novos nao casam com o texto livre antigo. As 7 perdas de "bom dia" se
 
 ### ⚠️ 3 PENDENCIAS DE INFRA que o deploy expos (nenhuma e do codigo)
 
-1. 🔑 **`VERCEL_TOKEN` nao existe no repo** ⇒ o workflow `Preview Deploy` **falha em TODO PR**.
-   E **redundante** com a integracao nativa da Vercel (que funcionou). Configurar o secret **ou
-   remover o workflow** — hoje todo PR nasce com um ❌ vermelho que nao significa nada.
+1. ✅ **RESOLVIDO em 19/08** — `preview.yml` **removido** (PR #4, merge `affe8b0`).
+   Era `VERCEL_TOKEN` ausente (`gh secret list` = **vazio**) ⇒ `Preview Deploy` falhava em TODO PR
+   com `Input required and not supplied: vercel-token`. **Nao foi configurado o secret: foi
+   deletado**, porque a integracao NATIVA da Vercel ja faz preview em PR — provado nos checks do
+   PR #3 (`Vercel` pass "Deployment has completed" + `Vercel Preview Comments` pass **ao lado** do
+   nosso fail). Configurar o token daria DOIS previews por PR fazendo a mesma coisa.
+   **Read-back:** no PR #4 o check `Deploy Preview to Vercel` **nao aparece** e o `Vercel` nativo
+   seguiu verde ⇒ perdemos ruido, nao capacidade.
+   ⚠️ **Achado colateral (aberto):** o job `build` do `ci.yml` declara `secrets.NEXT_PUBLIC_SUPABASE_URL`
+   e `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — **que tambem nao existem**, e o build passa mesmo assim
+   (5 runs verdes em `main`). O bloco `env:` declara algo que nao esta em uso. Decisao separada.
 2. 🤖 **CodeRabbit NAO RODOU** — plano `Free`, **assento `not assigned`**, e o acesso aponta para
    `fbraintech-stack/fbraintech-stack`, nao para este repo. ⚠️ **E o CLI falhou DUAS VEZES com
    exit code 0** (`--prompt-only` foi removido; agora e `--agent`). **Um CI que confiasse no exit
