@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
-import { X, ThumbsDown, DollarSign, Users, Clock, HelpCircle, MapPin } from 'lucide-react';
+import {
+  X, ThumbsDown, DollarSign, Users, Clock, HelpCircle, MapPin,
+  MessageSquare, Baby, Home, ArrowRightLeft, MousePointerClick,
+} from 'lucide-react';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
 
 interface LossReasonModalProps {
@@ -22,13 +25,53 @@ interface LossReasonModalProps {
  * `value` é o que fica gravado em `deals.loss_reason` e é o que os relatórios
  * agrupam ⇒ **um motivo, um `value` canônico**. Mudar um `value` daqui
  * fragmenta o histórico; para renomear, migrar as linhas existentes junto.
+ *
+ * ⚠️ **Story 2.45 (18/08) — os `value` novos NÃO casam com o texto livre antigo.**
+ * O botão *Só "bom dia"* grava `Lead só mandou bom dia`, enquanto as 7 perdas já
+ * existentes estão em 5 grafias diferentes. ⇒ **o relatório só agrupa daqui para
+ * a frente.** Consolidar o passado exige migrar as linhas antigas, e isso
+ * **sobrescreve texto que a Fernanda escreveu** — é decisão dela, não do código.
+ * Enquanto não for feita, a cauda antiga continua visível no Bloco C.
  */
+// Story 2.45 — 6 motivos novos, ordenados pela MEDIÇÃO dos 64 perdidos (18/08).
+// Entre parênteses, quantas perdas cada um já tem gravadas em texto livre hoje.
 const QUICK_REASONS = [
-  { label: 'Distância', icon: MapPin, value: 'Distância' },
-  { label: 'Preço', icon: DollarSign, value: 'Preço muito alto' },
-  { label: 'Concorrência', icon: Users, value: 'Perdeu para concorrente' },
-  { label: 'Timing', icon: Clock, value: 'Momento inadequado' },
-  { label: 'Desistência', icon: X, value: 'Cliente desistiu' },
+  { label: 'Distância', icon: MapPin, value: 'Distância' },                                  // 24
+  { label: 'Preço', icon: DollarSign, value: 'Preço muito alto' },                           // 11
+
+  // Pedido da Fernanda (18/08) — e o caso mais caro da cauda: 7 perdas em CINCO
+  // grafias (`lead bom dia`, `cliente bom dia`, `cliente de bom dia`,
+  // `lead de bom dia`, `cliente bom dia e oração`). Nenhuma agrupa com a outra.
+  // É o mesmo enredo que "Distância" já viveu na 2.26, com o dobro do volume.
+  { label: 'Só "bom dia"', icon: MessageSquare, value: 'Lead só mandou bom dia' },           // 7
+
+  // NÃO foi pedido — saiu da medição. Tem mais volume que dois dos três que ela
+  // pediu. Não estava na fala dela porque ela digitava caso a caso, e caso a
+  // caso não vira categoria na cabeça de ninguém:
+  // `bebê` (2) · `criança de 5 anos` · `criança inferior à 12 anos` · `bebê 1 ano e 3 meses`.
+  { label: 'Perfil/idade', icon: Baby, value: 'Perfil fora do atendimento (idade)' },        // 5
+
+  // ⚠️ Os dois abaixo são, a rigor, ENCAMINHAMENTO e não perda. Entram como
+  // botão de perda por decisão do Filipe (18/08): padronizar o texto agora vale
+  // mais que a distinção — que é decisão de operação e fica para quando a
+  // Fernanda separar "não era lead" de "perdemos a venda" no número da diretoria.
+  { label: 'Domiciliar', icon: Home, value: 'Precisa de atendimento domiciliar' },           // 3
+  { label: 'Para a Livre', icon: ArrowRightLeft, value: 'Encaminhado para a Livre' },        // 2 (`Livre` e `livre` — duas grafias só pela caixa alta)
+
+  // Pedidos da Fernanda. Volume baixo hoje, mas é ela quem digita: o custo do
+  // texto livre é dela, não do relatório.
+  { label: 'Sem interesse', icon: ThumbsDown, value: 'Lead sem interesse' },                 // 2
+  { label: 'Clicou sem querer', icon: MousePointerClick, value: 'Lead clicou sem querer' },  // 2
+
+  { label: 'Desistência', icon: X, value: 'Cliente desistiu' },                              // 1
+
+  // ⚠️ Zero uso em 64 perdas — herança B2B do CRM de origem, que não descreve
+  // nada numa clínica. MANTIDOS de propósito: aposentar botão é decisão da
+  // Fernanda, não minha, e remover um `value` fragmentaria o histórico de quem
+  // já tenha usado. Se seguirem em 0 na próxima medição, aí sim propor a saída.
+  { label: 'Concorrência', icon: Users, value: 'Perdeu para concorrente' },                  // 0
+  { label: 'Timing', icon: Clock, value: 'Momento inadequado' },                             // 0
+
   { label: 'Outro', icon: HelpCircle, value: '' },
 ];
 
@@ -156,7 +199,15 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
             </p>
 
             {!showCustomInput ? (
-              <div className="grid grid-cols-2 gap-2" role="group" aria-label="Motivos rápidos">
+              // Story 2.45 — a lista foi de 6 para 12 itens. Em 2 colunas fixas
+              // isso vira 6 linhas e o modal passa da altura da tela em telefone.
+              // `max-h` + rolagem mantém o modal do tamanho de antes; os mais
+              // frequentes ficam visíveis sem rolar, que é a razão da ordem.
+              <div
+                className="grid grid-cols-2 gap-2 max-h-[45vh] overflow-y-auto pr-1"
+                role="group"
+                aria-label="Motivos rápidos"
+              >
                 {QUICK_REASONS.map((item) => (
                   <button
                     key={item.label}
