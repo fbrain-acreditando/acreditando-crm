@@ -1,12 +1,19 @@
 # CI — NossoCRM
 #
 # Jobs:
-#   check  — lint + typecheck + tests (runs on every PR and push to main/feature branches)
-#   build  — Next.js production build (runs only on push to main)
+#   commitlint — valida conventional commits (so em PR)
+#   check      — lint + typecheck + tests (todo PR e push em main/feature/fix)
+#
+# NAO existe job de build aqui, de proposito. A integracao nativa da Vercel
+# builda TODO PR (preview) e TODO push em main (production) — medido em
+# `gh api repos/.../deployments`. O job `build` que existia aqui rodava
+# `if: push && ref == main`, ou seja SO DEPOIS do merge: nunca pode barrar um
+# PR ruim, e duplicava o build que a Vercel ja fazia. Removido em 19/08/2026.
+# Se a integracao Vercel um dia sair, este job precisa voltar — e como gate de
+# PR, nao pos-merge.
 #
 # Cache strategy:
 #   - pnpm store: keyed on pnpm-lock.yaml hash via actions/setup-node cache: "pnpm"
-#   - .next/cache: keyed on source hash, restores on prefix match
 #
 # Security: no untrusted event inputs are interpolated into run: commands.
 
@@ -27,7 +34,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "20"
+  # Node 20 saiu de suporte em abril/2026. 22 e o LTS ativo.
+  # Este e o Node em que lint, typecheck, testes (e o build da Vercel) rodam.
+  NODE_VERSION: "22"
   PNPM_VERSION: "9"
 
 jobs:
@@ -41,12 +50,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -69,15 +78,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "pnpm"
@@ -93,58 +102,3 @@ jobs:
 
       - name: Tests (Vitest)
         run: pnpm test:run
-
-  # ─── build ────────────────────────────────────────────────────────────────
-  # Full Next.js production build. Runs only on pushes to main.
-  # Depends on check passing to avoid wasting build minutes on broken code.
-  build:
-    name: Build (Next.js)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "pnpm"
-
-      - name: Restore Next.js build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ github.workspace }}/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-${{ hashFiles('**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.css') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('**/pnpm-lock.yaml') }}-
-            ${{ runner.os }}-nextjs-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Compile-check em ambiente limpo, SEM env de Supabase — de proposito.
-      #
-      # O bloco `env:` que ficava aqui declarava
-      # `secrets.NEXT_PUBLIC_SUPABASE_URL` e `..._PUBLISHABLE_KEY`, que NAO EXISTEM
-      # neste repo (`gh secret list` = vazio) — e dizia que "o build do Next.js
-      # exige que estejam presentes". Nao exige: os tres clientes Supabase
-      # degradam de proposito quando faltam (`client.ts` retorna null,
-      # `middleware.ts` pula o auth), e o build passa verde sem elas.
-      # Declarar secret inexistente e declarar uma protecao que nao existe.
-      #
-      # O build que VAI PRO AR e o da Vercel, com as envs reais do projeto.
-      # Este aqui nunca e publicado — o artefato e descartado no fim do job.
-      # Consequencia aceita: o bundle sai no modo "nao configurado", entao este
-      # job nao exercita o caminho com Supabase ligado. Quem exercita e a Vercel.
-      - name: Build
-        run: pnpm build
