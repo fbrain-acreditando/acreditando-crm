@@ -175,11 +175,23 @@ const metricsState = {
   error: null as Error | null,
 };
 
+// Story 2.46: a secao passou a ler tambem as metricas REAIS de atendimento, para
+// declarar na tela quanto da operacao o log da IA cobre (AC9). Sem este mock, o
+// componente tenta ir ao Supabase e quebra a renderizacao.
+const atendimentoState = {
+  data: null as { msgsIa: number; msgsPessoa: number } | null,
+};
+
 vi.mock('@/lib/query/hooks', () => ({
   useAIMetricsQuery: () => ({
     data: metricsState.data,
     isLoading: metricsState.isLoading,
     error: metricsState.error,
+  }),
+  useMetricasDeAtendimentoQuery: () => ({
+    data: atendimentoState.data,
+    isLoading: false,
+    error: null,
   }),
 }));
 
@@ -194,6 +206,7 @@ describe('US-AI-008: AIMetricsSection', () => {
     metricsState.data = createMockMetrics();
     metricsState.isLoading = false;
     metricsState.error = null;
+    atendimentoState.data = null;
   });
 
   async function renderSection() {
@@ -202,7 +215,7 @@ describe('US-AI-008: AIMetricsSection', () => {
     );
     return render(
       <TestWrapper>
-        <AIMetricsSection />
+        <AIMetricsSection period="this_month" />
       </TestWrapper>
     );
   }

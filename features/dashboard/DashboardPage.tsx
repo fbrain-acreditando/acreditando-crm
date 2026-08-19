@@ -255,7 +255,7 @@ const DashboardPage: React.FC = () => {
       <MessagingMetricsSection period={period} />
 
       {/* AI Performance Section */}
-      <AIMetricsSection />
+      <AIMetricsSection period={period} />
 
       {/* Auto-Resize Bottom Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-[300px]">
