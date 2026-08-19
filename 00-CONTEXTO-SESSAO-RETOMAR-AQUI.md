@@ -81,14 +81,31 @@ Os `value` novos nao casam com o texto livre antigo. As 7 perdas de "bom dia" se
    **Read-back:** o job `build` so roda em push para `main`, entao a prova e o run do merge —
    **success, step Build ✓, sem env alguma**.
 
-   🆕 **ABERTO, nascido deste run:** `Node.js 20 is deprecated` — `actions/checkout@v4`,
-   `actions/setup-node@v4`, `actions/cache@v4` e `pnpm/action-setup@v4` estao sendo **forcados a
-   rodar em Node 24**. Funciona hoje, e prazo correndo.
+   ✅ **Os dois abertos foram fechados no PR #6** (merge `5c87d37`), e ao medir apareceram **duas
+   coisas maiores que a anotacao dizia**:
 
-   🤔 **ABERTO, decisao nao tomada:** o job `build` tem `if: push && ref == main` ⇒ **so roda depois
-   do merge**, nunca pode bloquear um PR ruim. E a Vercel builda **todo push em main e todo PR**
-   (`gh api .../deployments` confirma). O portao real do PR e o job `check`. Manter ou nao o `build`
-   e decisao a parte — o PR #5 so tirou a mentira, nao mexeu no escopo do job.
+   1. **Actions nas majors atuais** — `checkout v4->v7` · `setup-node v4->v7` ·
+      `pnpm/action-setup v4->v6` (em `ci.yml` E `release.yml`). `cache@v4` saiu junto com o job.
+   2. 🆕 **`NODE_VERSION: "20"` -> `"22"`** — e isto **nao e o runtime das actions**: e o Node em que
+      **lint, typecheck e os 828 testes** rodam. Node 20 saiu de suporte em **abril/2026**, o
+      ambiente local do Filipe ja e **v24.11.1**, e o `package.json` **nao tem `engines`** — nada
+      fixava a versao em lugar nenhum. ⚠️ **Nao verificado:** em que Node a Vercel builda (exige
+      token). 22 e o LTS ativo, e aposta de menor divergencia, nao certeza medida.
+   3. **Job `build` REMOVIDO** — tinha `if: push && ref == main` ⇒ so rodava **depois do merge**,
+      nunca pode barrar um PR ruim. E a Vercel builda todo PR e todo push em main. Se o build
+      quebrar, o check `Vercel` fica vermelho **no PR** — mais cedo do que o job removido conseguia.
+      O cabecalho do `ci.yml` registra a condicao de volta: **se a integracao Vercel sair, ele
+      precisa voltar — e como gate de PR, nao pos-merge**.
+
+   **Read-back:** PR #6 verde com `node: v22.23.2` nos dois jobs e **zero anotacao de depreciacao**;
+   run do merge em `main` = success com jobs `check` + `commitlint` apenas (**sem `Build`**); e o
+   deployment `Production sha=5c87d37` da Vercel = **state success** ⇒ o portao de build continua
+   existindo, so mudou de dono.
+
+   ⏳ **PENDENCIA ASSUMIDA (nao resolvida):** `softprops/action-gh-release@v1` no `release.yml`
+   (latest `v3.0.2`). O salto v1->v3 **nao e verificavel por nenhum PR nem push em main** — o
+   workflow so dispara em tag `v*`. Fica como mudanca propria, para quando houver um release real
+   que a prove. Nao contar como feito.
 2. 🤖 **CodeRabbit NAO RODOU** — plano `Free`, **assento `not assigned`**, e o acesso aponta para
    `fbraintech-stack/fbraintech-stack`, nao para este repo. ⚠️ **E o CLI falhou DUAS VEZES com
    exit code 0** (`--prompt-only` foi removido; agora e `--agent`). **Um CI que confiasse no exit
