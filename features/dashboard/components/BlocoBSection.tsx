@@ -18,10 +18,11 @@ import {
     Trophy,
     XCircle,
     Info,
+    Users,
 } from 'lucide-react';
 import { useMetricasDeAtendimentoQuery } from '@/lib/query/hooks';
 import { periodToDateRange } from '@/lib/utils/periodToDateRange';
-import { percentualSemResposta, avisoDeCobertura } from '../blocoB';
+import { percentualSemResposta, avisoDeCobertura, avisoDeCoberturaDeDeals } from '../blocoB';
 import type { PeriodFilter } from '../hooks/useDashboardMetrics';
 import { SkeletonStatCard } from '@/components/ui/Skeleton';
 
@@ -92,6 +93,7 @@ export function BlocoBSection({ period }: { period: PeriodFilter }) {
 
     const percentual = percentualSemResposta(data.semResposta, data.chegaram);
     const aviso = avisoDeCobertura(data.coberturaDesde, start);
+    const avisoDeDeals = avisoDeCoberturaDeDeals(data.coberturaDealsDesde, start);
 
     return (
         <div className="space-y-3">
@@ -112,32 +114,40 @@ export function BlocoBSection({ period }: { period: PeriodFilter }) {
                 </div>
             )}
 
+            {avisoDeDeals && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900/30 bg-amber-50 dark:bg-amber-900/10 px-3 py-2">
+                    <Info size={16} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-amber-800 dark:text-amber-300">{avisoDeDeals}</p>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <CardComDefinicao
-                    icon={Inbox}
-                    titulo="Leads que chegaram"
-                    valor={data.chegaram}
-                    definicao="Conversas em que o lead mandou a primeira mensagem."
-                />
-                <CardComDefinicao
-                    icon={UserCheck}
-                    titulo="Chegaram até mim"
-                    valor={data.chegaramAteMim}
+                    icon={Users}
+                    titulo="Total de Leads"
+                    valor={data.totalLeads}
                     destaque="humano"
-                    definicao="A IA transferiu o atendimento. A partir da transferência, quem responde é você — a IA não volta."
+                    definicao="Cards criados no funil dentro do período. É o número de leads que entraram, contado pela data de criação do card."
                 />
                 <CardComDefinicao
-                    icon={Bot}
-                    titulo="A IA resolveu sozinha"
-                    valor={data.resolvidosSemMim}
-                    definicao="Chegaram e nunca foram transferidas para uma pessoa."
+                    icon={Inbox}
+                    titulo="Leads que chegaram no WhatsApp"
+                    valor={data.chegaram}
+                    definicao="Conversas em que o lead mandou a primeira mensagem. A origem do anúncio não é rastreada — este número não separa quem veio de anúncio de quem veio sozinho."
                 />
                 <CardComDefinicao
                     icon={Send}
-                    titulo="Eu abordei"
+                    titulo="Leads orgânicos"
                     valor={data.euAbordei}
                     destaque="humano"
                     definicao="Conversas em que a equipe mandou a primeira mensagem, em vez de o lead."
+                />
+                <CardComDefinicao
+                    icon={UserCheck}
+                    titulo="Leads transferidos"
+                    valor={data.chegaramAteMim}
+                    destaque="humano"
+                    definicao="A IA transferiu o atendimento. A partir da transferência, quem responde é uma pessoa — a IA não volta."
                 />
                 <CardComDefinicao
                     icon={AlertTriangle}
@@ -164,6 +174,60 @@ export function BlocoBSection({ period }: { period: PeriodFilter }) {
                     definicao="Cards marcados como Perdido, contados pela data em que fecharam."
                 />
             </div>
+
+            {/*
+              AC5 — mensagens por autor. É ESTIMATIVA, e a tela diz isso.
+              A origem (GPT Maker) não marca quem escreveu: medido em 19/08, a
+              mensagem da pessoa chega com o mesmo `role: assistant` e o mesmo
+              `assistantId` da IA. O corte é a transferência.
+            */}
+            <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    Mensagens enviadas
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <CardComDefinicao
+                        icon={Bot}
+                        titulo="Enviadas pela IA"
+                        valor={data.msgsIa}
+                        definicao="Estimativa: mensagens enviadas antes da transferência, ou em conversas que nunca foram transferidas. A plataforma de atendimento não marca o autor de cada mensagem — o corte usado é a transferência."
+                    />
+                    <CardComDefinicao
+                        icon={UserCheck}
+                        titulo="Enviadas por uma pessoa"
+                        valor={data.msgsPessoa}
+                        destaque="humano"
+                        definicao="Estimativa: mensagens enviadas depois da transferência. Se a IA mandar algo após transferir, cai aqui — por isso é estimativa, e não medição."
+                    />
+                </div>
+            </div>
+
+            {/* AC7 — leads por estágio, no mesmo período dos cards acima. */}
+            {data.funil.length > 0 && (
+                <div className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                        Leads por etapa do funil
+                    </h3>
+                    <div className="glass rounded-xl border border-slate-200 dark:border-white/5 shadow-sm divide-y divide-slate-200 dark:divide-white/5">
+                        {data.funil.map((etapa) => (
+                            <div
+                                key={`${etapa.ordem}-${etapa.estagio}`}
+                                className="flex items-center justify-between px-4 py-2.5"
+                            >
+                                <span className="text-sm text-slate-600 dark:text-slate-300 truncate">
+                                    {etapa.estagio}
+                                </span>
+                                <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">
+                                    {etapa.leads}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Cards criados no período, na etapa em que estão hoje.
+                    </p>
+                </div>
+            )}
         </div>
     );
 }

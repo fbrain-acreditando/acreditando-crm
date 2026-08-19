@@ -19,17 +19,46 @@ import { periodToDateRange } from '@/lib/utils/periodToDateRange';
 // Types
 // =============================================================================
 
+/** Um estágio do funil, com quantos leads do período estão nele. */
+export interface EstagioDoFunil {
+    estagio: string;
+    ordem: number;
+    leads: number;
+}
+
 export interface MetricasDeAtendimento {
-    /** Conversas em que o LEAD mandou a primeira mensagem. */
+    /**
+     * Deals CRIADOS no período. É esta a definição de "lead" no topo do painel
+     * (decisão do Filipe, 19/08) — e é por isso que `coberturaDealsDesde` existe.
+     */
+    totalLeads: number;
+    /**
+     * Conversas em que o LEAD mandou a primeira mensagem.
+     *
+     * ⚠️ Rotulado "Leads que chegaram no WhatsApp", **não** "Leads de anúncio":
+     * não existe atribuição de anúncio nesta base — os 5 canais são `whatsapp`,
+     * a tabela `leads` está vazia e `contacts.source` tem um valor único.
+     */
     chegaram: number;
-    /** Conversas em que a EQUIPE mandou a primeira mensagem. */
+    /** Conversas em que a EQUIPE mandou a primeira mensagem (leads orgânicos). */
     euAbordei: number;
     /** Conversas que a IA transferiu — daí em diante o atendimento é humano. */
     chegaramAteMim: number;
-    /** Chegaram e nunca foram transferidas: a IA deu conta sozinha. */
-    resolvidosSemMim: number;
     /** Chegaram e não tiveram NENHUMA resposta — nem da IA. */
     semResposta: number;
+    /**
+     * Mensagens de saída atribuídas à IA no período — **estimativa**, não medição.
+     *
+     * A origem (GPT Maker) não marca autoria por mensagem: medido em 19/08, a
+     * mensagem da Fernanda chega com o mesmo `role: assistant` e o mesmo
+     * `assistantId` da IA. O corte usado é a transferência: antes dela (ou em
+     * conversa nunca transferida) conta como IA. O card declara isso na tela.
+     */
+    msgsIa: number;
+    /** Mensagens de saída após a transferência — a pessoa que assumiu. Ver `msgsIa`. */
+    msgsPessoa: number;
+    /** Leads por estágio do funil, no mesmo período. */
+    funil: EstagioDoFunil[];
     ganhos: number;
     perdidos: number;
     /**
@@ -41,6 +70,15 @@ export interface MetricasDeAtendimento {
      * em conversa e não existe em card.
      */
     coberturaDesde: string | null;
+    /**
+     * Data do deal mais antigo vivo — a cobertura do "Total de Leads".
+     *
+     * É **mais curta** que `coberturaDesde`: medido em 19/08, os 491 deals vivos
+     * foram TODOS criados em agosto, porque a story 2.24 apagou fisicamente os de
+     * julho. Sem escrever isso na tela, um período em julho devolve `0` parecendo
+     * medição — e zero que parece resposta é pior que ausência de resposta.
+     */
+    coberturaDealsDesde: string | null;
 }
 
 // =============================================================================

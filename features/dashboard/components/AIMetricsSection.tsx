@@ -10,7 +10,9 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { Bot, MessageSquare, Clock, CheckCircle, XCircle, AlertCircle, Sparkles } from 'lucide-react';
-import { useAIMetricsQuery } from '@/lib/query/hooks';
+import { useAIMetricsQuery, useMetricasDeAtendimentoQuery } from '@/lib/query/hooks';
+import type { PeriodFilter } from '../hooks/useDashboardMetrics';
+import { coberturaDoLogDaIa } from '../blocoB';
 
 /**
  * Card compacto para exibir uma métrica AI.
@@ -138,9 +140,11 @@ function ActionDistributionBar({
   );
 }
 
-export function AIMetricsSection() {
+export function AIMetricsSection({ period }: { period: PeriodFilter }) {
   const router = useRouter();
   const { data, isLoading, error } = useAIMetricsQuery();
+  // AC9 — o número que a operação realmente produziu, para contrastar com o log.
+  const { data: real } = useMetricasDeAtendimentoQuery(period);
 
   if (error) {
     return null; // Silently hide on error
@@ -199,6 +203,10 @@ export function AIMetricsSection() {
 
   const { conversations, hitl, tokensUsed } = data;
   const monthStats = conversations.thisMonth;
+  const avisoDeCobertura = coberturaDoLogDaIa(
+    monthStats.total,
+    real ? real.msgsIa + real.msgsPessoa : null
+  );
 
   return (
     <div className="space-y-3">
@@ -206,6 +214,18 @@ export function AIMetricsSection() {
         <Bot className="text-primary-500" size={20} />
         Performance da IA
       </h2>
+
+      {/*
+        AC9 — o card lê `ai_conversation_log`, que cobre uma fração da operação
+        (medido em 19/08: 89 linhas contra 8.386 mensagens). Sem esta frase, uma
+        amostra de ~1% é lida como o total — que foi a queixa que abriu a 2.46.
+      */}
+      {avisoDeCobertura && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900/30 bg-amber-50 dark:bg-amber-900/10 px-3 py-2">
+          <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-800 dark:text-amber-300">{avisoDeCobertura}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <AIMetricCard

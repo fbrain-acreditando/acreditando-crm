@@ -7,7 +7,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { percentualSemResposta, avisoDeCobertura } from '../blocoB';
+import {
+    percentualSemResposta,
+    avisoDeCobertura,
+    avisoDeCoberturaDeDeals,
+    inconsistenciasDoPainel,
+    coberturaDoLogDaIa,
+} from '../blocoB';
 
 describe('percentualSemResposta', () => {
     it('calcula sobre os leads que chegaram', () => {
@@ -62,5 +68,100 @@ describe('avisoDeCobertura', () => {
         // em 11/08 — fuso ausente contado como se fosse local.
         const aviso = avisoDeCobertura(PRIMEIRA_CONVERSA, '2026-07-01T03:00:00Z');
         expect(aviso).toContain('23/07/2026');
+    });
+});
+
+// =============================================================================
+// Story 2.46 — o painel que bate
+// =============================================================================
+
+describe('avisoDeCoberturaDeDeals', () => {
+    it('avisa quando o periodo comeca antes do card mais antigo', () => {
+        // Medido em 19/08: os 491 deals vivos sao TODOS de agosto — a story 2.24
+        // apagou fisicamente os de julho. Julho devolve 0 por ausencia de card.
+        const aviso = avisoDeCoberturaDeDeals('2026-08-01T00:00:00Z', '2026-07-01T00:00:00Z');
+        // 01/08 00:00 UTC e 31/07 em Sao Paulo — e a data e formatada no fuso da
+        // OPERACAO de proposito: ela conta o mes em horario de SP, nao em UTC.
+        expect(aviso).toContain('31/07/2026');
+        expect(aviso).toContain('ausência de card');
+    });
+
+    it('cala quando o periodo esta coberto', () => {
+        expect(avisoDeCoberturaDeDeals('2026-08-01T00:00:00Z', '2026-08-10T00:00:00Z')).toBeNull();
+    });
+
+    it('cala quando nao ha deal nenhum — sem base nao se afirma cobertura', () => {
+        expect(avisoDeCoberturaDeDeals(null, '2026-07-01T00:00:00Z')).toBeNull();
+    });
+});
+
+describe('inconsistenciasDoPainel (AC10)', () => {
+    it('aceita os numeros reais medidos em 19/08', () => {
+        expect(
+            inconsistenciasDoPainel({
+                chegaram: 796,
+                euAbordei: 146,
+                chegaramAteMim: 203,
+                semResposta: 57,
+            })
+        ).toEqual([]);
+    });
+
+    it('reprova transferidos maior que quem chegou', () => {
+        // A queixa que abriu a story foi "nao estao batendo". Esta e a forma mais
+        // provavel de voltar a nao bater: transferencia contada fora da populacao.
+        const problemas = inconsistenciasDoPainel({
+            chegaram: 100,
+            euAbordei: 10,
+            chegaramAteMim: 101,
+            semResposta: 0,
+        });
+        expect(problemas).toHaveLength(1);
+        expect(problemas[0]).toContain('transferidos');
+    });
+
+    it('reprova sem-resposta maior que quem chegou', () => {
+        const problemas = inconsistenciasDoPainel({
+            chegaram: 10,
+            euAbordei: 0,
+            chegaramAteMim: 0,
+            semResposta: 11,
+        });
+        expect(problemas[0]).toContain('sem resposta');
+    });
+
+    it('reprova contagem negativa', () => {
+        const problemas = inconsistenciasDoPainel({
+            chegaram: -1,
+            euAbordei: 0,
+            chegaramAteMim: 0,
+            semResposta: 0,
+        });
+        expect(problemas.some((p) => p.includes('negativa'))).toBe(true);
+    });
+});
+
+describe('coberturaDoLogDaIa (AC9)', () => {
+    it('declara a cobertura real medida em 19/08 (89 de 8.386)', () => {
+        const aviso = coberturaDoLogDaIa(89, 8386);
+        expect(aviso).toContain('89');
+        expect(aviso).toContain('8386');
+        // Abaixo de 1% precisa de 2 casas: "~1%" arredondaria 1,06% e "~0%"
+        // faria o aviso parecer defeito do aviso, nao do log.
+        expect(aviso).toContain('1.1%');
+        expect(aviso).toContain('amostra');
+    });
+
+    it('cala quando o log cobre a operacao — aviso permanente vira ruido', () => {
+        expect(coberturaDoLogDaIa(95, 100)).toBeNull();
+    });
+
+    it('cala quando nao ha mensagem no periodo — 0/0 nao e 0%', () => {
+        expect(coberturaDoLogDaIa(0, 0)).toBeNull();
+    });
+
+    it('cala quando falta um dos lados, em vez de chutar', () => {
+        expect(coberturaDoLogDaIa(89, null)).toBeNull();
+        expect(coberturaDoLogDaIa(undefined, 8386)).toBeNull();
     });
 });
