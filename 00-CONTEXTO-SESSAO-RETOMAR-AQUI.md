@@ -8,6 +8,88 @@
 
 ---
 
+## Sessao 2026-08-18/19 (16) — 🚀 story 2.45 EM PRODUCAO: os tres pedidos da Fernanda
+
+> ✅ **EM PRODUCAO.** PR #3 mergeado (`6283e31`), deployment Vercel `state: READY` no
+> **mesmo sha**, dominio HTTP 200. Read-back feito — nao e "a API respondeu OK".
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue —
+> faltam os ACs que so a Fernanda fecha, o pre-pagamento do Google (sexta) e as 3
+> pendencias de infra que o deploy expos."*
+
+### O que subiu (story 2.45)
+
+Tres pedidos dela de 18/08. **Nos tres a medicao no banco contradisse ou ampliou a fala** —
+e e por isso que o escopo final nao e o pedido literal.
+
+| # | Pedido | O que a medicao mostrou | O que subiu |
+|---|---|---|---|
+| 1 | motivos de perda padronizados | **30 motivos distintos em 64 perdas**; o "bom dia" que ela citou tem **7 perdas em 5 grafias** | `QUICK_REASONS` de 6 → **12**, ordenados por frequencia |
+| 2 | "cadastro pede demais" | **INVERSO do que parecia**: exigia e-mail, e **956 dos 957 contatos nao tem** (99,9%); so 90 nao tem telefone | telefone vira campo principal; regra = nome + **ao menos uma** forma de contato |
+| 3 | nao acha a cliente nos Contatos | busca era `name` OU `email`; e **496 de 957 (52%) tem nome de UMA palavra** (pushName do WhatsApp) | busca passa a incluir **telefone**, normalizado por digitos |
+
+**Achados que a medicao entregou de brinde:**
+- A medicao achou **3 categorias que ela NAO pediu** — `perfil/idade` (5) tem **mais volume que
+  dois dos tres** que ela pediu. Nao estavam na fala dela porque ela digitava caso a caso.
+- **2 dos 6 botoes antigos nunca foram usados** em 64 perdas (`Concorrencia`, `Timing`) — heranca
+  B2B do CRM de origem. **Mantidos de proposito**: aposentar e decisao dela.
+- 🔒 **Colateral de seguranca (nao pedido):** o termo de busca era interpolado **CRU** no `.or()`
+  do PostgREST — virgula ou parenteses digitados **quebravam a expressao e mudavam a consulta**.
+
+### 🐛 A revisao do proprio diff achou 3 defeitos MEUS (2o commit)
+
+O Filipe pediu revisao antes do deploy. Reler o proprio diff pegou:
+
+1. **`Maria 2` virava `phone.ilike.%2%`** ⇒ casaria com quase toda a base. Trocaria o "nao acha
+   ninguem" por **"acha todo mundo"**. Piso de 4 digitos.
+2. **`%` e `*` nao escapados** — sao curingas do `ilike`; buscar `%` devolvia a base inteira.
+3. **`noValidate` desligou a validacao de formato do e-mail** — tirar a obrigatoriedade teria, de
+   brinde, passado a **aceitar `abc`** como e-mail. Trocar um defeito por outro.
+
+📌 **Provado que os testes valem:** revertendo o codigo para a versao anterior, os 3 **reprovam**.
+
+### 🛑 LIMITE CONHECIDO — o relatorio so agrupa daqui pra frente
+
+Os `value` novos nao casam com o texto livre antigo. As 7 perdas de "bom dia" seguem em 5 grafias.
+**Consolidar exige sobrescrever texto que a Fernanda escreveu ⇒ e decisao dela, nao do codigo.**
+
+### ⏳ O que NAO entrou (e ela precisa saber)
+
+- **Campo de observacao** e **entrada no funil do mes corrente** — e criar *deal*, nao contato.
+- **Busca por coluna do funil** — **nao feita de proposito**: se a busca global consertada ja
+  resolver, a busca por coluna seria *uma busca menor com o mesmo defeito*. Perguntar antes.
+
+### ⚠️ 3 PENDENCIAS DE INFRA que o deploy expos (nenhuma e do codigo)
+
+1. 🔑 **`VERCEL_TOKEN` nao existe no repo** ⇒ o workflow `Preview Deploy` **falha em TODO PR**.
+   E **redundante** com a integracao nativa da Vercel (que funcionou). Configurar o secret **ou
+   remover o workflow** — hoje todo PR nasce com um ❌ vermelho que nao significa nada.
+2. 🤖 **CodeRabbit NAO RODOU** — plano `Free`, **assento `not assigned`**, e o acesso aponta para
+   `fbraintech-stack/fbraintech-stack`, nao para este repo. ⚠️ **E o CLI falhou DUAS VEZES com
+   exit code 0** (`--prompt-only` foi removido; agora e `--agent`). **Um CI que confiasse no exit
+   code teria reportado "review aprovado" sem review nenhum** — mesma classe de silencio que
+   custou R$ 197,83 aqui.
+3. ✏️ **A armadilha do remote na documentacao esta DESATUALIZADA.** O doc dizia *"`main` trackeia
+   `thaleslaray/nossocrm` (terceiro) — sempre `git push fork main`"*. **Hoje `origin` ja e
+   `fbrain-acreditando/acreditando-crm`.** Nao existe mais remote `fork`.
+
+### Gates
+
+`lint 0` · `typecheck 0` (**verificado que NAO e no-op**: 2.138 arquivos — o `tsc --noEmit` cego
+que mordeu o NeuroIA nao acontece aqui) · **828 testes**, 0 falha · `build` ok · CI do GitHub
+confirmou os mesmos gates em maquina limpa.
+
+### ⏳ Os ACs que SO A FERNANDA fecha
+
+- [ ] **AC10** — cadastrar a mao a cliente que fechou em agosto, e **acha-la depois**
+- [ ] **AC11** — registrar uma perda usando um botao novo, **sem digitar**
+
+> *Provado em producao nao e provado em uso* — licao das stories 2.31/2.37 neste repo.
+
+---
+
 ## Sessao 2026-08-18 (15) — 🟢 a IA do CRM VOLTOU, um NULL quase custou 111 chamadas pagas, e a fila de 37 foi zerada
 
 > ✅ **A IA esta pontuando de novo.** Primeira nota desde **14/08 13:53**.
