@@ -132,10 +132,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Compile-check em ambiente limpo, SEM env de Supabase — de proposito.
+      #
+      # O bloco `env:` que ficava aqui declarava
+      # `secrets.NEXT_PUBLIC_SUPABASE_URL` e `..._PUBLISHABLE_KEY`, que NAO EXISTEM
+      # neste repo (`gh secret list` = vazio) — e dizia que "o build do Next.js
+      # exige que estejam presentes". Nao exige: os tres clientes Supabase
+      # degradam de proposito quando faltam (`client.ts` retorna null,
+      # `middleware.ts` pula o auth), e o build passa verde sem elas.
+      # Declarar secret inexistente e declarar uma protecao que nao existe.
+      #
+      # O build que VAI PRO AR e o da Vercel, com as envs reais do projeto.
+      # Este aqui nunca e publicado — o artefato e descartado no fim do job.
+      # Consequencia aceita: o bundle sai no modo "nao configurado", entao este
+      # job nao exercita o caminho com Supabase ligado. Quem exercita e a Vercel.
       - name: Build
         run: pnpm build
-        env:
-          # Next.js build requires these to be present even if not used at runtime.
-          # Real values come from Vercel project settings — these are build-time only.
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
