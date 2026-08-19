@@ -8,6 +8,76 @@
 
 ---
 
+## Sessao 2026-08-19 (17) — 📊 story 2.46 EM PRODUCAO: o painel que bate, e por que nao batia
+
+> ✅ **EM PRODUCAO.** PR **#7** → merge `3797a0e` · deployment Vercel **Production `success` no
+> mesmo sha** · dominio **HTTP 200**. Migration aplicada ANTES do merge, com rollback capturado.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue — falta o Filipe
+> ABRIR o painel e conferir se os numeros fazem sentido, e a story 2.47 (o autor da mensagem)."*
+
+### A MEDICAO CONTRADISSE 3 DOS 6 NUMEROS PEDIDOS
+
+| Pedido | O que o banco disse |
+|---|---|
+| **Leads Anuncio** | 🔴 **NAO EXISTE atribuicao de anuncio.** 5 canais todos `whatsapp` · tabela `leads` **VAZIA** · `contacts.source` com **um valor so** · `deals` nem tem coluna `source` ⇒ virou **"Leads que chegaram no WhatsApp"** |
+| **Msgs IA x Fernanda** | 🔴 `sender_type`: **8.355 NULL · 26 `user` · ZERO `ai`**. Ela responde **DENTRO do GPT Maker**, e la a mensagem dela chega com o **mesmo `role: assistant` e o mesmo `assistantId`** da IA — payloads antes x depois da transferencia sao **identicos** ⇒ entregue por **estimativa** (corte da transferencia), com o erro **escrito no card** |
+| **Performance da IA** | 🔴 lia `ai_conversation_log`: **89 linhas contra 8.386 mensagens** ⇒ apresentava **~1% com cara de total**. **E a causa mais direta do "nao estao batendo"**. Agora declara a cobertura na tela |
+
+🔑 **O discriminador de autoria EXISTE — na API v2 (`GptMakerMessage.userId`), nao no webhook.**
+E a rota `/gptmaker/sync` **recebe esse campo e o descarta**. Virou a **story 2.47** (Draft).
+
+### Dois achados que ninguem pediu
+
+- 🐛 **221 "mensagens enviadas" sao RETORNO INTERNO DE FERRAMENTA** da IA (*"sucesso, diga que a
+  transferencia foi feita..."*). O parser manda tudo que nao e `role: user` para `outbound`.
+  Excluidas pelo **`role: 'tool'` do evento**, nao por texto: **texto acha 205, o join acha 221**.
+- ⚠️ **Todos os 491 deals vivos sao de AGOSTO** (a 2.24 apagou julho fisicamente) ⇒ "Total de
+  Leads" em julho devolve **0 parecendo medicao**. Nasceu `coberturaDealsDesde`.
+
+### O card removido tinha motivo alem da preferencia
+
+`resolvidosSemMim = greatest(chegaram - chegaramAteMim, 0)` era **subtracao, nao medicao**. E dos
+**593** que reportava, **57 NUNCA RECEBERAM UMA RESPOSTA** — contava **abandono como sucesso da IA**.
+
+### Read-back (o da ferramenta nao servia)
+
+> ⚠️ O `aplicar-migracao.mjs` reportou *"read-back confere: todas as colunas prometidas existem"*
+> sobre **0 de 0** — ele so detecta `ADD COLUMN`, e esta migration cria view e funcao. **Declarou
+> OK tendo verificado NADA.** Divida registrada. O read-back abaixo foi na mao.
+
+```
+v_mensagem_de_ferramenta        → 221 linhas  ✓
+RPC tem totalLeads/msgsIa/coberturaDealsDesde → true ✓
+RPC ainda tem resolvidosSemMim  → false       ✓
+idx_webhook_events_tool_message → existe      ✓
+
+corpo da RPC contra dados reais (agosto):
+  total_leads 491 · chegaram 463 · organicos 28 · transferidos 159
+  msgs_ia 3.682 · msgs_pessoa 1.522
+  AC10: 463 + 28 = 491 = total_leads ✓ · 159 ⊆ 463 ✓
+```
+
+### Gates
+
+`lint 0` · `typecheck 0` · **839 testes, 0 falha**. Os testes novos pegaram **2 defeitos meus**:
+arredondamento que sumia com a ordem de grandeza (1,06% → "1%") e **expectativa de fuso errada
+minha** (`2026-08-01T00:00:00Z` e **31/07** em Sao Paulo — o codigo estava certo).
+
+### ⏳ So o Filipe fecha
+
+- [ ] **Abrir o painel** e conferir se os numeros fazem sentido — em especial se "Total de Leads =
+      cards criados no periodo" e a leitura que ele espera numa reuniao
+
+### 🔑 Credencial
+
+O token `sbp_` de management **venceu** (401) e foi trocado por um de **1 dia** em 19/08 — vai
+vencer. Regenerar em `supabase.com/dashboard/account/tokens` e salvar em
+`.credenciais/supabase-crm-mgmt.token`.
+
+---
 ## Sessao 2026-08-18/19 (16) — 🚀 story 2.45 EM PRODUCAO: os tres pedidos da Fernanda
 
 > ✅ **EM PRODUCAO.** PR #3 mergeado (`6283e31`), deployment Vercel `state: READY` no
