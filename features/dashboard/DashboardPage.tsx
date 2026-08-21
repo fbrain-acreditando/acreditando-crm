@@ -30,6 +30,34 @@ import { BlocoBSection } from './components/BlocoBSection';
 const MOSTRAR_METRICAS_DE_CARTEIRA = false;
 
 /**
+ * Bloco A da story 2.19 — "O que eu faço agora" — fora da tela desde 21/08/2026,
+ * a pedido do Filipe, **temporariamente e por decisão de produto**.
+ *
+ * ⚠️ NÃO é conserto de defeito e NÃO é aposentadoria: os três cards saem porque
+ * vão ser MELHORADOS. Nada foi apagado — `BlocoASection.tsx`, `blocoA.ts`, os
+ * testes de `__tests__/blocoA.test.ts`, a view `v_fila_de_atendimento` e a RPC
+ * `get_fila_de_atendimento` seguem intactos e funcionando. Ligar de volta é
+ * trocar esta constante para `true`.
+ *
+ * 📌 O motivo de fundo (medição de 20/08, no doc de retomada, sessão 18): o card
+ * "Esperando minha resposta" **promete "quantas exigem ação minha" e entrega
+ * "quantas conversas estão abertas"**. Dos 61 textos da fila, 37 são cortesia de
+ * encerramento ("Ok", "Obrigada") e 7 são pedido explícito de contato ("Pode me
+ * ligar", "Estou aqui no portão") — no mesmo balde. Além disso:
+ *   • `owner_id` é NULL em 513 de 513 deals ⇒ "só os que estão com a Fernanda"
+ *     não é computável hoje;
+ *   • 23 das 78 conversas da fila (29%) não têm deal nenhum ⇒ são cegas a
+ *     qualquer regra por estado do card.
+ *
+ * Deixar um número errado na tela custa mais do que não mostrar número nenhum:
+ * ele circula em reunião como se fosse medição.
+ *
+ * 🔁 Para retomar: `00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessão 19) — lá estão as
+ * três saídas já levantadas e a pergunta que só a Fernanda responde.
+ */
+const MOSTRAR_BLOCO_A_FILA = false;
+
+/**
  * Componente React `DashboardPage`.
  * @returns {Element} Retorna um valor do tipo `Element`.
  */
@@ -136,10 +164,17 @@ const DashboardPage: React.FC = () => {
         o que a IA fez; este mede a fila que nenhuma automação resolve.
 
         Não recebe `period`: fila de trabalho é sempre "agora".
+
+        ⚠️ FORA DA TELA desde 21/08/2026 — ver `MOSTRAR_BLOCO_A_FILA` acima, com o
+        motivo e o caminho de volta. O componente segue montado no repo e a query
+        segue existindo; o que mudou é o que ocupa a tela enquanto os cards não
+        forem melhorados.
       */}
+      {MOSTRAR_BLOCO_A_FILA && (
       <div className="shrink-0">
         <BlocoASection />
       </div>
+      )}
 
       {/*
         Bloco B da story 2.19 — os números que ela apresenta no fechamento.
