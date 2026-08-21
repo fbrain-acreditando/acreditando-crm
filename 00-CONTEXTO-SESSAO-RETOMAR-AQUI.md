@@ -8,6 +8,91 @@
 
 ---
 
+## Sessao 2026-08-21 (19) — 🙈 o bloco "O que eu faco agora" SAIU DA TELA (temporario, nada apagado)
+
+> ⚠️ **Decisao de produto do Filipe, nao conserto de defeito.** Os tres cards da fila viva saem da
+> Visao Geral **enquanto vao ser melhorados**. Nenhum arquivo foi deletado, nenhuma migration rodou,
+> nenhum SQL mudou. E uma constante — igual ao AC6 da 2.19 fez com a "Saude da Carteira".
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue — o Bloco A esta
+> desligado por `MOSTRAR_BLOCO_A_FILA` e precisa ser MELHORADO antes de voltar. A decisao de o que o
+> card 'Esperando minha resposta' deve contar (sessao 18) segue aberta."*
+
+### O que mudou (1 arquivo, 2 pontos)
+
+`features/dashboard/DashboardPage.tsx`
+
+| Linha | O que |
+|---|---|
+| 58 | nasceu `const MOSTRAR_BLOCO_A_FILA = false;` + o bloco de comentario com o **porque** e o caminho de volta |
+| 173 | o `<BlocoASection />` passou a ser `{MOSTRAR_BLOCO_A_FILA && ( … )}` |
+
+**Ligar de volta = trocar `false` por `true`.** Uma palavra, um arquivo.
+
+### 🟢 O que NAO foi tocado (o "deixe tudo salvo")
+
+- `features/dashboard/components/BlocoASection.tsx` — intacto
+- `features/dashboard/blocoA.ts` — as funcoes puras (`avisoDeAlcanceDaIa`, `semBaseParaLigar`,
+  `tomDoAtraso`, `definicaoDaEspera`) intactas
+- `features/dashboard/__tests__/blocoA.test.ts` — **13 testes seguem rodando e passando**
+- `useFilaDeAtendimentoQuery`, a view `v_fila_de_atendimento` e a RPC `get_fila_de_atendimento` —
+  intactas no banco. **Nao houve migration.**
+
+⇒ O trabalho de melhoria comeca de onde parou, nao do zero.
+
+### Por que sair da tela e melhor do que deixar ficar
+
+Da medicao da sessao 18 (20/08), que segue valendo:
+
+- O card **promete** *"quantas exigem acao minha"* e **entrega** *"quantas conversas estao abertas"*.
+- Dos **61 textos** da fila: **37 sao cortesia de encerramento** (`Ok`, `Obrigada`, `Entendi`) e
+  **7 sao pedido explicito de contato** (`Pode me ligar`, `Estou aqui no portao`) — **no mesmo balde**.
+- `owner_id` **NULL em 513 de 513 deals** ⇒ *"so os que estao com a Fernanda"* nao e computavel hoje.
+- **23 das 78** conversas da fila (29%) **nao tem deal nenhum** ⇒ cegas a regra por estado de card.
+
+📌 Numero errado na tela custa mais que tela sem numero: ele **circula em reuniao como se fosse medicao**.
+
+### ⏳ O que fica aberto para a melhoria (nao decidido)
+
+1. **Separar por intencao, nao por estado do card** — cortesia de encerramento sai da fila (ataca 37
+   em vez de 11). Falta decidir **quem julga**: regra de texto (barata, cega nos 12 audios + 5 imagens)
+   ou a IA da story 2.35 (acerta mais, custa chamada paga).
+2. **O pedido literal** — excluir `is_lost` e nada mais. Uma linha de SQL, entrega 67, **nao resolve o
+   incomodo**.
+3. **Card novo "Pedindo contato agora"** — com os 7. Nao mexe no 78: acrescenta um numero em vez de
+   mudar a definicao de um que ja circula.
+
+**Recomendacao registrada (sessao 18): 1 + 3**, julgamento pela IA, regra de texto so como piso.
+
+> 💡 A pergunta que so a **Fernanda** responde: um `Ok` conta como fila de trabalho dela?
+> (reuniao de 21/08 as 11:00)
+
+### 🐛 Divida que continua de pe (nao resolvida aqui)
+
+- 🔴 `owner_id` nulo em **513 de 513** deals — bloqueia QUALQUER metrica por pessoa.
+- 🟡 O discriminador de transferencia pode somar `TRANSFER_HUMAN` + `START_INTERACTION_HUMAN`.
+- 🟡 48 conversas com `humanTalk` e nenhum evento de sistema — talvez nunca entrem na fila.
+- ⚠️ **Story 2.47** (o autor da mensagem) segue em Draft — sem ela, "quem respondeu" continua invisivel.
+
+### Gates
+
+`lint 0` · `typecheck 0` — **provado que nao e no-op: `tsc --listFiles` = 2.138 arquivos** ·
+**839 testes passaram, 0 falha** (5 skipped) · os 13 testes do `blocoA` rodados isoladamente, verdes.
+
+**Read-back na mao** (nao "a ferramenta respondeu OK"):
+```
+DashboardPage.tsx:58   const MOSTRAR_BLOCO_A_FILA = false;   ✓
+DashboardPage.tsx:173  {MOSTRAR_BLOCO_A_FILA && (            ✓
+BlocoASection.tsx / blocoA.ts / blocoA.test.ts  → existem    ✓
+blocoA.test.ts → 13 passed                                   ✓
+```
+
+⚠️ **NAO foi feito deploy.** A alteracao esta **so no working tree local**, na branch `main`, **sem
+commit**. Enquanto nao subir, **a tela em producao segue mostrando o Bloco A**.
+
+---
 ## Sessao 2026-08-20/21 (18) — 🔍 o card "Esperando minha resposta": a conta aberta, e por que o pedido nao cabe nela
 
 > ⚠️ **Nada foi implementado.** Esta sessao e MEDICAO + decisao pendente. Nenhum arquivo de codigo,
