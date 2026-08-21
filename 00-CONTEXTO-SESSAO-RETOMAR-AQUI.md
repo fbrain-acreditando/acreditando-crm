@@ -97,10 +97,10 @@ dominio `nossocrm-five.vercel.app` HTTP **307** (redirect para `/login` — o pr
 Checks do PR, em maquina limpa: `Lint / Typecheck / Tests` ✓ · `Validate Conventional Commits` ✓ ·
 `Vercel` ✓ · `mergeStateStatus: CLEAN`.
 
-⚠️ **A Fernanda ja NAO ve mais o bloco.** Foi decisao consciente subir antes de avisa-la — o Bloco A
-nasceu do audio em que ela disse *"o que a Fernanda faz? Nada"*, entao a ausencia dos tres cards
-**pode ser lida como o painel voltando a medir so a IA**. Dizer a ela que e temporario e que os cards
-vao ser melhorados e fala do Filipe, nao do codigo.
+✅ **A Fernanda foi avisada** pelo Filipe em 21/08 de que a retirada e **temporaria** e que os cards
+vao ser melhorados. Isso importa registrar porque o Bloco A nasceu do audio em que ela disse *"o que a
+Fernanda faz? Nada"* — sem o aviso, a ausencia dos tres cards seria lida como **o painel voltando a
+medir so a IA**, o oposto do que a mudanca quer dizer.
 
 🧹 **Higiene do repo:** a branch `chore/ocultar-bloco-a-fila` foi deletada no merge. A `main` local
 tinha o commit `0372ef6` (docs da sessao 18) que nunca subiu e entrou no squash — local e remoto
