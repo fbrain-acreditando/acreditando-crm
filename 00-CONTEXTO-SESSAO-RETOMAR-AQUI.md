@@ -8,6 +8,119 @@
 
 ---
 
+## Sessao 2026-08-20/21 (18) — 🔍 o card "Esperando minha resposta": a conta aberta, e por que o pedido nao cabe nela
+
+> ⚠️ **Nada foi implementado.** Esta sessao e MEDICAO + decisao pendente. Nenhum arquivo de codigo,
+> nenhuma migration, nenhum commit no repo. O que existe e o diagnostico abaixo.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue — falta o Filipe
+> decidir o que o card 'Esperando minha resposta' deve contar, e a reuniao com a Fernanda de 21/08
+> as 11:00 e a chance de perguntar a ela."*
+
+### O pedido do Filipe (literal, 20/08)
+
+> *"Ali precisa contar apenas os leads que estao com a Fernanda e ali vamos tirar tambem os leads que
+> estao como perdidos. Pois ali tem os clientes que ficam mandando bom dia, mandando imagem de bom dia,
+> entao esses a gente acaba nem respondendo mesmo."*
+
+### Como o numero e feito hoje (cadeia de 3 camadas)
+
+| Camada | Onde | Regra |
+|---|---|---|
+| 1. "saiu da IA" | `v_transferencia_da_conversa` (migration `20260812210000`) | existe evento de webhook do GPT Maker com a **chave `summary`** — presenca da chave, nao o valor, e **nao** o `event_type` (18 de 146 vieram `unknown`) |
+| 2. quem falou por ultimo | `v_fila_de_atendimento` (migration `20260814120000`) | `distinct on (conversation_id)` pela ultima mensagem |
+| 3. a contagem | `get_fila_de_atendimento` | `count(*) filter (where direcao_da_ultima = 'inbound')` |
+
+**"Esperando minha resposta" = conversas ja transferidas cuja ultima mensagem veio do lead.** Uma
+conversa por linha. Nao usa o periodo do seletor (fila e sempre "agora"), nao olha estagio do funil,
+e **nao sabe quem respondeu** — so a DIRECAO da mensagem (a autoria e o buraco da story 2.47).
+
+### A MEDICAO (20/08, via `scripts/db/sql-ro.mjs`) — tres achados
+
+```
+transferidas ............... 211
+esperando resposta .........  78
+passou de 24h ..............  71
+  -> em deal PERDIDO .......  11
+  -> em deal aberto ........  44
+  -> SEM DEAL NENHUM .......  23
+```
+
+**1. 🔴 "So os que estao com a Fernanda" NAO E COMPUTAVEL — a coluna nunca foi preenchida.**
+
+```
+deals vivos ....................... 513
+deals com owner_id ................   0
+conversas na fila .................  78
+conversas com assigned_user_id ....   2
+```
+
+Nao existe atribuicao de responsavel no banco — nem no card, nem na conversa. Hoje *"esta com a
+Fernanda"* so significa *"ja saiu da IA"*, que e **o filtro que o card ja aplica**. Ou o criterio vira
+outra coisa mensuravel, ou vira trabalho novo (passar a atribuir dono).
+
+**2. 🟡 Tirar os perdidos corta 14% e nao toca no incomodo.** 78 -> 67. Quem manda "bom dia" e nao e
+respondido **nao esta marcado como perdido**, e ninguem vai la marcar.
+⚠️ E os **23 sem card nenhum (29% da fila)** sao cegos a qualquer regra por estado de deal — **nao tem deal**.
+
+**3. 🟢 A fila nao esta cheia de "bom dia" — esta cheia de "obrigada".**
+As 78 ultimas mensagens: **61 texto · 12 audio · 5 imagem**. Classificando os 61 textos **na leitura**
+(classificacao minha, nao regra automatica):
+
+| Categoria | Qtd | Exemplos reais |
+|---|---|---|
+| **Cortesia de encerramento** | **37** | `Ok` (5x) · `Obrigada` (6x) · `Entendi` (4x) · `Perfeito` · `Valeu` · `Gratidao` · `👍🏻` |
+| Precisa de resposta | 12 | `Artroplastia de quadril` · `Digo acima das minhas condicoes 😥` · `Meu audio nao esta funcionando` |
+| **Pedido explicito de contato** | **7** | `Pode me ligar` · `Qual o primeiro horario disponivel amanha?` · `Quero saber mais sobre a reabilitacao da marcha com o sistema robotico` · **`Estou aqui no portao`** |
+| Recusa explicita | 2 | `Nao quero mais` · `Nao obrigado boa tarde` |
+| Ambiguo | 3 | `Tudo` · `Ainda nao` |
+
+🔑 **O card nao erra por contar demais — erra por nao separar "nada a fazer" de "me liga agora".**
+Sete pessoas pedindo contato estao no mesmo balde de 37 que so disseram "obrigada".
+
+> ⚠️ **Limite declarado:** os **12 audios e 5 imagens** nao foram classificados — nao ha texto para ler.
+> Entao o **7 e piso, nao total**, e o **37** tambem nao cobre a fila inteira.
+
+### ⏳ A DECISAO QUE FALTA (do Filipe) — tres saidas apresentadas
+
+1. **Separar por intencao, nao por estado do card** — cortesia de encerramento sai da fila. Ataca 37 em
+   vez de 11. Precisa decidir **quem julga**: regra de texto (barata; cega nos 17 audios/imagens, e
+   casar por texto ja falhou aqui — "Sapopemba" e a capital e nao casava) ou a IA da story 2.35
+   (acerta mais, custa chamada paga, e hoje so e acionada em quem entra em `Qualificado`).
+2. **O pedido literal** — excluir `is_lost` e nada mais. Uma linha de SQL, entrega 67, nao introduz
+   julgamento nenhum, e **nao resolve o incomodo**.
+3. **Card novo "Pedindo contato agora"** — quarto quadradinho no bloco A, com os 7. **Nao mexe no 78**:
+   acrescenta um numero que hoje nao existe em vez de mudar a definicao de um que ja circula.
+
+**Recomendacao registrada: 1 + 3**, com julgamento pela IA e regra de texto so como piso.
+📌 **A pergunta de fundo e do Filipe, nao do codigo:** o card deve ser *"quantas conversas estao abertas"*
+ou *"quantas exigem acao minha"*? Sao numeros diferentes, e hoje ele **promete o segundo entregando o primeiro**.
+
+> 💡 **Caminho mais barato para decidir:** a reuniao com a Fernanda de **21/08 as 11:00** — ela e a unica
+> que pode dizer se um `Ok` conta como fila de trabalho dela.
+
+### 🐛 Divida que esta medicao expos (nao pedida, nao resolvida)
+
+- 🔴 **`owner_id` nulo em 513 de 513 deals** — bloqueia QUALQUER metrica por pessoa, nao so este card.
+- 🟡 **O discriminador de transferencia do CRM pode estar somando duas coisas.** O CRM chama de
+  transferencia *"evento com a chave `summary`"* (`classifyEvent` no parser da Edge Function). A analise
+  de 20/08 na **API v2** mostrou que `conversationNotificationType` separa `TRANSFER_HUMAN` (a IA
+  transferiu) de `START_INTERACTION_HUMAN` (a atendente **assumiu** conversa ja encerrada) — foi somar
+  os dois que produziu os "345" que cairam para 154. **O CRM nao conhece esse campo.**
+  ⚠️ **NAO MEDIDO:** se os eventos de webhook com `summary` tambem carregam esse campo. Se carregarem, o
+  denominador **211** esta contando transferir + assumir.
+- 🟡 **Via de transferencia invisivel:** 48 conversas com `humanTalk` e nenhum evento de sistema (medido
+  na API em 20/08). Se valer para o webhook, essas conversas **nunca entram na fila**.
+
+### Gates
+
+Nenhum — **nao houve alteracao de codigo**. As consultas foram somente-leitura via `scripts/db/sql-ro.mjs`
+(o token `sbp_` de management **estava vivo** em 20/08; ele foi emitido com validade curta em 19/08 e
+**pode vencer a qualquer momento** — regenerar em `supabase.com/dashboard/account/tokens`).
+
+---
 ## Sessao 2026-08-19 (17) — 📊 story 2.46 EM PRODUCAO: o painel que bate, e por que nao batia
 
 > ✅ **EM PRODUCAO.** PR **#7** → merge `3797a0e` · deployment Vercel **Production `success` no
