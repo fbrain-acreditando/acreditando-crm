@@ -89,8 +89,24 @@ BlocoASection.tsx / blocoA.ts / blocoA.test.ts  → existem    ✓
 blocoA.test.ts → 13 passed                                   ✓
 ```
 
-⚠️ **NAO foi feito deploy.** A alteracao esta **so no working tree local**, na branch `main`, **sem
-commit**. Enquanto nao subir, **a tela em producao segue mostrando o Bloco A**.
+### 🚀 EM PRODUCAO (21/08, 14:23 UTC)
+
+PR **#8** → squash merge **`d118b67`** · deployment Vercel **Production `success` no mesmo sha** ·
+dominio `nossocrm-five.vercel.app` HTTP **307** (redirect para `/login` — o proxy de auth, esperado).
+
+Checks do PR, em maquina limpa: `Lint / Typecheck / Tests` ✓ · `Validate Conventional Commits` ✓ ·
+`Vercel` ✓ · `mergeStateStatus: CLEAN`.
+
+⚠️ **A Fernanda ja NAO ve mais o bloco.** Foi decisao consciente subir antes de avisa-la — o Bloco A
+nasceu do audio em que ela disse *"o que a Fernanda faz? Nada"*, entao a ausencia dos tres cards
+**pode ser lida como o painel voltando a medir so a IA**. Dizer a ela que e temporario e que os cards
+vao ser melhorados e fala do Filipe, nao do codigo.
+
+🧹 **Higiene do repo:** a branch `chore/ocultar-bloco-a-fila` foi deletada no merge. A `main` local
+tinha o commit `0372ef6` (docs da sessao 18) que nunca subiu e entrou no squash — local e remoto
+divergiram 1↔1 e a local foi realinhada com `origin/main`. **Verificado antes que nada se perdia**
+(`git diff origin/main main` = so as 120 linhas que o remoto ja tinha), e o ponteiro antigo ficou
+guardado na branch local `backup-main-local-2026-08-21` — pode ser apagada quando o Filipe quiser.
 
 ---
 ## Sessao 2026-08-20/21 (18) — 🔍 o card "Esperando minha resposta": a conta aberta, e por que o pedido nao cabe nela
