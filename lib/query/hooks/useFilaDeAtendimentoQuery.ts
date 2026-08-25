@@ -29,6 +29,21 @@ export interface FilaDeAtendimento {
     passouDoLimite: number;
     /** O limite usado (24h — critério dela, dito em 11/08). */
     horasDoLimite: number;
+    /**
+     * Story 2.48 — o recorte que ela pediu em 21/08: só quem tem card numa
+     * etapa que conta como fila de trabalho.
+     *
+     * ⚠️ NÃO substitui `esperandoPorMim`. Aquela chave já circulou em reunião;
+     * trocar o significado mantendo o nome faria alguém comparar o número de
+     * hoje com o de ontem e concluir que a fila despencou.
+     */
+    esperandoNoFunil: number;
+    /** Dos que estão no funil, os que passaram do limite de horas. */
+    passouDoLimiteNoFunil: number;
+    /** Espera em card que NÃO é fila (Ganho, Perdido, colunas de categoria). */
+    foraDoFunil: number;
+    /** Espera em conversa que nunca virou card no CRM. */
+    semCard: number;
     /** Cards que batem os DOIS critérios dela: SP capital + roteiro completo. */
     prontosParaLigar: number;
     /**

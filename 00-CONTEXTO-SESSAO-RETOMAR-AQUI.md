@@ -8,6 +8,164 @@
 
 ---
 
+## Sessao 2026-08-24/25 (20) — 💸 a IA parou por FALTA DE CREDITO, e a story 2.48 nasceu (nao aplicada)
+
+> ⚠️ **DUAS COISAS PENDENTES E IMPORTANTES:**
+> 1. **A migration da 2.48 NAO foi aplicada** em producao. O codigo esta pronto e com gates verdes.
+> 2. **O trabalho esta NAO COMMITADO na `main` local** (5 modificados + 5 novos). Ver secao 6.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 20) e continue — a
+> story 2.48 esta pronta e sem aplicar a migration, e a IA do CRM esta parada por falta de credito
+> no Google."*
+
+---
+
+### 1. 🔴 O DIAGNOSTICO: a nota da IA e os campos pararam porque acabou o credito
+
+Pergunta que originou: na reuniao de 21/08 a Fernanda disse que muitos campos de qualificacao estao
+em branco, e o Filipe viu na tela que a estrelinha *"tava aparecendo, nao ta aparecendo mais"*.
+
+**A causa NAO e codigo. E a conta do Google.**
+
+```
+Ultima nota gravada com sucesso ......... 18/08 20:45:08 UTC
+Ultima extracao de campos ............... 18/08 20:45:09 UTC   <- o MESMO minuto
+Erro na fila ............................ "Your prepayment credits are depleted."
+Primeiro erro registrado ................ 20/08 06:17 UTC (a rede de seguranca diaria)
+Sucessos desde 22/08 .................... ZERO
+```
+
+Os dois pipelines morreram juntos porque usam **a mesma chave**. Queda progressiva medida na fila
+`ai_pending_lead_scores`: 17/08 = 36 de 36 ok · 18/08 = 8 de 9 · 19 e 20/08 = 2 de 12 · 21/08 = 3 de 6
+(por isso na reuniao alguns cards tinham estrela e outros nao) · 22/08 em diante = 0.
+
+**Estrago medido em 24/08:** 47 cards em `Qualificado` sem nota · **475 de 607** deals sem campos ·
+19 itens `pending` (voltam sozinhos quando o credito entrar) · **31 `failed`** (queimaram as 3
+tentativas — precisam de reset manual, que e ESCRITA e nao foi feita).
+
+### 2. 🧭 SAO DOIS PIPELINES DIFERENTES — e um deles nao faz o que dissemos a Fernanda
+
+| Sintoma | Quem escreve | Quando dispara |
+|---|---|---|
+| ⭐ Nota (estrelinha) | `processarItemDaFila.ts` → `deals.lead_score` | trigger no banco, **so na ENTRADA** em estagio com `pontua_lead` |
+| 📋 Campos de qualificacao | `customFields.service.ts` → `deals.custom_fields` | **so no evento de transferencia do GPT Maker** |
+
+🚨 **CORRECAO NECESSARIA COM A FERNANDA:** na reuniao (22:12) o Filipe disse a ela *"se voce assumir a
+conversa e passar para qualificado, ele ja vai coletar os dados da conversa e preencher"*. **Isso vale
+para a NOTA, nao para os CAMPOS.** Conferidas todas as migrations: os unicos `net.http_post` em
+`deals` sao os da pontuacao. O unico gatilho da extracao e `triggerCustomFieldsExtraction()` em
+`messaging-webhook-gptmaker/index.ts:410`, no evento de transferencia.
+⇒ **Lead que ela qualifica na mao sem transferencia do GPT Maker nunca ganha campo nenhum**, e
+arrastar para `Qualificado` nao conserta.
+
+⚠️ E esse caminho **nao tem fila nem registro de erro** — falha so vai para `console.error`. Se parar,
+para em silencio e sem rastro. E a classe de defeito que este repo ja batizou.
+
+### 3. ❌ Duas hipoteses minhas que CAIRAM (registro honesto)
+
+1. **URL errada no trigger.** Testado: `acreditando-crm-sandy.vercel.app` responde 200 e o endpoint da
+   401 (existe, exige auth). O `nossocrm-five` e que da 404 no endpoint. O trigger aponta certo.
+2. **Cron de recalculo sobrescrevendo a nota da IA.** Parecia perfeito (um cron de 10 min reescrevendo
+   `lead_score` de todo mundo). **Falso:** a story 2.35 (13/08) fez `unschedule` e neutralizou as duas
+   funcoes para `return 0`.
+
+### 4. 🚀 Story 2.48 — "A fila que ABRE" (pronta, NAO aplicada)
+
+Nasceu da reuniao de 21/08. Eu levava duas opcoes para o card *"Esperando minha resposta"* — contar
+*"conversas abertas"* ou *"conversas que exigem acao minha"*. **A Fernanda nao escolheu nenhuma.**
+Pediu **filtro por etapa do funil** e, sobretudo, **o numero clicavel abrindo a lista de quem sao**.
+
+> 📌 **O incomodo nunca foi a contagem — era o numero nao abrir.** *"Eu fico tentando adivinhar."*
+
+**Medicao (24/08):** a fila tinha 92 conversas esperando (78 em 20/08; horas depois ja eram 94 — e
+fila viva). Por etapa: (sem card) 23 · Contato Realizado 2 · Qualificado 43 · Apresentacao 6 ·
+Aguardando retorno 5 · Ganho 1 · Perdido 11 · Profissional 1. **O filtro dela leva 92 → 56.**
+
+🪤 **A medicao contradisse o proprio pedido dela:** dentro dos 56 que sobram, a ultima mensagem ainda
+e cortesia (*"Ok obrigada"*, *"Perfeito"*, *"Valeu"*) no mesmo balde que *"Me explica"*, *"Telefone"*,
+*"qto custa"*. Composicao: 46 texto · 6 audio · 4 imagem. **Filtrar por etapa nao separa por intencao.**
+⇒ A saida da story **nao e classificar, e MOSTRAR A FRASE** — ela le e resolve em 1 segundo, sem
+modelo no meio (que hoje esta sem credito, de todo jeito).
+
+**Os 23 sem card:** 22 criadas entre 26 e 31/07 (janela da importacao inicial do CRM) e 1 em 16/08;
+nenhuma nova desde entao ⇒ **residuo de migracao, nao torneira aberta**. 2 com mensagem nos ultimos
+7 dias, 21 paradas.
+
+#### Arquivos
+
+| Arquivo | O que |
+|---|---|
+| `supabase/migrations/20260824180000_a_fila_que_abre.sql` | 🆕 `board_stages.conta_como_fila` + numeros novos na RPC + `get_lista_da_fila` |
+| `lib/query/hooks/useListaDaFilaQuery.ts` | 🆕 hook da lista (lazy — so busca quando abre) |
+| `features/dashboard/components/ListaDaFilaModal.tsx` | 🆕 a lista |
+| `features/dashboard/blocoA.ts` | +4 funcoes puras (`definicaoDaEsperaNoFunil`, `resumoDoDesconto`, `rotuloDaEspera`, `textoDoItem`) |
+| `features/dashboard/components/BlocoASection.tsx` | card clicavel, numero novo, frase de desconto |
+| `features/dashboard/__tests__/blocoA248.test.ts` | 🆕 15 testes |
+| `lib/query/queryKeys.ts` · `hooks/index.ts` · `useFilaDeAtendimentoQuery.ts` | chave, export, tipos |
+
+#### Decisoes de desenho (e o porque)
+
+- **`esperandoPorMim` NAO mudou de significado.** A chave ja circulou em reuniao; trocar o sentido
+  mantendo o nome faria alguem comparar hoje com ontem e concluir que a fila despencou. Chave nova
+  (`esperandoNoFunil`), significado novo. Os antigos continuam sendo devolvidos.
+- **Numero e lista contam o MESMO conjunto, sempre.** Eu introduzi um defeito aqui (card 58, lista 81)
+  e corrigi antes de virar tela. Uma constante governa os dois.
+- **`INCLUI_SEM_CARD = false`** em `BlocoASection.tsx` — honra o pedido LITERAL dela (*"so quem ta em
+  alguma fase do funil"*), e as 23 aparecem na frase de desconto (*"23 nao viraram card no CRM"*),
+  nao somem. **Trocar para `true` as inclui na conta E na lista, marcadas** — uma palavra.
+- **Etapa participa da fila por COLUNA, nunca por nome** (licao da 2.33). Backfill semantico usando
+  `arquiva_sem_reabrir` + `linked_lifecycle_stage in ('CUSTOMER','OTHER')` — nao cita nome de coluna.
+
+#### Gates
+
+`lint 0` · `typecheck 0` · **854 testes passaram** (era 839 ⇒ **+15**), 0 falha, 5 skipped.
+
+**Dry-run da logica SQL contra producao** (sem criar nada, via `sql-ro.mjs`, com o mesmo predicado do
+backfill):
+```
+transferidas 248 · esperando_por_mim 94 · no_funil 58 · fora_funil 13 · sem_card 23 · passou_no_funil 51
+```
+58 + 13 + 23 = 94 ✓ — a soma fecha.
+
+### 5. ⛔ O QUE FALTA (nada disso foi feito)
+
+1. **Recarregar o credito do Google** — sem isso a IA segue parada e "Prontos para ligar" fica sem base
+2. **Aplicar a migration** `20260824180000_a_fila_que_abre.sql` (escrita em producao — exige autorizacao)
+3. **Read-back (Rule 7)** apos aplicar: reler `conta_como_fila` das 13 etapas + chamar as duas RPCs
+4. **Resetar os 31 itens `failed`** da fila de pontuacao (escrita)
+5. **Decidir se o Bloco A volta a tela** — `MOSTRAR_BLOCO_A_FILA` segue `false`. A 2.48 melhora UM dos
+   tres cards; "Prontos para ligar" depende da IA parada. **Sugestao: ligar so depois do credito**,
+   senao ela ve o bloco voltar com um card dizendo "—"
+
+### 6. ⚠️ HIGIENE DO REPO — trabalho nao commitado na `main`
+
+No fim da sessao o estado era:
+```
+ M features/dashboard/blocoA.ts
+ M features/dashboard/components/BlocoASection.tsx
+ M lib/query/hooks/index.ts
+ M lib/query/hooks/useFilaDeAtendimentoQuery.ts
+ M lib/query/queryKeys.ts
+?? docs/stories/2.48.a-fila-que-abre.story.md
+?? features/dashboard/__tests__/blocoA248.test.ts
+?? features/dashboard/components/ListaDaFilaModal.tsx
+?? lib/query/hooks/useListaDaFilaQuery.ts
+?? supabase/migrations/20260824180000_a_fila_que_abre.sql
+```
+**Nada foi commitado nem pushado** — o Filipe nao autorizou, e a convencao da casa e branch + PR.
+Na proxima sessao: criar `story/2.48-a-fila-que-abre`, commitar e abrir PR.
+
+### 7. 🔑 Acesso ao banco
+
+O token de gestao do Supabase (`grupo-acreditando/.credenciais/supabase-crm-mgmt.token`) estava
+**expirado** (401 ate no `GET /v1/projects`). O Filipe gerou um **token de 1 dia** em 24/08 — entao ele
+**ja venceu ou vence logo**. Gerar novo em Supabase → Account → Access Tokens e salvar no mesmo arquivo
+(so o token, sem quebra de linha). A pasta `.credenciais/` **esta no `.gitignore`** (conferido).
+
+---
+
 ## Sessao 2026-08-21 (19) — 🙈 o bloco "O que eu faco agora" SAIU DA TELA (temporario, nada apagado)
 
 > ⚠️ **Decisao de produto do Filipe, nao conserto de defeito.** Os tres cards da fila viva saem da

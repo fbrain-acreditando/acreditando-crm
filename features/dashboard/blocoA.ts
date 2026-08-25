@@ -79,3 +79,87 @@ export function tomDoAtraso(
 export function definicaoDaEspera(horasDoLimite: number): string {
     return `Conversas que já saíram da IA e em que o lead falou por último — a resposta está com você. "Passou do limite" conta as que estão assim há mais de ${horasDoLimite}h.`;
 }
+
+// =============================================================================
+// Story 2.48 — a fila que ABRE
+// =============================================================================
+
+/**
+ * A frase do card, agora que ele conta o RECORTE do funil.
+ *
+ * 🔑 A definição antiga prometia "conversas que exigem ação sua" e entregava
+ * "conversas abertas". A 2.48 não conserta isso classificando intenção — ela
+ * conserta **mostrando quem são**. Então o texto para de prometer julgamento e
+ * passa a dizer, literalmente, o que a conta faz e o que ela deixa de fora.
+ */
+export function definicaoDaEsperaNoFunil(horasDoLimite: number): string {
+    return `Pessoas com card no funil ativo em que o lead falou por último. Clique para ver quem são e o que escreveram. "Passou do limite" conta as que estão assim há mais de ${horasDoLimite}h.`;
+}
+
+/**
+ * A frase que explica o desconto — o que saiu da conta, e por quê.
+ *
+ * ⚠️ Obrigatória. Descontar 36 conversas de um número que já circulou em reunião
+ * **sem dizer** é a forma mais rápida de o painel mentir sem uma linha errada:
+ * ela veria "58" onde ontem havia "94" e concluiria que a fila caiu sozinha.
+ *
+ * @returns a frase, ou `null` quando não há desconto nenhum a explicar.
+ */
+export function resumoDoDesconto(foraDoFunil: number, semCard: number): string | null {
+    const partes: string[] = [];
+
+    if (foraDoFunil > 0) {
+        partes.push(
+            `${foraDoFunil} ${foraDoFunil === 1 ? 'está' : 'estão'} em Ganho, Perdido ou nas colunas de categoria`
+        );
+    }
+    if (semCard > 0) {
+        partes.push(
+            `${semCard} ${semCard === 1 ? 'não virou card' : 'não viraram card'} no CRM`
+        );
+    }
+
+    if (partes.length === 0) return null;
+
+    const total = foraDoFunil + semCard;
+    return `${total} ${total === 1 ? 'conversa espera' : 'conversas esperam'} fora desta conta: ${partes.join(' e ')}.`;
+}
+
+/**
+ * O rótulo de tempo de um item da lista.
+ *
+ * Horas cruas ("73.4h") obrigam a fazer conta de cabeça no meio da fila. O
+ * corte em 48h é onde "ontem" deixa de ser útil e o número de dias passa a ser
+ * a informação — mesma régua que ela usa falando ("faz três dias que mandei").
+ */
+export function rotuloDaEspera(horas: number): string {
+    if (horas < 1) return 'agora há pouco';
+    if (horas < 48) return `há ${Math.floor(horas)}h`;
+    return `há ${Math.floor(horas / 24)} dias`;
+}
+
+/**
+ * O que mostrar quando a última mensagem do lead não é texto.
+ *
+ * 📌 Medido em 24/08: dos 56 que esperavam dentro do funil, **6 eram áudio e 4
+ * imagem**. Nenhuma regra de texto os enxerga — e é justamente por isso que a
+ * lista não pode fingir que estão vazios. Dizer "áudio" é informação; deixar a
+ * linha em branco é a lista dizendo que não há nada ali.
+ */
+export function textoDoItem(tipo: string, texto: string | null): string {
+    const limpo = (texto ?? '').trim();
+    if (limpo) return limpo;
+
+    switch (tipo) {
+        case 'audio':
+            return '🎤 Áudio — abra para ouvir';
+        case 'image':
+            return '🖼️ Imagem — abra para ver';
+        case 'video':
+            return '🎬 Vídeo — abra para ver';
+        case 'document':
+            return '📎 Documento — abra para ver';
+        default:
+            return 'Sem texto legível — abra a conversa';
+    }
+}

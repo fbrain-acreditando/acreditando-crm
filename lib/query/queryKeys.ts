@@ -160,6 +160,19 @@ export const queryKeys = {
     },
 
     /**
+     * Story 2.48 — a LISTA da fila (o que o clique no card abre).
+     *
+     * Chave separada da `filaDeAtendimento` de propósito: os números são
+     * carregados sempre, a lista só quando alguém abre. Compartilhar a chave
+     * faria a tela buscar 200 linhas para mostrar um número de 2 dígitos.
+     */
+    listaDaFila: {
+        all: ['listaDaFila'] as const,
+        byOrg: (orgId: string, apenasFunil: boolean, incluiSemCard: boolean) =>
+            ['listaDaFila', orgId, apenasFunil, incluiSemCard] as const,
+    },
+
+    /**
      * Organization members query keys (for filters/dropdowns).
      */
     orgMembers: {

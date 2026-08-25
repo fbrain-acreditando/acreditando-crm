@@ -16,14 +16,18 @@
  */
 
 import React from 'react';
-import { Inbox, Clock, PhoneCall, Info, ListChecks } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Inbox, Clock, PhoneCall, Info, ListChecks, ChevronRight } from 'lucide-react';
 import { useFilaDeAtendimentoQuery } from '@/lib/query/hooks';
+import type { ItemDaFilaDeEspera } from '@/lib/query/hooks';
 import {
     avisoDeAlcanceDaIa,
     semBaseParaLigar,
     tomDoAtraso,
-    definicaoDaEspera,
+    definicaoDaEsperaNoFunil,
+    resumoDoDesconto,
 } from '../blocoA';
+import { ListaDaFilaModal } from './ListaDaFilaModal';
 import { SkeletonStatCard } from '@/components/ui/Skeleton';
 
 // =============================================================================
@@ -37,6 +41,7 @@ function CardDaFila({
     definicao,
     destaque = 'neutro',
     rodape,
+    aoClicar,
 }: {
     icon: React.ElementType;
     titulo: string;
@@ -46,6 +51,13 @@ function CardDaFila({
     destaque?: 'neutro' | 'bom' | 'atencao' | 'alarme' | 'humano';
     /** Ressalva de alcance (denominador), quando existe. */
     rodape?: string | null;
+    /**
+     * Story 2.48 — o card ABRE. Quando existe, o card vira botão.
+     *
+     * ⚠️ Só recebe `aoClicar` o card que tem lista para mostrar. Card clicável
+     * que não abre nada é pior que card estático: promete e não entrega.
+     */
+    aoClicar?: () => void;
 }) {
     const cores = {
         neutro: 'text-slate-500 bg-slate-100 dark:bg-slate-500/20',
@@ -55,8 +67,29 @@ function CardDaFila({
         humano: 'text-primary-500 bg-primary-100 dark:bg-primary-500/20',
     };
 
+    const clicavel = typeof aoClicar === 'function';
+
     return (
-        <div className="glass p-4 rounded-xl border border-slate-200 dark:border-white/5 shadow-sm flex flex-col">
+        <div
+            className={`glass p-4 rounded-xl border border-slate-200 dark:border-white/5 shadow-sm flex flex-col ${
+                clicavel
+                    ? 'cursor-pointer hover:border-primary-300 dark:hover:border-primary-500/40 hover:shadow-md transition-all focus-within:ring-2 focus-within:ring-primary-500'
+                    : ''
+            }`}
+            onClick={aoClicar}
+            onKeyDown={
+                clicavel
+                    ? e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              aoClicar!();
+                          }
+                      }
+                    : undefined
+            }
+            role={clicavel ? 'button' : undefined}
+            tabIndex={clicavel ? 0 : undefined}
+        >
             <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg ${cores[destaque]}`}>
                     <Icon size={18} />
@@ -67,6 +100,13 @@ function CardDaFila({
                     </p>
                     <p className="text-2xl font-bold text-slate-900 dark:text-white">{valor}</p>
                 </div>
+                {clicavel && (
+                    <ChevronRight
+                        size={18}
+                        className="ml-auto shrink-0 text-slate-300 dark:text-slate-600"
+                        aria-hidden
+                    />
+                )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-3 leading-snug">
                 {definicao}
@@ -86,6 +126,35 @@ function CardDaFila({
 
 export function BlocoASection() {
     const { data, isLoading } = useFilaDeAtendimentoQuery();
+    const router = useRouter();
+    const [listaAberta, setListaAberta] = React.useState(false);
+
+    /**
+     * Story 2.48 — as 23 conversas sem card no CRM entram na lista, marcadas.
+     *
+     * 📌 Medido em 24/08: 22 das 23 foram criadas entre 26 e 31/07 (a janela da
+     *    importação inicial do CRM) e nenhuma nova desde 16/08 ⇒ é resíduo de
+     *    migração, não torneira aberta. Elas aparecem porque são pessoas reais
+     *    esperando resposta, e a etiqueta é o que leva ao cadastro.
+     *
+     * 🔴 `false` HOJE, honrando o pedido LITERAL dela: *"só quem tá em primeiro
+     *    atendimento ou em alguma outras fases do funil"* — e conversa sem card
+     *    não está em fase nenhuma. Elas não somem: aparecem na frase de desconto
+     *    logo abaixo do número ("23 não viraram card no CRM").
+     *
+     * Trocar para `true` faz as 23 entrarem na conta E na lista, marcadas.
+     * Decisão de uma linha, de propósito — e o número e a lista continuam
+     * batendo dos dois lados.
+     */
+    const INCLUI_SEM_CARD = false;
+
+    const abrirConversa = React.useCallback(
+        (item: ItemDaFilaDeEspera) => {
+            setListaAberta(false);
+            router.push(`/messaging/${item.conversationId}`);
+        },
+        [router]
+    );
 
     if (isLoading) {
         return (
@@ -101,7 +170,15 @@ export function BlocoASection() {
 
     const alcance = avisoDeAlcanceDaIa(data.pontuadosPelaIa, data.cardsVivos);
     const semBase = semBaseParaLigar(data.pontuadosPelaIa);
-    const tom = tomDoAtraso(data.passouDoLimite, data.esperandoPorMim);
+    // O número do card e a lista que ele abre contam EXATAMENTE o mesmo
+    // conjunto. Painel que se contradiz na frente de quem usa não recupera a
+    // confiança no número depois.
+    const esperando = data.esperandoNoFunil + (INCLUI_SEM_CARD ? data.semCard : 0);
+    const tom = tomDoAtraso(data.passouDoLimiteNoFunil, esperando);
+    const desconto = resumoDoDesconto(
+        data.foraDoFunil,
+        INCLUI_SEM_CARD ? 0 : data.semCard
+    );
 
     return (
         <div className="space-y-3">
@@ -119,17 +196,19 @@ export function BlocoASection() {
                 <CardDaFila
                     icon={Inbox}
                     titulo="Esperando minha resposta"
-                    valor={data.esperandoPorMim}
+                    valor={esperando}
                     destaque="humano"
-                    definicao={definicaoDaEspera(data.horasDoLimite)}
-                    rodape={`De ${data.transferidas} conversas que já saíram da IA.`}
+                    definicao={definicaoDaEsperaNoFunil(data.horasDoLimite)}
+                    rodape={desconto}
+                    aoClicar={() => setListaAberta(true)}
                 />
                 <CardDaFila
                     icon={Clock}
                     titulo={`Passou de ${data.horasDoLimite}h`}
-                    valor={data.passouDoLimite}
+                    valor={data.passouDoLimiteNoFunil}
                     destaque={tom}
                     definicao={`Dessas que esperam, as que estão sem resposta há mais de ${data.horasDoLimite} horas. O limite é o seu critério.`}
+                    aoClicar={() => setListaAberta(true)}
                 />
                 <CardDaFila
                     icon={PhoneCall}
@@ -155,6 +234,15 @@ export function BlocoASection() {
                     </p>
                 </div>
             )}
+
+            <ListaDaFilaModal
+                aberto={listaAberta}
+                aoFechar={() => setListaAberta(false)}
+                aoAbrirConversa={abrirConversa}
+                horasDoLimite={data.horasDoLimite}
+                apenasFunil
+                incluiSemCard={INCLUI_SEM_CARD}
+            />
         </div>
     );
 }
