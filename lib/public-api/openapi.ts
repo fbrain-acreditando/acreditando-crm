@@ -586,6 +586,65 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
           responses: { 200: { description: 'OK', content: { 'application/json': { schema: { type: 'object' } } } }, 401: { $ref: '#/components/responses/Unauthorized' } },
         },
       },
+      '/deals/{dealId}/ai-extraction': {
+        post: {
+          tags: ['Deals'],
+          summary: 'Gravar campos e nota já extraídos por um sistema externo (story 2.49)',
+          description: 'Recebe valores JÁ extraídos (não extrai nada). Campo já preenchido não é sobrescrito, chave desconhecida vira `skipped` com 200, e nota manual nunca é substituída. Use `Idempotency-Key` para tornar o reenvio seguro.',
+          security: [{ ApiKeyAuth: [] }],
+          parameters: [
+            { name: 'dealId', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string' }, description: 'Mesma chave + mesmo corpo devolve a resposta anterior; corpo diferente devolve 409.' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    custom_fields: {
+                      type: 'object',
+                      description: 'Mapa key -> valor. Aceita string simples ou { value, confidence }.',
+                      additionalProperties: true,
+                    },
+                    lead_score: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        score: { type: 'integer', minimum: 1, maximum: 5 },
+                        rotulo: { type: 'string' },
+                        criterios_atingidos: { type: 'array', items: { type: 'string' } },
+                        red_flags: { type: 'array', items: { type: 'string' } },
+                        confianca: { type: 'number', minimum: 0, maximum: 1 },
+                      },
+                      required: ['score'],
+                    },
+                    overwrite: { type: 'boolean', description: 'Default false. Verdadeiro permite sobrescrever campo já preenchido.' },
+                  },
+                },
+                examples: {
+                  n8n: {
+                    value: {
+                      custom_fields: { tipoDeLesao: 'Lesão medular', haQuantoTempo: '8 meses', ondeReside: 'Guarulhos' },
+                      lead_score: { score: 4, rotulo: 'Quente', confianca: 0.82 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'OK — inclui o que foi gravado e o que foi pulado, com o motivo', content: { 'application/json': { schema: { type: 'object' } } } },
+            400: { description: 'JSON inválido' },
+            401: { $ref: '#/components/responses/Unauthorized' },
+            404: { description: 'Deal inexistente, de outra organização, ou excluído' },
+            409: { description: 'Idempotency-Key reutilizada com corpo diferente' },
+            422: { description: 'Payload inválido' },
+          },
+        },
+      },
       '/deals/{dealId}/move-stage': {
         post: {
           tags: ['Deals'],

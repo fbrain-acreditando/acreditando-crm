@@ -253,7 +253,8 @@ export interface Deal {
   leadScore?: number | null;
   leadScoreKnown?: number | null;
   /** `auto` = regra · `manual` = a Fernanda mudou (e o recálculo não sobrescreve). */
-  leadScoreSource?: 'auto' | 'manual' | null;
+  /** Story 2.49 — 'n8n' quando a nota veio do fluxo de transferencia, via API publica. */
+  leadScoreSource?: 'auto' | 'manual' | 'n8n' | null;
   /** Quais critérios bateram, foram refutados e seguem desconhecidos (AC5). */
   leadScoreDetail?: Record<string, any> | null;
 

@@ -70,7 +70,8 @@ export interface DbDeal {
   lead_score?: number | null;
   /** Story 2.18 — denominador: quantos critérios eram conhecíveis. */
   lead_score_known?: number | null;
-  lead_score_source?: 'auto' | 'manual' | null;
+  /** Story 2.49 — 'n8n' quando a nota veio do fluxo de transferência, via API pública. */
+  lead_score_source?: 'auto' | 'manual' | 'n8n' | null;
   lead_score_detail?: Record<string, any> | null;
   /** Status legado (deprecado, usar stage_id). */
   status: string | null;

@@ -35,6 +35,8 @@ import {
   buildCustomFieldsSchema,
   coerceValueForField,
   describeField,
+  isBlank,
+  MIN_CONFIDENCE_TO_STORE,
   type CustomFieldProvenance,
   type ExtractedCustomField,
 } from './customFields.schemas';
@@ -47,8 +49,9 @@ import { moveDealIfQualified } from '@/lib/deals/moveOnQualified';
 // =============================================================================
 
 const MAX_MESSAGES_FOR_EXTRACTION = 30;
-/** Abaixo disso o valor é descartado — é chute do modelo, não informação. */
-const MIN_CONFIDENCE_TO_STORE = 0.6;
+// `MIN_CONFIDENCE_TO_STORE` e `isBlank` migraram para `customFields.schemas.ts`
+// na story 2.49 — a rota pública do n8n aplica as MESMAS regras e não podia
+// depender deste módulo (que carrega o AI SDK inteiro).
 
 // =============================================================================
 // Prompt
@@ -308,13 +311,6 @@ Extraia apenas o que a conversa disser. O que não estiver lá, retorne null.`,
 // =============================================================================
 // Helpers
 // =============================================================================
-
-/** Vazio = nunca preenchido. String em branco conta como vazio. */
-function isBlank(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
-  if (typeof value === 'string') return value.trim() === '';
-  return false;
-}
 
 function extractTextContent(content: Record<string, unknown>): string {
   if (typeof content === 'string') return content;
