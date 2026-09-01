@@ -8,6 +8,69 @@
 
 ---
 
+## Sessao 2026-09-01 (21) — ✅ a story 2.48 FOI PARA PRODUCAO (o PR estava parado ha 6 dias)
+
+> ⚠️ **A secao 20 abaixo esta DESATUALIZADA em dois pontos** — ela diz que o trabalho nao estava
+> commitado e que a migration nao tinha sido aplicada. **As duas coisas ja tinham sido feitas em
+> 25/08** e ninguem atualizou o doc. Leia esta secao antes daquela.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 21) e continue — a 2.48
+> esta em producao, mas o Bloco A segue FORA DA TELA por `MOSTRAR_BLOCO_A_FILA=false` e a IA continua
+> parada por falta de credito no Google."*
+
+### 1. O que foi feito
+
+Merge do **PR #11** (`gh pr merge 11 --squash`) e publicacao. Nenhuma linha de codigo nova — o trabalho
+ja estava pronto desde 25/08 e so faltava alguem apertar o botao.
+
+| Etapa | Resultado (lido de volta, nao pela ausencia de erro) |
+|---|---|
+| Gate local (`precheck:fast`) | lint 0 · typecheck 0 · **854 testes, 0 falha**, 5 skipped |
+| Merge | PR #11 `MERGED` em 01/09 13:10 UTC · squash commit `b653d6b` |
+| `origin/main` | `b653d6b` ✓ (main local sincronizada) |
+| Deploy | Vercel `success` · deployment `b653d6b | Production | 01/09 13:12 UTC` |
+| Dominio | `acreditando-crm-sandy.vercel.app` → HTTP 200 |
+
+### 2. 🕳️ O achado desta sessao: o doc de retomada envelheceu errado
+
+O PR **#11 ficou aberto e verde por 6 dias** (25/08 → 01/09) sem ninguem notar, porque o unico documento
+que alguem le pra retomar dizia que o trabalho *"nao foi commitado"*. Quem lesse o doc procuraria arquivos
+soltos na `main`, nao um PR pronto pra merge.
+
+📌 **Licao:** commit feito no fim da sessao **depois** de escrever o doc deixa o doc mentindo. O registro
+tem que ser o ultimo passo, ou o passo tem que voltar ao registro.
+
+⚠️ **E havia um estado que ninguem deveria manter:** a migration estava em producao desde 25/08 e o codigo
+nao. Nao quebrou porque a RPC devolve os campos novos AO LADO dos antigos (desenho deliberado da 2.48),
+mas por 6 dias o banco teve `board_stages.conta_como_fila` e `get_lista_da_fila` sem nenhuma tela lendo.
+
+### 3. ⛔ O que a 2.48 em producao ainda NAO resolve
+
+1. **A Fernanda continua sem ver.** `MOSTRAR_BLOCO_A_FILA = false` em `features/dashboard/DashboardPage.tsx:58`
+   — o bloco esta fora da tela desde 21/08. Ligar e trocar uma palavra, mas o bloco tem 3 cards e a 2.48
+   conserta **um**: "Prontos para ligar" depende da IA, que esta parada, e voltaria mostrando "—".
+2. **A IA segue parada desde 18/08** (ultimo sucesso 20:45 UTC) por credito esgotado no Google. Depende do
+   Filipe recarregar.
+3. **Os 31 itens `failed`** continuam sem reset (e escrita no banco).
+4. **A correcao devida a Fernanda** continua nao dita: arrastar para `Qualificado` preenche a **NOTA**, nao
+   os **campos**. Lead qualificado na mao nunca ganha campo — o unico gatilho e a transferencia do GPT Maker.
+
+### 4. 🔑 Duas credenciais vencidas (bloqueiam medicao)
+
+| Credencial | Estado | Efeito |
+|---|---|---|
+| `.credenciais/supabase-crm-mgmt.token` | **HTTP 401** (era token de 1 dia, gerado 24/08) | Nao da pra ler nem escrever no banco — nem conferir a fila da IA, nem resetar os 31 `failed` |
+| `.credenciais/vercel.token` | **403 forbidden** — sem escopo no time `fbrainacreditando-3497s-projects` | Nao da pra ler deployments pela API da Vercel (contornado lendo o status pelo GitHub) |
+
+### 5. Higiene
+
+- Branch `story/2.48-a-fila-que-abre` **nao foi deletada** (local nem remota) — deletar exige autorizacao do Filipe.
+- Nenhuma migration rodou nesta sessao. Nenhuma escrita no banco.
+
+---
+
 ## Sessao 2026-08-24/25 (20) — 💸 a IA parou por FALTA DE CREDITO, e a story 2.48 nasceu (nao aplicada)
 
 > ⚠️ **DUAS COISAS PENDENTES E IMPORTANTES:**
