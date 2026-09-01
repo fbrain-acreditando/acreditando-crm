@@ -114,3 +114,23 @@ export function coerceValueForField(
 
   return value;
 }
+
+// =============================================================================
+// Regras de gravação compartilhadas
+// =============================================================================
+//
+// Story 2.49 — `isBlank` e `MIN_CONFIDENCE_TO_STORE` moraram em
+// `customFields.service.ts` até a rota pública `/deals/{dealId}/ai-extraction`
+// precisar das MESMAS regras. Foram trazidos para cá (módulo leve, sem AI SDK)
+// para que exista UMA definição, não duas cópias que divergem no primeiro
+// ajuste. O serviço continua importando daqui.
+
+/** Abaixo disso o valor é descartado — é chute do modelo, não informação. */
+export const MIN_CONFIDENCE_TO_STORE = 0.6;
+
+/** Vazio = nunca preenchido. String em branco conta como vazio. */
+export function isBlank(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  return false;
+}

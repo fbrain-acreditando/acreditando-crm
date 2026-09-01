@@ -20,7 +20,8 @@ import { ROTULO_DO_CRITERIO, type CriterioId } from '../leadScore';
 interface Props {
     score: number | null | undefined;
     known: number | null | undefined;
-    source: 'auto' | 'manual' | null | undefined;
+    /** Story 2.49 — 'n8n' entra aqui; o painel trata tudo que nao e 'manual' como automatico. */
+    source: 'auto' | 'manual' | 'n8n' | null | undefined;
     detail: Record<string, unknown> | null | undefined;
     /** Grava a nota manual. `null` devolve o card para a regra automática. */
     onAlterar: (nota: number | null) => Promise<void> | void;
