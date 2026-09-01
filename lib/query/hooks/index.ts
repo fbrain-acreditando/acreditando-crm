@@ -173,6 +173,12 @@ export {
   type FilaDeAtendimento,
 } from './useFilaDeAtendimentoQuery';
 
+export {
+  useListaDaFilaQuery,
+  type ItemDaFilaDeEspera,
+  type OpcoesDaLista,
+} from './useListaDaFilaQuery';
+
 // Org Members
 export {
   useOrgMembersQuery,
