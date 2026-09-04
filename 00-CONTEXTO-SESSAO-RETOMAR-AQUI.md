@@ -8,6 +8,291 @@
 
 ---
 
+## Sessao 2026-09-03 (24) — ✅ a migration da 2.50 FOI APLICADA, e o `search_path` sobreviveu
+
+> ⚠️ **A secao 23 abaixo esta desatualizada no titulo** — ela diz "migration ESCRITA, nao aplicada".
+> Foi aplicada em 03/09 com read-back completo. Leia esta secao antes daquela.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 24) e continue — falta
+> criar a chave da API publica no CRM, construir o fluxo n8n do 'arrastar' e cadastrar o endpoint."*
+
+---
+
+### 1. O que foi aplicado, e o read-back
+
+```
+notify_deal_stage_changed ...... definer ✅ · search_path=""     PRESERVADO ✅ · 2881 → 4834 chars
+enfileirar_pontuacao_do_lead ... definer ✅ · search_path=public PRESERVADO ✅ · 3381 → 3921 chars
+flag pontuacao_automatica_habilitada ... false ✅ (org 83160646-16a0-4cb7-9067-7ce7ef34ff50)
+triggers em deals .............. os 4 originais, intactos ✅
+board_stages ................... 1 de 13 com pontua_lead ✅ (so Qualificado, INALTERADO)
+endpoints de saida ............. 0 ✅ (Task D fora desta aplicacao, de proposito)
+```
+
+Backup do corpo ANTES em `.rollback/funcoes-antes-2.50-2026-09-03.json` (gitignored) — e o caminho de
+volta se precisar reverter.
+
+### 2. 🔒 O achado que quase virou brecha de seguranca
+
+As duas funcoes sao **SECURITY DEFINER** — rodam com privilegio elevado. E as duas tem `proconfig`
+(`search_path`) aplicado por uma migration **POSTERIOR** ao arquivo original:
+`20260221200002_fix_function_search_path.sql`.
+
+⇒ **O `SET search_path` NAO esta no `CREATE OR REPLACE` do `schema_init.sql`.** Um
+`CREATE OR REPLACE` copiado do arquivo do repo teria **zerado o `proconfig` em silencio** e reaberto o
+vetor de escalada de privilegio que aquela migration fechou. Nada acusaria: nem lint, nem teste, nem
+erro no banco.
+
+📌 **So apareceu porque o corpo foi lido de `pg_proc` no banco, nao copiado do repo.** Este projeto
+**nao tem `schema_migrations`** — repo e banco podem divergir sem aviso. **A verdade e o banco.**
+
+### 3. 🩸 O sangramento parou
+
+A flag `pontuacao_automatica_habilitada = false` desliga o `net.http_post` para a IA sem credito, com
+**early return** — os triggers continuam existindo.
+
+```
+fila `failed`:  31 (24/08)  →  91 (01/09)  →  102 (03/09)  →  para de crescer
+```
+
+⚠️ **DIVIDA QUE ISSO CRIA:** quando o credito do Google entrar, **alguem precisa religar**. Esta no
+`COMMENT ON COLUMN` e aqui. Flag desligada que ninguem religa vira "a IA nunca mais funcionou e
+ninguem sabe por que".
+
+⚠️ **E ha uma colisao a resolver ANTES de religar:** com a flag ligada E o endpoint do n8n cadastrado,
+a etapa `Qualificado` teria **dois donos** escrevendo no mesmo `lead_score` — a fila interna
+(`source: 'auto'`) e o n8n (`source: 'n8n'`). Hoje nao colide porque a fila esta morta.
+
+### 4. 🧭 As decisoes do dono que fecharam ambiguidades
+
+- **A etapa-gatilho e `Qualificado`, nao `Aguardando retorno`.** O pedido original dizia "aguardando",
+  mas a medicao mostrou `pontua_lead = true` em **uma unica etapa das 13**: `Qualificado`. Levada a
+  divergencia, o Filipe manteve `Qualificado`. ⇒ **O fluxo novo troca QUEM executa a extracao, nao
+  QUANDO ela acontece.** Nenhum valor de `pontua_lead` foi alterado.
+- **A flag nasce desligada** — estancar era o objetivo, nao so ter o mecanismo.
+
+### 5. ⛔ O que FALTA para o campo aparecer no card (medido em 03/09)
+
+```
+deals com nota do n8n ........ 0     campos com proveniencia n8n ... 0
+POSTs recebidos na rota ...... 0     chaves de API ................. 0
+endpoints de webhook ......... 0
+```
+
+A corrente esta montada e **nada trafega por ela**. Faltam 3 elos:
+
+| # | O que | Quem |
+|---|---|---|
+| 1 | 🔑 **Criar a chave da API publica** no CRM (admin → o token aparece UMA vez) | **Filipe**, na tela |
+| 2 | 🔗 Construir o fluxo n8n do "arrastar": webhook → busca conversa no GPT Maker → extrai → POST na rota | precisa da chave |
+| 3 | 📌 Cadastrar o endpoint (URL + secret) em `integration_outbound_endpoints` | depois do 2 |
+
+**O passo 1 destrava tudo** — e sem ele o AC20 da 2.49 e o AC8/AC10 da 2.50 seguem abertos.
+
+### 6. ⚠️ ACs que NAO fecharam (registro honesto)
+
+- **AC9, AC10** — endpoint nao cadastrado (depende de URL e secret que nao existem). Template
+  **comentado** na migration, com aviso de que o secret nao vai versionado.
+- **AC12, ressalva do @dev:** nao existe harness de Postgres nesta suite. Os **31 testes novos testam
+  o TEXTO da migration**, nao o comportamento em runtime. Eles pegam a regressao que mais assusta (um
+  `CREATE OR REPLACE` futuro que perca o `search_path`, o `EXCEPTION` proprio, ou troque `pontua_lead`
+  por `conta_como_fila`) — **mas nao provam que a funcao roda certo**. So o read-back prova, e o
+  read-back de estrutura foi feito; o de ponta a ponta, nao.
+
+### 7. Metodo que vale repetir
+
+**Ler a funcao do banco, nunca do repo.** Foi o que achou o `search_path`. O arquivo do repo estava
+correto para o que ele descreve — e incompleto para o que existe em producao.
+
+**Backup antes de escrever, sempre.** Quando o token venceu no meio da aplicacao, a operacao foi
+**abortada** em vez de "tentar sem o backup". Recriar funcao SECURITY DEFINER sem ter o corpo original
+salvo transforma reversao em reconstrucao de memoria.
+
+**O guard-rail que recusa e um bem, nao um obstaculo.** O `aplicar-migracao.mjs` recusou as duas
+migrations desta serie (verbo `drop`). Em vez de afrouxar o guard-rail para todo mundo, cada caso
+ganhou seu script explicito (`aplicar-2.49.mjs`, `aplicar-2.50.mjs`) com o estado ANTES no cabecalho.
+
+---
+
+## Sessao 2026-09-02 (23) — 🔌 story 2.50 escrita e implementada (a migration foi aplicada DEPOIS, na sessao 24)
+
+> Branch: `story/2.50-o-arrastar-que-chama-o-n8n` · Arquivo:
+> `supabase/migrations/20260902100000_o_arrastar_que_chama_o_n8n.sql`
+> Gates: lint 0 · typecheck 0 · **902 testes** (era 871, +31).
+> ⚠️ **Nada foi aplicado em producao, nada foi commitado, nenhum endpoint foi cadastrado.**
+
+### O que a migration faz (quando for aplicada)
+
+1. `notify_deal_stage_changed()` recriada — corpo atual PRESERVADO (lido de `pg_proc.prosrc`, nao de
+   memoria) + bloco `conversation` no payload (`id`, `gptmaker_chat_id`), buscado em
+   `messaging_conversations` por `metadata->>'deal_id'` com fallback por `contact_id`. O SELECT novo
+   vive em bloco `EXCEPTION` **proprio** — a funcao e `AFTER UPDATE` no caminho quente do board.
+2. Filtro por etapa: o webhook so sai quando o estagio de DESTINO tem `board_stages.pontua_lead = true`
+   (hoje: so `Qualificado`). **Nenhum valor de `pontua_lead` foi alterado.**
+3. Coluna nova `organization_settings.pontuacao_automatica_habilitada` + early return em
+   `enfileirar_pontuacao_do_lead()`. Os triggers **nao** foram removidos — desligar e por flag,
+   reversivel.
+
+### 🔴 DIVIDAS QUE FICAM ABERTAS
+
+| # | O que falta | Por que |
+|---|---|---|
+| 1 | **Aplicar a migration** em producao | E escrita em producao — exige autorizacao do Filipe. Depois: read-back de `pg_get_functiondef` das duas funcoes (Rule 7) |
+| 2 | **Religar a pontuacao automatica** quando o credito do Google voltar | A migration desliga a flag para a organizacao (`update ... = false`). Enquanto estiver `false`, a fila interna nao pontua NADA. Religar: `update organization_settings set pontuacao_automatica_habilitada = true where organization_id = '83160646-16a0-4cb7-9067-7ce7ef34ff50'` |
+| 3 | **Decidir quem pontua `Qualificado`** ANTES de religar | Com a flag ligada E o endpoint do n8n cadastrado, os DOIS caminhos escrevem no mesmo `lead_score` a partir da mesma etapa. Hoje nao colidem so porque a fila interna esta morta por falta de credito |
+| 4 | **Cadastrar o endpoint** em `integration_outbound_endpoints` | Depende da URL do webhook n8n e de um secret gerado fora do repo. Template comentado no fim da migration. ⚠️ O secret NUNCA entra em arquivo versionado |
+| 5 | **Read-back ponta a ponta** (AC10/AC11) | So depois do endpoint: mover card para `Qualificado`, conferir `webhook_events_out` (bloco `conversation` presente) + `webhook_deliveries` + gravacao pela rota da 2.49; e conferir que mover para etapa `pontua_lead = false` **nao** gera evento |
+
+---
+
+## Sessao 2026-09-01 (22) — 🚪 a porta que o n8n usa: story 2.49 EM PRODUCAO (19 de 20 ACs)
+
+> ⚠️ **Falta UMA coisa para fechar:** nao existe nenhuma chave da API publica
+> (`api_keys` esta VAZIA). Sem ela o n8n nao consegue entrar pela porta que
+> acabamos de abrir, e o AC20 (read-back com POST real) segue aberto.
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 22) e continue — a
+> rota `/api/public/v1/deals/{dealId}/ai-extraction` esta em producao, falta criar a chave de API
+> no CRM e entao ajustar o prompt do n8n (Fase 2 do plano)."*
+
+---
+
+### 1. O contexto: a IA parou, mas o dado existia do lado de fora
+
+Medido no banco em 01/09 (nao herdado — relido):
+
+```
+deals ativos ................ 814
+com estrela ................. 357 (44%) — nenhuma nova desde 18/08
+campos preenchidos .......... 99 a 135 de 814 (12% a 17%)
+fila `failed` ............... 91   (eram 31 em 24/08 — TRIPLICOU)
+erro dos 91 ................. "Your prepayment credits are depleted" (100%)
+falhas so em 01/09 .......... 6
+ultima pontuacao gravada .... 18/08 20:45
+```
+
+⚠️ **A fila nao esta parada — esta se enchendo de lixo.** Cada card que a Fernanda move dispara o
+trigger, queima 3 tentativas e vira `failed`.
+
+Enquanto isso, o workflow n8n **"05- Transferencia"** (`3WO6BcG8M9jVGlnY`) JA extrai os campos e JA
+pontua o lead de 1 a 5, com chave propria da OpenAI, e escrevia num Google Sheets. O dado existe, e
+pago, e morria numa planilha.
+
+### 2. 🚪 O que entrou em producao
+
+**`POST /api/public/v1/deals/{dealId}/ai-extraction`** — auth `X-Api-Key`, o mesmo mecanismo do resto
+da API publica. **Nao extrai nada:** aplica o que chegou, com as MESMAS regras da extracao interna.
+
+| Merge | Deploy | Gates |
+|---|---|---|
+| PR #14 · `5853a82` · 01/09 18:32 UTC | Production `5853a82` · 18:34 UTC | lint 0 · typecheck 0 · **871 testes** (era 854, +17) |
+
+**Migration APLICADA em producao, com read-back:**
+```
+CHECK deals_lead_score_source_check
+  antes:  ('auto','manual')  ⇒ REJEITAVA 'n8n'
+  depois: ('auto','manual','n8n') + NULL       ✅ relido do banco
+public_api_idempotency: 8 colunas, unique(org,endpoint,key), RLS ligada, 0 policies  ✅
+base depois: 462 NULL / 356 auto / 1 manual · 0 violacoes                            ✅
+```
+
+⚠️ O script de rotina `aplicar-migracao.mjs` **recusou** a migracao (guard-rail contra `drop`). Criado
+`scripts/db/aplicar-2.49.mjs` para este caso especifico, com o estado ANTES documentado no cabecalho
+para reverter. O guard-rail geral NAO foi afrouxado — de proposito.
+
+### 3. 🎯 A decisao de produto que vale lembrar
+
+**A nota do n8n SUBSTITUI a estrela** (escolha do Filipe, ciente do risco). As duas reguas sao
+diferentes:
+
+| | nota do **CRM** | nota do **n8n** |
+|---|---|---|
+| escala | 0–5 | 1–5 |
+| como | codigo soma 5 criterios binarios | modelo julga temperatura |
+| rastro | `lead_score_detail` item a item | `rotulo` + `criterios_atingidos` |
+
+⇒ Os **357 deals ja pontuados** carregam a regua antiga. A partir do corte, card velho e card novo
+mostram a mesma estrela com criterio diferente, **e a tela nao distingue**. Custo assumido, nao
+resolvido. Por isso `lead_score_source` recebe o valor NOVO `'n8n'` (nao reusa `'auto'`) e
+`lead_score_detail.escala` guarda `'n8n:1-5'` — sem isso ninguem separaria as duas populacoes depois.
+
+### 4. 🕳️ Achados que teriam virado defeito silencioso
+
+1. **O CHECK do banco rejeitava `'n8n'`.** Nao apareceu em revisao de codigo — apareceu porque o
+   @architect leu `pg_constraint` no banco de producao. Sem a migration, TODO POST com nota falharia.
+2. **`lead_score_known` nulo renderiza `★ 4/0`** na tela (`Kanban/DealCard.tsx:227`) e viola o CHECK
+   de range. Grava-se 5, que e o que a nota manual ja faz.
+3. **Sem `pontuada_pela_ia_em`, a fila interna repontua e SOBRESCREVE** a nota do n8n
+   (`filaDePontuacao.ts:100-106` consome esse campo via `motivoParaDispensar`).
+4. **`.neq('lead_score_source','manual')` sozinho nao protege:** `NULL <> 'manual'` e NULL, nao TRUE —
+   e card nunca pontuado tem a coluna NULL (462 de 814). Tem que ser `.or(...is.null...)`.
+5. **Spread parcial de `ai_extracted` APAGA o resto em silencio.**
+6. **O typecheck achou 2 pontos que a story nao mapeou:** `types/types.ts:256` e `PainelDaNota.tsx:23`
+   tambem tipavam a origem da nota.
+
+### 5. 🧹 O fluxo n8n foi limpo (Fase 4 do plano, feita antes)
+
+Busca em largura a partir do `Webhook1`: dos **53 nos funcionais, so 23 rodavam**. Removidos **21 nos
+mortos** — os 6 do **Kommo** (o CRM antigo, que ja nao era escrito havia tempo: os nos estavam
+ORFAOS) e os 15 do ramo duplicado **"Kit Livre"**, que guardava uma **copia velha do prompt de
+extracao** (armadilha para quem fosse editar o prompt certo).
+
+```
+antes: 76 nos (44 funcionais)  →  depois: 55 nos (23 funcionais)
+ATIVO: true · codigo morto restante: NENHUM · nos Kommo: NENHUM
+backups: n8n-backups/05-Transferencia_..._2026-09-01_{ANTES,DEPOIS}.json
+```
+
+⚠️ **`Dados Kommo` NAO e do Kommo** — e um `set` vivo que monta `tag_nota` e `tag_nota_estrela`, e e o
+melhor ponto de insercao do webhook novo. Nome de entidade nao e configuracao.
+
+⚠️ As **32 sticky notes nao foram tocadas** — algumas comentam nos que nao existem mais.
+
+### 6. ⛔ O que FALTA (nada disso foi feito)
+
+1. 🔑 **Criar a chave da API publica** — `api_keys` esta VAZIA. E acao de admin, na tela do CRM. Sem
+   ela o n8n nao entra e o **AC20 nao fecha**. Token aparece uma vez so (o banco guarda so o hash).
+2. ✍️ **Fase 2 — ajustar o prompt do n8n:** `mora_em_sp` devolve "Sim"/"Nao", mas o campo do CRM
+   `ondeReside` guarda LUGAR ("Zona leste", "Guarulhos", "Mogi das Cruzes" — medido). Mapear direto
+   encheria a coluna de "Sim". E **corrigir a data-ancora `2025-11-03` hardcoded** no prompt de
+   pontuacao — esta 10 meses no passado e enviesa "lesao recente".
+3. 📤 **Fase 3** — `HTTP Request` novo apos `Dados Kommo`, chamando a rota.
+4. 🖱️ **Fase 5** — apontar o trigger `trg_notify_deal_stage_changed` (JA EXISTE) para um webhook n8n,
+   para o fluxo do "arrastar o card". E **desligar o trigger antigo**, senao ele continua chamando a
+   IA morta.
+5. 🔥 **Resetar os 91 `failed`** — SO depois do credito entrar, senao viram 91 falhas de novo.
+6. 🚨 **A correcao devida a Fernanda:** arrastar para `Qualificado` preenche a **NOTA**, nao os
+   **CAMPOS**. Ela opera com a informacao errada desde 21/08.
+
+### 7. 🔑 Credenciais
+
+| | |
+|---|---|
+| `supabase-crm-mgmt.token` | renovado em 01/09 — **token de 1 dia, vence 02/09** |
+| `vercel.token` | **403** — sem escopo no time `fbrainacreditando-3497s-projects` |
+| token do GPT Maker | **texto puro** no no `Dados API1` do fluxo n8n — o fluxo novo vai precisar dele tambem |
+
+### 8. Metodo que vale repetir
+
+**O @po pagou o proprio custo.** A validacao da story reprovou (NO-GO) com 6 referencias
+`arquivo:linha` erradas — incluindo `lib/ai/pontuacao/`, **diretorio que nao existe** (o certo e
+`lib/ai/scoring/`). Se tivesse ido direto para implementacao, o @dev procuraria arquivos inexistentes
+e leria 5 trechos errados. Das 7 correcoes apontadas, **6 procediam e 1 nao** — conferidas uma a uma
+antes de aplicar. Agente tambem erra; verificar e barato.
+
+**Teste que passa nao prova nada.** Depois de escrever a suite, duas mutacoes foram injetadas de
+proposito: trocar o `.or` pelo `.neq` sozinho (derrubou o AC11) e o spread parcial de `ai_extracted`
+(derrubou o AC10, sozinho e no alvo). So depois disso o verde valeu.
+
+**Gate honesto vale mais que gate verde.** O QA fechou em **CONCERNS**, nao PASS: 19 de 20 ACs. O
+AC20 ficou aberto e esta escrito assim no commit, no PR e aqui.
+
+---
+
 ## Sessao 2026-09-01 (21) — ✅ a story 2.48 FOI PARA PRODUCAO (o PR estava parado ha 6 dias)
 
 > ⚠️ **A secao 20 abaixo esta DESATUALIZADA em dois pontos** — ela diz que o trabalho nao estava
