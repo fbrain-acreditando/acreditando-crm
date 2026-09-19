@@ -49,9 +49,28 @@ function canonicalize(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
+/**
+ * Idade a partir da qual uma reserva sem resposta é considerada ABANDONADA —
+ * story 2.51, ACHADO 1 da rodada 3 do QA.
+ *
+ * A janela é escolhida para caber entre dois limites:
+ *  • **maior** que o tempo máximo que uma execução da rota pode durar (o teto de
+ *    uma serverless function é da ordem de segundos a poucos minutos) — abaixo
+ *    disso, assumir a reserva atropelaria uma requisição ainda VIVA e criaria o
+ *    negócio duplicado que a chave existe para evitar;
+ *  • **menor** que qualquer paciência humana — a chave da LP é
+ *    `email + whatsapp + dia` (AC7), então uma reserva presa condena todo
+ *    reenvio daquele visitante até a virada do dia. Quinze minutos é o pior caso
+ *    de espera; 24 horas seria o lead perdido.
+ */
+export const JANELA_RESERVA_ABANDONADA_MS = 15 * 60 * 1000;
+
 export type IdempotencyOutcome =
-  /** Chave nova: registrada, o chamador deve processar e depois gravar a resposta. */
-  | { kind: 'proceed' }
+  /**
+   * Chave nova (ou reserva abandonada assumida): registrada, o chamador deve
+   * processar e depois gravar a resposta.
+   */
+  | { kind: 'proceed'; reservaExpiradaAssumida?: boolean }
   /** Mesma chave, mesmo corpo: devolve o que já foi respondido, sem escrever de novo. */
   | { kind: 'replay'; status: number; body: unknown }
   /** Mesma chave, corpo diferente: 409. */
@@ -82,6 +101,9 @@ export async function beginIdempotency(ref: IdempotencyRef): Promise<Idempotency
     request_hash: ref.requestHash,
     response_status: 0,
     response_body: {},
+    // Explícito (a coluna tem default `now()`) porque é ESTE valor que decide,
+    // no retry seguinte, se a reserva ainda está viva ou já foi abandonada.
+    created_at: new Date().toISOString(),
   });
 
   if (!insertError) return { kind: 'proceed' };
@@ -96,7 +118,7 @@ export async function beginIdempotency(ref: IdempotencyRef): Promise<Idempotency
 
   const { data: existing, error: selectError } = await sb
     .from(TABLE)
-    .select('request_hash,response_status,response_body')
+    .select('request_hash,response_status,response_body,created_at')
     .eq('organization_id', ref.organizationId)
     .eq('endpoint', ref.endpoint)
     .eq('idempotency_key', ref.idempotencyKey)
@@ -110,19 +132,62 @@ export async function beginIdempotency(ref: IdempotencyRef): Promise<Idempotency
     return { kind: 'proceed' };
   }
 
-  const row = existing as { request_hash: string; response_status: number; response_body: unknown };
-  if (row.request_hash !== ref.requestHash) return { kind: 'conflict' };
+  const row = existing as {
+    request_hash: string;
+    response_status: number;
+    response_body: unknown;
+    created_at?: string | null;
+  };
 
   if (!row.response_status) {
-    // A primeira tentativa reservou a chave e ainda não terminou (ou morreu no
-    // meio). Devolver 409 mentiria sobre a causa; devolver a resposta guardada
-    // é impossível — ela não existe. 202-like: replay do estado "em curso".
+    // A primeira tentativa reservou a chave e ainda não terminou — ou MORREU no
+    // meio. Os dois casos são indistinguíveis daqui; o que os separa é o tempo.
+    //
+    // A reserva velha é assumida (ACHADO 1 da rodada 3): sem isto, uma reserva
+    // que ficou para trás (a function morreu antes de finalizar, ou o caminho
+    // `escrita_indeterminada` a manteve de propósito) devolveria
+    // `IDEMPOTENCY_IN_PROGRESS` a TODO reenvio daquele visitante até a virada do
+    // dia — o lead nunca entraria, e ninguém seria avisado.
+    const limite = new Date(Date.now() - JANELA_RESERVA_ABANDONADA_MS).toISOString();
+    if (row.created_at && row.created_at < limite) {
+      // ⚠️ O take-over é CONDICIONAL NO BANCO. Um "SELECT e depois UPDATE" seria
+      // exatamente a corrida que a tabela existe para impedir: dois reenvios
+      // simultâneos leriam a mesma reserva velha e os dois criariam um negócio.
+      // Só sai daqui com `proceed` quem o UPDATE de fato pegou (1 linha).
+      const { data: assumidas, error: takeoverError } = await sb
+        .from(TABLE)
+        .update({
+          request_hash: ref.requestHash,
+          response_body: {},
+          created_at: new Date().toISOString(),
+        })
+        .eq('organization_id', ref.organizationId)
+        .eq('endpoint', ref.endpoint)
+        .eq('idempotency_key', ref.idempotencyKey)
+        .eq('response_status', 0)
+        .lt('created_at', limite)
+        .select('id');
+
+      if (takeoverError) return { kind: 'error', message: takeoverError.message };
+      if (((assumidas as unknown[] | null)?.length ?? 0) === 1) {
+        return { kind: 'proceed', reservaExpiradaAssumida: true };
+      }
+      // 0 linhas: outro processo assumiu (ou finalizou) primeiro. Cai adiante —
+      // quem perdeu a corrida espera, não escreve.
+    }
+
+    if (row.request_hash !== ref.requestHash) return { kind: 'conflict' };
+
+    // Devolver 409 mentiria sobre a causa; devolver a resposta guardada é
+    // impossível — ela não existe. 202-like: replay do estado "em curso".
     return {
       kind: 'replay',
       status: 409,
       body: { error: 'Request with this Idempotency-Key is still in progress', code: 'IDEMPOTENCY_IN_PROGRESS' },
     };
   }
+
+  if (row.request_hash !== ref.requestHash) return { kind: 'conflict' };
 
   return { kind: 'replay', status: row.response_status, body: row.response_body };
 }
@@ -149,5 +214,32 @@ export async function finalizeIdempotency(
 
   if (error) {
     console.error('[public-api/idempotency] falha ao gravar a resposta:', error.message);
+  }
+}
+
+/**
+ * Libera a chave reservada, para que um retry POSTERIOR possa tentar de novo.
+ *
+ * Story 2.51. Guardar um **5xx** como resposta idempotente seria pior que não
+ * ter idempotência: a LP deriva a chave de `email + whatsapp + dia` (AC7), então
+ * toda retentativa do mesmo visitante no mesmo dia receberia o mesmo 500 de
+ * volta — o lead ficaria perdido até a virada do dia. Falha definitiva (4xx) e
+ * sucesso continuam guardados; só o 5xx solta a chave.
+ *
+ * Best-effort: se a exclusão falhar, o pior caso é o próximo retry receber
+ * `IDEMPOTENCY_IN_PROGRESS` — nunca um negócio duplicado.
+ */
+export async function releaseIdempotency(ref: IdempotencyRef): Promise<void> {
+  const sb = createStaticAdminClient();
+  const { error } = await sb
+    .from(TABLE)
+    .delete()
+    .eq('organization_id', ref.organizationId)
+    .eq('endpoint', ref.endpoint)
+    .eq('idempotency_key', ref.idempotencyKey)
+    .eq('response_status', 0);
+
+  if (error) {
+    console.error('[public-api/idempotency] falha ao liberar a chave:', error.message);
   }
 }
