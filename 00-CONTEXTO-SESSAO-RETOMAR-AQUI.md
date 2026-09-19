@@ -84,11 +84,20 @@ POST https://api.gptmaker.ai/v2/channel/3E14B10711E1C0FE16B42EC236EAE1D6/start-c
 **Decisoes do Filipe (18/09):** texto da 1a mensagem aprovado · **qualquer usuario logado** pode clicar ·
 teste em producao autorizado no numero dele.
 
-### 4. Pendencias desta sessao
+### 4. ✅ FECHADO EM 19/09 — a 2.51 esta em producao e PROVADA
 
-- [ ] 🔴 **Merge do PR #16** — depois dele, publicar a LP (commit `575ea3e`, ja pronto, manda `Idempotency-Key`)
-- [ ] 🔴 **Prova em producao da 2.51**: criar lead pela LP → conferir no CRM → reenviar com a MESMA chave → provar que **nao** cria o segundo
-- [ ] 🗑️ **5 negocios de teste pro Filipe excluir:** `024818b4`, `adb0cca7`, `c46bd107`, `93da61c5`, `5b820e53`
+- [x] ✅ **PR #16 mergeado** (`d0ec3e9`) — o CI reprovou primeiro por **titulo de commit com 103 caracteres**
+      (limite 100, `header-max-length` do commitlint). Reescrito, conteudo identico (`git diff` vazio).
+      📌 **Conferir o CI do PR antes de pedir merge ao Filipe** — a 2.48 ficou 6 dias parada por isso.
+- [x] ✅ **LP publicada** com o `Idempotency-Key` (commit `575ea3e`)
+- [x] ✅ **PROVA EM PRODUCAO (19/09 23:22 UTC):** mesmo lead enviado **2x** pelo caminho real da LP →
+      1º `200` em 2492 ms · 2º `200` em **819 ms** (replay) → **read-back no CRM: 1 negocio**, nao dois.
+      Caminho de erro: quadro inexistente → `422` **com `request_id`**. AC2 e AC5 provados fora do teste.
+
+### 5. Pendencias desta sessao
+
+- [ ] 🗑️ **7 negocios de teste pro Filipe excluir:** `024818b4`, `adb0cca7`, `c46bd107`, `93da61c5`,
+      `5b820e53`, **`f93fc652`** (prova da 2.51), **`8a2e31c7`** (ZZ PROVA ERRO 2)
 - [ ] 🟠 **2.52 pro @dev** — e exercitar o `start-conversation` com **numero virgem**
 - [ ] 🟡 Divida: `public_api_idempotency` sem TTL nem purga · os 15 min da reserva sao aposta sem telemetria
 
