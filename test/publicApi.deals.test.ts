@@ -40,6 +40,14 @@ vi.mock('@/lib/public-api/resolve', () => ({
   resolveFirstStageId: vi.fn(async () => STAGE_ID),
 }))
 
+/** Leitura de volta do negócio (story 2.51): por padrão "não achou nada". */
+const dealVerifyResult = { data: [] as unknown[], error: null as unknown }
+const dealVerifyChain = {
+  eq: vi.fn(() => dealVerifyChain),
+  then: <TR,>(onOk: (v: unknown) => TR, onErr?: (e: unknown) => TR) =>
+    Promise.resolve(dealVerifyResult).then(onOk, onErr),
+}
+
 // Mock centralizado do Supabase admin — cada teste reconfigura os builders
 const dealQueryBuilder = {
   select: vi.fn().mockReturnThis(),
@@ -69,7 +77,16 @@ const dealQueryBuilder = {
     count: 1,
     error: null,
   })),
+  /**
+   * Story 2.51: depois de um erro AMBÍGUO a rota lê o negócio de volta antes de
+   * retentar. A leitura termina em `.limit(1)` e é aguardada direto — por isso
+   * `limit` devolve um elo à parte, thenable, em vez do builder inteiro (tornar
+   * o builder thenable faria qualquer `await` sobre ele resolver sozinho).
+   */
+  limit: vi.fn(() => dealVerifyChain),
   insert: vi.fn().mockReturnThis(),
+  /** Story 2.51: o insert do deal virou upsert com id gerado pela rota. */
+  upsert: vi.fn().mockReturnThis(),
   single: vi.fn(async () => ({
     data: {
       id: DEAL_ID,
@@ -474,11 +491,14 @@ describe('POST /api/public/v1/deals', () => {
   })
 
   it('retorna 500 quando banco retorna erro no insert', async () => {
-    // Arrange
-    dealQueryBuilder.single.mockResolvedValueOnce({
-      data: null,
-      error: { message: 'unique constraint violation' },
-    })
+    // Arrange — story 2.51: erro SEM código é ambíguo (é como um gateway 5xx
+    // chega do supabase-js), então a rota lê de volta e retenta. As três
+    // tentativas falham e a leitura não acha nada ⇒ 500 honesto.
+    const erroSemCodigo = { data: null, error: { message: 'unique constraint violation' } }
+    dealQueryBuilder.single
+      .mockResolvedValueOnce(erroSemCodigo)
+      .mockResolvedValueOnce(erroSemCodigo)
+      .mockResolvedValueOnce(erroSemCodigo)
 
     // Act
     const res = await POST(makePostRequest({
@@ -503,13 +523,16 @@ describe('POST /api/public/v1/deals', () => {
       contact_id: CONTACT_ID,
     }))
 
-    // Assert — o insert deve ter sido chamado com is_won e is_lost iniciais como false
-    expect(dealQueryBuilder.insert).toHaveBeenCalledWith(
+    // Assert — a escrita deve carregar organization_id, is_won/is_lost iniciais
+    // e o id determinístico que torna o retry a MESMA linha (story 2.51).
+    expect(dealQueryBuilder.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
+        id: expect.stringMatching(/^[0-9a-f-]{36}$/),
         organization_id: ORG_ID,
         is_won: false,
         is_lost: false,
-      })
+      }),
+      { onConflict: 'id' }
     )
   })
 })

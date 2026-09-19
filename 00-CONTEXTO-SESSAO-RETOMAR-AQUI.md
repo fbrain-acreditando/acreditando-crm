@@ -8,6 +8,277 @@
 
 ---
 
+## Sessao 2026-09-18/19 (27) — 🕳️ o lead que sumia em 500, e o botao que nao existe pra quem nunca conversou
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 27) e continue — a 2.51
+> esta no PR #16 esperando merge; a 2.52 esta escrita, com spike feito e as 3 decisoes tomadas, pronta
+> pro @dev."*
+
+### 0. De onde veio a demanda
+
+A LP clonada (`lp2-acreditando.vercel.app`) passou a criar o negocio **direto no CRM** em 18/09. No
+teste de aceite, **2 chamadas seguidas** ao `POST /api/public/v1/deals` voltaram `500 DB_ERROR` e,
+minutos depois, 3 identicas voltaram `201`. **20 leituras seguidas passaram 20/20** ⇒ o banco nao
+estava fora: falha intermitente **so na escrita**.
+
+E o pior: **nao existia registro nenhum do que falhou.** Só `console.error` (sem Sentry, sem tabela,
+sem `request_id`). Dois dias depois, ninguem consegue dizer qual erro derrubou aquele lead.
+
+### 1. Story 2.51 — EM PR (#16), NAO mergeada
+
+`docs/stories/2.51.o-erro-que-ninguem-viu.story.md` · branch `feat/2.51-erro-que-ninguem-viu` · commit `b757a31`.
+
+| O que entrou | Onde |
+|---|---|
+| Log estruturado + `request_id` na resposta | `lib/public-api/errorLog.ts` |
+| Classificador transitorio × ambiguo × definitivo (prefixo SQLSTATE) | `lib/public-api/db-errors.ts` |
+| `comRetry` (2 retentativas, 250/750 ms + jitter) | `lib/public-api/retry.ts` |
+| Leitura de volta antes de retentar erro ambiguo | `route.ts` `verificarInsertDeal` |
+| `id` do deal gerado ANTES do laco + `upsert(onConflict:'id')` | `route.ts` |
+| `Idempotency-Key` + take-over de reserva abandonada (>15 min) | `lib/public-api/idempotency.ts` |
+| `503 DB_UNAVAILABLE` no resolve transitorio (era 422 gravado 24 h) | `route.ts` |
+
+📌 **A licao central:** erro de banco tem TRES classes, nao duas. `08007` significa literalmente *"nao
+sei se commitou"* — retentar as cegas cria o segundo lead. A cura em duas camadas: **ler de volta**
+antes de repetir, e **gerar o id antes da primeira tentativa** (a retentativa reescreve a MESMA linha).
+
+### 2. O QA gate pegou o que a implementacao nao viu
+
+| Rodada | Veredito | Achado |
+|---|---|---|
+| 1 | 🔴 FAIL | retry duplicava o negocio · `releaseIdempotency` em 5xx reabria a duplicidade · **nome do lead vazava no log** (a redacao por lista negra nao casava parenteses aninhados) · transitorio no resolve virava 422 de 24 h |
+| 2 | 🟠 CONCERNS | reserva presa podia bloquear o lead **ate a virada do dia** · verificacao nao prova ausencia sob commit em voo |
+| 3 | 🟢 **PASS** | take-over condicional no banco (prova de corrida) + id idempotente |
+
+📌 **Redacao de PII: lista branca, nunca lista negra.** Tentar apagar o perigoso falhou em 3 formatos
+reais do Postgres. Passou a extrair so `code`, constraint, nomes de coluna e relacao. **Emenda ao AC1
+registrada na story** — privacidade venceu a letra do criterio.
+
+⚠️ `precheck:fast` **977 testes, exit 0**, rodado por mim (Orion) alem do @dev e do @qa.
+
+### 3. Story 2.52 — escrita, spike FEITO, pronta pro @dev
+
+`docs/stories/2.52.o-lead-que-chegou-sem-conversa.story.md`. O lead da LP nasce **sem conversa** no
+WhatsApp; o botao "Mensagem" do `DealDetailModal.tsx:806` so checa se existe **contato**.
+
+**Quase tudo ja existe:** `lib/messaging/providers/whatsapp/gptmaker.provider.ts` implementa
+`POST /v2/channel/{id}/start-conversation`, e as credenciais vivem em `messaging_channels.credentials`.
+
+**Spike executado em 18/09 contra a API real** (canal "Acreditando WhattsApp", `connected`):
+
+```
+POST https://api.gptmaker.ai/v2/channel/3E14B10711E1C0FE16B42EC236EAE1D6/start-conversation
+{ "message": "...", "phone": "5512997534278" }   →  200 · 680 ms · {"success":true}
+```
+
+- ✅ **A mensagem CHEGOU** — confirmado pelo Filipe. Entrega real, nao so `success:true`.
+- 🔑 **O `chatId` e derivavel:** `{gptmakerChannelId}-{telefone}` (visto em todas as conversas do banco).
+  A API nao devolve, mas da pra montar e conferir.
+- ⚠️ **O que o spike NAO provou:** o numero do Filipe **ja tinha conversa** desde 03/08. O caso "numero
+  virgem" — que e o da story — segue sem prova, inclusive se a conversa nasce sozinha no CRM.
+- ❌ A story dizia haver divergencia **PUT × POST**: **nao havia** (leitura errada da linha do caminho
+  em vez da do metodo). O @po reprovou por isso — NO-GO 5/10 → corrigido.
+
+**Decisoes do Filipe (18/09):** texto da 1a mensagem aprovado · **qualquer usuario logado** pode clicar ·
+teste em producao autorizado no numero dele.
+
+### 4. Pendencias desta sessao
+
+- [ ] 🔴 **Merge do PR #16** — depois dele, publicar a LP (commit `575ea3e`, ja pronto, manda `Idempotency-Key`)
+- [ ] 🔴 **Prova em producao da 2.51**: criar lead pela LP → conferir no CRM → reenviar com a MESMA chave → provar que **nao** cria o segundo
+- [ ] 🗑️ **5 negocios de teste pro Filipe excluir:** `024818b4`, `adb0cca7`, `c46bd107`, `93da61c5`, `5b820e53`
+- [ ] 🟠 **2.52 pro @dev** — e exercitar o `start-conversation` com **numero virgem**
+- [ ] 🟡 Divida: `public_api_idempotency` sem TTL nem purga · os 15 min da reserva sao aposta sem telemetria
+
+---
+
+## Sessao 2026-09-15 (26) — ⭐ o arrasto passa a dar a NOTA, e a nota 5 inventada ganhou trava
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 26) e continue — a nota
+> ja sai do fluxo do arrasto; falta a PROVA REAL: arrastar um card para 'Qualificado' e ler a execucao
+> do `UtWRDhKNSfEPMjdV` (payload com `lead_score` + resposta `lead_score.applied: true`)."*
+
+### 1. Elo 3 PROVADO — e a nota nao vinha por desenho, nao por defeito
+
+O Filipe confirmou que o arrasto funciona. Execucao **`94369`** (15/09 15:07 BRT, card **Evenir**,
+`Contato Realizado → Qualificado`): webhook chegou com bloco `conversation`, 37 mensagens lidas,
+`updated: ["ondeReside","paraQuemE"]`. **Mas `lead_score: null`.**
+
+Duas causas somadas, as duas decisoes nossas:
+1. Sessao 25: o fluxo do arrasto mandava **so campos** — "quem pontua no arrasto e a fila interna".
+2. Sessao 24: a fila interna esta **desligada** (`pontuacao_automatica_habilitada = false`).
+
+⇒ **Cada lado achava que o outro dava a nota.** Ninguem dava.
+
+### 2. Decisao do Filipe: o n8n vira DONO UNICO da nota (opcao 1 de 3)
+
+Descartadas: religar a fila interna (exige credito + chave Google nova, em projeto isolado) e deixar sem nota.
+
+- No `UtWRDhKNSfEPMjdV` entrou o no **"Dá a nota"** (copia do prompt do `05- Transferência`), entre
+  `Extrai os campos` e `Monta payload do CRM`. Workflow renomeado para
+  *"CRM — Arrastar para Qualificado (preenche campos e nota)"* · 8 → 9 nos · ativo.
+- Se a nota falhar (`onError: continueRegularOutput`), os **campos continuam indo**.
+- ⚠️ **DIVIDA NOVA:** antes de religar `pontuacao_automatica_habilitada`, **tirar a nota do n8n** — senao
+  voltam os dois donos do `lead_score`. Aviso escrito no proprio codigo do no.
+- A rota (`lib/public-api/aiExtraction.ts`) grava a nota **independente da confianca** e so recusa nota
+  `manual` (`reason: nota_manual`). Por isso a trava tinha de ficar no n8n.
+
+### 3. 🐛 O "vies de SP" era INVENCAO, nao vies
+
+Medido na `90612` (Ana Maria, DDD 41): **ninguem falou de cidade nenhuma** — nem cliente, nem assistente.
+O modelo escreveu `"mora em SP capital"` em `criterios_atingidos` porque e o **pre-requisito da nota 5**,
+com `confianca: 1` — e ao mesmo tempo listou `"quem contatou"` em `info_ausente` e `"o proprio paciente
+contatou"` em `criterios`. **Criterio-porta atrai alucinacao**: o modelo preenche a condicao que falta
+para chegar na nota alta.
+
+**Correcao em duas camadas (nos DOIS fluxos — `05` e arrasto):**
+- **Prompt:** regra de evidencia — so vale fala de linha `Cliente:`; endereco da clinica, DDD e nome nao
+  contam; sem localizacao dita ⇒ nota 5 impossivel; nova categoria **Grande SP** (Osasco, Guarulhos…
+  nao e capital); saida ganha `localizacao` + `evidencia_localizacao` (trecho literal).
+- **Trava em codigo** (`travaDaNota`, fonte em `projetos/n8n-backups/trava-da-nota.js`): nota 5 so fica
+  se `localizacao = SP capital` **e** ≥60% das palavras da evidencia estao nas falas do cliente. Senao:
+  **nota 4** (`Cliente Quente`), `confianca ≤ 0,5`, criterio de SP removido, red flag
+  *"Nota 5 rebaixada para 4: o cliente não disse que mora em SP capital"*.
+- **Decisao tomada por mim, a confirmar com o Filipe:** rebaixar para **4** (nao 3).
+- ⚠️ No `05`, a trava esta em `Separa os dados e resumo em variáveis2` ⇒ vale para **Sheets, Kommo,
+  Telegram e CRM**, nao so o CRM.
+
+Testes locais: 5/5 da trava (`testa-trava.cjs`) + 3/3 do payload (`testa-payload.mjs`) — Ana cai para 4,
+assistente citada como evidencia cai para 4, Evenir ("Moro proxo do Grajaú") mantem 5, nota falha ⇒ so campos.
+**Isto NAO prova producao.**
+
+### 4. Aplicacao e read-back
+
+Backup ANTES (e copia DEPOIS) em `projetos/n8n-backups/`:
+`05-Transferencia_3WO6BcG8M9jVGlnY_2026-09-15_{ANTES,DEPOIS}-nota-e-trava.json` ·
+`CRM-Arrastar-Qualificado_UtWRDhKNSfEPMjdV_2026-09-15_{ANTES,DEPOIS}-nota-e-trava.json`.
+Script: `aplicar-nota-e-trava.mjs` (simulacao por padrao, `--aplicar` grava).
+
+```
+05 (3WO6BcG8M9jVGlnY) ....... active=true · 62 nos · trava=true · evidencia=true · versionId = activeVersionId
+Arrastar (UtWRDhKNSfEPMjdV) . active=true ·  9 nos · trava=true · evidencia=true · versionId = activeVersionId
+```
+
+**Reverter:** PUT do JSON `ANTES` (name, nodes, connections, settings) em cada workflow.
+
+### 5. ⛔ O que falta
+
+1. 👀 **PROVA REAL:** arrastar um card para `Qualificado` (a Evenir serve: tirar e voltar) e ler a execucao —
+   `Dá a nota` com `evidencia_localizacao`, payload com `lead_score`, resposta `applied: true`, nota no card.
+2. 👀 Na proxima transferencia real do `05`, conferir que `Preenche Sheets` recebeu a nota sem quebrar.
+3. ❓ Confirmar com o Filipe: rebaixamento para **4** esta certo?
+4. 🧮 As notas 5 **ja gravadas** antes da trava nao foram recalculadas (Ana Maria incluida).
+5. Seguem abertas da sessao 25: limpar `.credenciais/crm-webhook-arrastar.token` + credencial orfa
+   `QLqkiluzxp7r8ehr` · **devolutiva da Fernanda** (agora com nota + campos no arrasto).
+
+### 6. Metodo que vale repetir
+
+**"Vies" e hipotese; a execucao diz o mecanismo.** Ler a conversa da `90612` mostrou que nao havia
+local nenhum — o conserto de "vies" (ensinar o que e SP) nao teria resolvido a invencao. **Quando um
+criterio e porta de uma nota, exigir evidencia literal e conferir em codigo** — prompt sozinho nao segura.
+**Dois "donos" que se delegam mutuamente** produzem ausencia silenciosa: ao desligar um lado, reler quem
+dependia dele.
+
+---
+
+## Sessao 2026-09-08 (25) — ⛓️ os 3 elos ligados: chave criada, n8n empurra (PROVADO), CRM avisa (aguardando arrasto)
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 25) e continue — a
+> corrente CRM ↔ n8n esta ligada; falta arrastar um card para 'Qualificado' e ler a execucao do
+> workflow n8n `UtWRDhKNSfEPMjdV`."*
+
+### 1. A chave da API publica existe (elo 1) ✅
+
+`api_keys` estava VAZIA desde sempre. Criada pelo Filipe em `Configuracoes → Integracoes → API`
+(RPC `create_api_key` exige `role = 'admin'`, token aparece UMA vez, banco guarda so o SHA-256).
+Guardada em `.credenciais/crm-api-key.token` na raiz do workspace (fora do git).
+**AC20 fechado** por POST real: `lead_score.applied: true` + 3 campos em `updated`.
+
+⚠️ **Um `200` nao diz em qual banco voce entrou.** O `/me` devolveu `organization_name: "Filipe"` —
+so ler `/contacts` e `/deals` com dado de producao (nome de lead, `loss_reason` escrito por gente)
+separou "a chave funciona" de "a chave funciona no lugar certo".
+
+### 2. As 5 chaves reais dos campos personalizados
+
+Chutei 6 nomes e todos voltaram `chave_desconhecida`. **Os campos existiam** — o mapa canonico esta
+em `features/deals/criteriosNormalizados.ts`:
+
+| Chave | Criterio da nota |
+|---|---|
+| `ondeReside` | `cidadeDeSaoPaulo` |
+| `haQuantoTempo` | `lesaoRecente` |
+| `jaFezReabilitacao` | `semReabilitacaoPrevia` |
+| `paraQuemE` | `paraProprioLead` |
+| `tipoDeLesao` | — |
+
+🔑 **Sonda sem escrita:** `null` na rota significa "o modelo nao achou" e passa em silencio; chave
+inexistente vira `skipped`. Mandando 40 candidatas com `null` da para descobrir o esquema com
+`updated: []`. Para saber se um campo **ja esta preenchido** sem gravar: mandar
+`{value, confidence: 0.01}` — o teste de `campo_ja_preenchido` roda ANTES do de confianca
+(`MIN_CONFIDENCE_TO_STORE = 0.6`), entao campo cheio devolve `campo_ja_preenchido` e campo vazio
+devolve `confianca_baixa`, sem escrever nada.
+
+⚠️ **O campo guarda a FRASE, nao o rotulo.** `ondeReside` recebe `"Osasco"`, nunca `grande_sp` —
+a migration `20260813001000_dicionario_de_normalizacao.sql` existe justamente para traduzir
+*"Sapopemba"* em *"capital"*, **por valor e nao por deal**, para caber numa tela e ser auditavel.
+
+### 3. Elo 2 — o n8n empurra a extracao (PROVADO)
+
+6 nos em **ramo paralelo** no `05- Transferencia` (`3WO6BcG8M9jVGlnY`, 56 → 62 nos). A rota exige o
+UUID do negocio e o fluxo so conhece o telefone; a ponte esta na propria API:
+`GET /contacts?phone=` → `GET /deals?contact_id=` → `POST /deals/{id}/ai-extraction`.
+Provado sozinho na execucao **`90612`** (08/09 18:58): `updated: ["paraQuemE"]` + `applied: true`.
+
+### 4. Elo 3 — o CRM avisa o n8n (ligado, NAO provado)
+
+Workflow n8n `CRM — Arrastar para Qualificado` (`UtWRDhKNSfEPMjdV`, 8 nos, ativo). Endpoint conectado
+em `Configuracoes → Webhooks → **Follow-up (Webhook de saida)**`.
+
+⚠️ **A tela tem UM campo so: a URL.** Nao existe campo de "Eventos" (o `deal.stage_changed` e fixo no
+codigo) e **o segredo e gerado pelo CRM** (`generateSecret()`, 24 bytes) — nao se cola um segredo de
+fora. Nada a apontar no `trg_notify_deal_stage_changed`: ele le `integration_outbound_endpoints`
+sozinho e ja filtra por `pontua_lead`.
+
+**Decisao:** este caminho manda **so os campos, nao a nota** — quem pontua no arrasto e a fila interna
+do CRM; escrever `lead_score` dos dois lados criaria disputa pelo mesmo campo.
+
+### 5. O funil real (media por comportamento, nao por `updated_at`)
+
+Primeira mensagem → **"Contato Realizado"**; transferencia → **"Qualificado"**. Provado cruzando 49
+telefones transferidos no n8n com a etapa de cada card: transferidos 75% em Qualificado; nao
+transferidos 6%. A coluna **"Lead novo" tem ZERO cards** — morta.
+
+🩸 **`deals` NAO tem trigger de `updated_at`** e o `moveDealOnTransfer` faz `.update({ stage_id })` sem
+setar o campo. **Mover o card na transferencia nao deixa rastro nenhum.** Usar `updated_at` como prova
+me fez inventar um funil quebrado que nao existe.
+
+### 6. ⛔ O que falta
+
+1. 👀 **Arrastar um card para "Qualificado"** e ler o `updated: [...]` na execucao do `UtWRDhKNSfEPMjdV`.
+2. ❓ **Confirmar se "Qualificado" tem `pontua_lead = true`** — se nao tiver, o elo 3 fica **inerte sem
+   dar erro**. Nao consegui ler (token do Supabase expirado, 401).
+3. 🐛 **Vies de SP no prompt de pontuacao** — lead do DDD 41 (Parana) recebeu "mora em SP capital",
+   nota 5/5, confianca 1,0 (execucao `90612`).
+4. 🧹 Apagar `.credenciais/crm-webhook-arrastar.token` e a credencial orfa `QLqkiluzxp7r8ehr` no n8n.
+5. 🚨 A correcao devida a **Fernanda** (arrastar preenche a NOTA, nao os campos) segue pendente desde
+   21/08 — e agora tem conserto real para oferecer junto.
+
+### 7. Metodo que vale repetir
+
+**Campo de auditoria so vale como prova depois de achar o trigger.** **Configuracao inacessivel pode
+ser inferida pelo efeito** (75% × 6% resolveu sem ler `lead_routing_rules`). **Antes de acusar o
+sistema, desconfiar do instrumento** — reportei um bug de encoding que era do meu terminal
+(`curl | python` no Git Bash lendo UTF-8 como cp1252); 1.118 contatos varridos por codepoint, zero
+corrompidos.
+
+---
+
 ## Sessao 2026-09-03 (24) — ✅ a migration da 2.50 FOI APLICADA, e o `search_path` sobreviveu
 
 > ⚠️ **A secao 23 abaixo esta desatualizada no titulo** — ela diz "migration ESCRITA, nao aplicada".

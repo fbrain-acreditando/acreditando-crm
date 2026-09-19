@@ -558,11 +558,52 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
         post: {
           tags: ['Deals'],
           summary: 'Criar deal',
+          description:
+            'Story 2.51 — toda resposta de erro carrega `request_id` (o mesmo que vai no log do servidor). '
+            + 'Erro passageiro do banco (SQLSTATE classes 08/57, 53300, ou falha de rede) é retentado até 2 vezes '
+            + 'antes de falhar; erro definitivo não é retentado. Quando o erro é **ambíguo** (a conexão caiu e não '
+            + 'dá para saber se o INSERT commitou), a API lê o negócio de volta antes de retentar: se ele existe, '
+            + 'devolve 201 com `escrita_confirmada_por_leitura: true` em vez de criar um segundo. '
+            + 'Use `Idempotency-Key` para que um reenvio não crie um segundo negócio.',
           security: [{ ApiKeyAuth: [] }],
+          parameters: [
+            {
+              name: 'Idempotency-Key',
+              in: 'header',
+              required: false,
+              schema: { type: 'string' },
+              description:
+                'Mesma chave + mesmo corpo devolve a resposta anterior (com `idempotent_replay: true`) sem criar '
+                + 'outro negócio; corpo diferente devolve 409. Falha 5xx libera a chave para permitir nova tentativa — '
+                + '**exceto** quando não foi possível provar que nada foi escrito: aí a chave fica reservada e o '
+                + 'reenvio recebe `IDEMPOTENCY_IN_PROGRESS`, porque duplicar o negócio é pior que atrasá-lo. '
+                + 'Uma reserva que fique 15 minutos sem resposta é considerada abandonada e o reenvio seguinte a '
+                + 'assume — a chave nunca prende o lead até a virada do dia.',
+            },
+          ],
           requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } },
           responses: {
             201: { description: 'Created', content: { 'application/json': { schema: { type: 'object' } } } },
             401: { $ref: '#/components/responses/Unauthorized' },
+            403: { description: '`FORBIDDEN` — permissão negada pelo banco (SQLSTATE 42501)' },
+            409: {
+              description:
+                '`CONFLICT` (unicidade, SQLSTATE 23505) · `IDEMPOTENCY_CONFLICT` (chave reusada com outro corpo) · '
+                + '`IDEMPOTENCY_IN_PROGRESS` (a mesma chave ainda está sendo processada, ou uma tentativa anterior '
+                + 'não pôde provar que nada foi escrito). Reenviar resolve: passados 15 minutos a reserva é tratada '
+                + 'como abandonada e a requisição seguinte a assume.',
+            },
+            422: {
+              description:
+                '`VALIDATION_ERROR` · `INVALID_BOARD` (board_key não resolve) · `INVALID_STAGE` (board sem estágio) · '
+                + '`INVALID_REFERENCE` (FK inexistente, SQLSTATE 23503) · `CHECK_VIOLATION` (SQLSTATE 23514)',
+            },
+            500: { description: '`DB_ERROR` — falha de banco após as retentativas. O `request_id` do corpo liga a queixa ao log.' },
+            503: {
+              description:
+                '`DB_UNAVAILABLE` — a consulta de board/stage falhou por erro passageiro mesmo depois das '
+                + 'retentativas. Nada foi escrito; pode reenviar.',
+            },
           },
         },
       },
