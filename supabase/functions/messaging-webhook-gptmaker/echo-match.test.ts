@@ -80,6 +80,12 @@ function criarClienteFake(linhas: LinhaFake[]) {
               );
               return builder;
             },
+            in(col: string, vals: string[]) {
+              filtros.push((l) =>
+                vals.includes(String((l as unknown as Record<string, unknown>)[col]))
+              );
+              return builder;
+            },
             gte(col: string, val: string) {
               filtros.push(
                 (l) =>
@@ -135,18 +141,29 @@ function criarClienteFake(linhas: LinhaFake[]) {
             eq(_col: string, id: string) {
               return {
                 or(expr: string) {
-                  const condicao = predicadoOr(expr);
+                  const condicaoOr = predicadoOr(expr);
                   return {
-                    async select() {
-                      const linha = linhas.find((l) => l.id === id);
-                      if (!linha || !condicao(linha)) {
-                        tentativas.push({ id, aplicou: false });
-                        return { data: [], error: null };
-                      }
-                      Object.assign(linha, values);
-                      escritas.push({ id, values });
-                      tentativas.push({ id, aplicou: true });
-                      return { data: [{ id }], error: null };
+                    in(col: string, vals: string[]) {
+                      // A condição da escrita é a MESMA do SELECT, reavaliada
+                      // aqui: `or` de elegibilidade + status permitido.
+                      const condicao: Predicado = (l) =>
+                        condicaoOr(l) &&
+                        vals.includes(
+                          String((l as unknown as Record<string, unknown>)[col])
+                        );
+                      return {
+                        async select() {
+                          const linha = linhas.find((l) => l.id === id);
+                          if (!linha || !condicao(linha)) {
+                            tentativas.push({ id, aplicou: false });
+                            return { data: [], error: null };
+                          }
+                          Object.assign(linha, values);
+                          escritas.push({ id, values });
+                          tentativas.push({ id, aplicou: true });
+                          return { data: [{ id }], error: null };
+                        },
+                      };
                     },
                   };
                 },
@@ -423,6 +440,7 @@ describe('casarEcoComMensagemEnviada — escrita condicional', () => {
           select() {
             const b = {
               eq: () => b,
+              in: () => b,
               gte: () => b,
               lte: () => b,
               or: () => b,
@@ -440,5 +458,124 @@ describe('casarEcoComMensagemEnviada — escrita condicional', () => {
 
     const resultado = await casarEcoComMensagemEnviada(client, entradaDoEco());
     expect(resultado).toEqual({ casou: false, motivo: 'erro' });
+  });
+});
+
+// =============================================================================
+// Gate do @qa (20/09) — o furo achado e os limites aceitos
+// =============================================================================
+
+describe('casarEcoComMensagemEnviada — bordas do gate do @qa', () => {
+  it('D-1: linha de envio que FALHOU não é candidata, mesmo com external_id NULL', async () => {
+    // A rota grava `status='failed'` SEM external_id (`route.ts:190`). Sem este
+    // filtro, um áudio legítimo do painel carimbaria a linha que nunca saiu: a
+    // mensagem real sumiria e uma mensagem não enviada constaria como `sent`.
+    const { client, escritas, linhas } = criarClienteFake([
+      linhaDoCrm({
+        content_type: 'audio',
+        content: { type: 'audio', mediaUrl: 'https://crm.acreditando.app/storage/a.ogg' },
+        external_id: null,
+        status: 'failed',
+        sent_at: null,
+      }),
+    ]);
+
+    const resultado = await casarEcoComMensagemEnviada(
+      client,
+      entradaDoEco({
+        contentType: 'audio',
+        content: { type: 'audio', mediaUrl: 'https://gpt-files.com/file/3E14B107/xyz.ogg' },
+      })
+    );
+
+    expect(resultado).toEqual({ casou: false, motivo: 'sem-candidata' });
+    expect(escritas).toHaveLength(0);
+    // A linha falha continua falha — não foi promovida a `sent`.
+    expect(linhas[0].status).toBe('failed');
+    expect(linhas[0].external_id).toBeNull();
+  });
+
+  it('D-1: status que viram `failed` entre o SELECT e o UPDATE são barrados pela escrita', async () => {
+    const fake = criarClienteFake([linhaDoCrm()]);
+
+    const fromOriginal = fake.client.from;
+    let jaLeu = false;
+    (fake.client as { from: EchoMatchClient['from'] }).from = (tabela: string) => {
+      const real = fromOriginal.call(fake.client, tabela);
+      return {
+        ...real,
+        select: (cols: string) => {
+          const q = real.select(cols);
+          const limitOriginal = q.limit.bind(q);
+          q.limit = async (n: number) => {
+            const r = await limitOriginal(n);
+            if (!jaLeu) {
+              jaLeu = true;
+              // O `after()` do envio concluiu com falha depois da nossa leitura.
+              fake.linhas[0].status = 'failed';
+            }
+            return r;
+          };
+          return q;
+        },
+      };
+    };
+
+    const resultado = await casarEcoComMensagemEnviada(fake.client, entradaDoEco());
+
+    expect(fake.tentativas).toEqual([{ id: 'crm-1', aplicou: false }]);
+    expect(resultado).toEqual({ casou: false, motivo: 'corrida' });
+    expect(fake.linhas[0].status).toBe('failed');
+  });
+
+  it('D-3: carimbo inválido não lança — devolve não-casou e o webhook insere', async () => {
+    const { client, escritas } = criarClienteFake([linhaDoCrm()]);
+
+    const resultado = await casarEcoComMensagemEnviada(
+      client,
+      entradaDoEco({ ecoTimestamp: new Date('data-que-nao-existe') })
+    );
+
+    expect(resultado).toEqual({ casou: false, motivo: 'erro' });
+    expect(escritas).toHaveLength(0);
+  });
+
+  it('D-4: LIMITE ACEITO — áudio legítimo do painel dentro da janela casa com a linha do CRM', async () => {
+    // ⚠️ Este teste documenta um limite CONHECIDO E ACEITO, não um acerto.
+    //
+    // Em mídia não há conteúdo comparável: a URL do eco difere da URL que o CRM
+    // gravou (medido par a par em 6 pares de áudio de 16–17/09). Então um áudio
+    // REAL do painel, na mesma conversa, dentro de 30 s de um áudio enviado pelo
+    // CRM, é indistinguível do eco — e é engolido.
+    //
+    // É o preço de consertar os 18% de mídia: a alternativa (casar só por
+    // conteúdo) deixaria o defeito vivo em 100% da mídia, com cara de resolvido.
+    // Dois áudios na mesma conversa em 30 s, um do CRM e outro do painel, não
+    // apareceram nenhuma vez nos 346 pares medidos. Se aparecer em produção, o
+    // sintoma é "o áudio que mandei pelo painel não apareceu no CRM" — e aí o
+    // caminho é a opção C da D1 (carimbar o id real na hora do envio), não
+    // apertar a janela.
+    const { client, escritas, linhas } = criarClienteFake([
+      linhaDoCrm({
+        content_type: 'audio',
+        content: { type: 'audio', mediaUrl: 'https://crm.acreditando.app/storage/a.ogg' },
+      }),
+    ]);
+
+    const resultado = await casarEcoComMensagemEnviada(
+      client,
+      entradaDoEco({
+        contentType: 'audio',
+        content: { type: 'audio', mediaUrl: 'https://gpt-files.com/file/3E14B107/outro.ogg' },
+      })
+    );
+
+    // Comportamento ATUAL — propositalmente não alterado por esta correção.
+    expect(resultado).toEqual({ casou: true, messageId: 'crm-1' });
+    expect(escritas).toHaveLength(1);
+    expect(linhas[0].content).toEqual({
+      type: 'audio',
+      mediaUrl: 'https://crm.acreditando.app/storage/a.ogg',
+    });
   });
 });

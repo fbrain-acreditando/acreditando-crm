@@ -53,10 +53,13 @@ export interface EchoMatchClient {
       eq(col: string, val: string): {
         /** Filtro `or` do PostgREST — aqui: "ainda não carimbada com id real". */
         or(expr: string): {
-          select(cols: string): Promise<{
-            data: Array<{ id: string }> | null;
-            error: DbError | null;
-          }>;
+          /** Filtro `in` — aqui: "o envio não fracassou". Vai DENTRO da escrita. */
+          in(col: string, vals: string[]): {
+            select(cols: string): Promise<{
+              data: Array<{ id: string }> | null;
+              error: DbError | null;
+            }>;
+          };
         };
       };
     };
@@ -71,6 +74,7 @@ export interface DbError {
 /** Consulta fluente das candidatas. Só `limit()` resolve — o resto encadeia. */
 export interface CandidateQuery {
   eq(col: string, val: unknown): CandidateQuery;
+  in(col: string, vals: string[]): CandidateQuery;
   gte(col: string, val: string): CandidateQuery;
   lte(col: string, val: string): CandidateQuery;
   or(expr: string): CandidateQuery;
@@ -133,6 +137,23 @@ const MAX_CANDIDATAS = 10;
  */
 const CANDIDATA_ELEGIVEL = "external_id.is.null,external_id.like.gptmaker:*";
 
+/**
+ * Status que uma candidata pode ter. **`failed` está fora de propósito.**
+ *
+ * Quando o envio fracassa, a rota grava `status='failed'` **sem** `external_id`
+ * (`route.ts:190`) — ou seja, a linha continuaria casando com
+ * `external_id IS NULL` e ficaria elegível para sempre. O estrago possível é o
+ * pior desfecho desta story, e é em mídia: o envio do CRM falha em t=0; em até
+ * 30 s a IA (ou alguém no painel) manda um **áudio** na mesma conversa; como o
+ * ramo de mídia não olha o conteúdo, esse eco legítimo carimbaria a linha que
+ * fracassou — a mensagem real **não seria inserida** e uma mensagem que nunca
+ * saiu passaria a constar como `sent`. Some histórico e mente o status.
+ *
+ * Achado pelo @qa no gate de 20/09 (D-1). Como toda elegibilidade desta função,
+ * o filtro é repetido **dentro do UPDATE**, não conferido em memória.
+ */
+const STATUS_ELEGIVEIS = ["pending", "queued", "sent"];
+
 /** Texto normalizado do conteúdo — a "chave" do ramo de texto. */
 function textoDe(content: Record<string, unknown> | null): string | null {
   if (!content) return null;
@@ -156,6 +177,16 @@ export async function casarEcoComMensagemEnviada(
   log: (msg: string) => void = () => {}
 ): Promise<EchoMatchOutcome> {
   const eco = input.ecoTimestamp.getTime();
+
+  // Carimbo inválido (o `date` do payload pode vir torto): `new Date(NaN)`
+  // lançaria `RangeError` no `toISOString()` abaixo e derrubaria o handler
+  // ANTES do INSERT — a mensagem se perderia. Sem janela confiável, não se casa:
+  // o chamador insere.
+  if (!Number.isFinite(eco)) {
+    log("[GPTMaker] Carimbo do eco inválido — casamento ignorado, mensagem será inserida");
+    return { casou: false, motivo: "erro" };
+  }
+
   // Janela em torno do carimbo do eco, nos dois sentidos: o relógio do provedor
   // (campo `date`) e o do banco (`created_at`) não são o mesmo relógio.
   const inicio = new Date(eco - ECHO_MATCH_WINDOW_MS).toISOString();
@@ -171,6 +202,8 @@ export async function casarEcoComMensagemEnviada(
     .gte("created_at", inicio)
     .lte("created_at", fim)
     .or(CANDIDATA_ELEGIVEL)
+    // Envio que fracassou não é candidata — ver STATUS_ELEGIVEIS.
+    .in("status", STATUS_ELEGIVEIS)
     // FIFO: havendo mais de uma candidata, carimbar a mais antiga. É o que faz
     // dois envios do mesmo texto seguidos casarem cada um com a SUA linha.
     .order("created_at", { ascending: true })
@@ -198,6 +231,13 @@ export async function casarEcoComMensagemEnviada(
   // outro eco carimbou esta linha no meio do caminho, zero linhas voltam e
   // passamos para a próxima — nunca dois ecos na mesma linha.
   for (const candidata of elegiveis) {
+    // ⚠️ Limite conhecido e aceito (D-2 do gate do @qa, 20/09): este merge usa o
+    // `metadata` lido no SELECT. Se outra escrita mexer no `metadata` desta linha
+    // entre o SELECT e o UPDATE, aquela alteração se perde (lost update). Fica
+    // registrado, não corrigido: quem mais escreve neste campo é o `after()` do
+    // próprio envio, que já terminou quando o eco chega (120 de 120 pares), e a
+    // alternativa — merge no banco com `jsonb ||` — exigiria RPC própria. O que
+    // NÃO se perde é o carimbo: `external_id` e `status` são valores literais.
     const metadata = {
       ...((candidata.metadata as Record<string, unknown> | null) ?? {}),
       gptmaker_chat_id: input.chatId,
@@ -226,6 +266,9 @@ export async function casarEcoComMensagemEnviada(
       })
       .eq("id", candidata.id)
       .or(CANDIDATA_ELEGIVEL)
+      // A elegibilidade inteira é reavaliada pelo banco no momento da escrita —
+      // inclusive o status, que pode ter virado `failed` depois do SELECT.
+      .in("status", STATUS_ELEGIVEIS)
       .select("id");
 
     if (updErr) {
