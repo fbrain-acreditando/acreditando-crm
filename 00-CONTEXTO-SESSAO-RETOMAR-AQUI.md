@@ -81,17 +81,26 @@ propria para o `evolution` (**2.54 aberta**) · D3 = **nao apagar agora** — es
 
 ### 6. ⏭️ Pendencias
 
-- [ ] 🚀 **DEPLOY da edge function** — `supabase functions deploy messaging-webhook-gptmaker`. ⚠️ **O CI
-      NAO publica edge function**; o merge do PR **nao** coloca a correcao no ar. Token
-      `supabase-crm-mgmt.token` **vencido** (era de 1 dia) — precisa de credencial nova.
-- [ ] 🧪 **AC4.1** — enviar pelo CRM (**texto e audio**) e provar 1 linha, `external_id` sem prefixo
-      `gptmaker:`, `sender_type='user'`, 1 balao. Numero controlado: `5512997534278`.
-- [ ] 🧪 **AC4.2 — o teste que REPROVA a correcao se falhar:** responder pelo **painel do GPT Maker**
-      e conferir que a mensagem **aparece** no CRM. Se sumir, **reverter**.
+- [x] ✅ **DEPLOY FEITO** — edge function `messaging-webhook-gptmaker` **v13 → v14**, ACTIVE,
+      `verify_jwt: false` preservado. ⚠️ **O CI NAO publica edge function** — o merge do PR **nao**
+      coloca nada no ar; o deploy e manual, sempre. 🪤 **Producao e o projeto `nossocrmv2`**
+      (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm` — conferir pelo `NEXT_PUBLIC_SUPABASE_URL`.
+- [x] ✅ **AC4.1 PROVADO — texto e audio.** Texto 17:59:03 ⇒ **1 linha**, id real
+      `3F974AE3...`, carimbada em **1 s**. Audio 18:04:45 ⇒ **1 linha**, id real `3F974BAF...`,
+      carimbada em **3 s** — prova o **ramo por `content_type`**, que e onde o criterio so de
+      conteudo quebrava. `sender_type='user'` preservado nos dois. 1 balao na tela.
+- [x] ✅ **AC4.2 PROVADO** — `start-conversation` disparado direto na API do GPT Maker (sem passar
+      pelo CRM): evento processado sem erro e **linha INSERIDA**; as respostas da IA aparecem
+      normalmente. **A correcao nao engole mensagem legitima.** Sem reversao.
 - [ ] 📤 **Push + PR** — exclusivo do @devops. Conferir o CI **antes** de pedir merge (a 2.48 ficou 6
       dias parada, e o PR #16 reprovou por titulo de 103 caracteres).
-- [ ] 🗑️ **D3 — os 346 pares ja gravados:** decidir depois da correcao provada. Export pronto
-      (ids e horarios, sem conteudo nem telefone).
+- [x] ✅ **AC5 feito** — query em producao bateu exata: **346 pares · 294 conversas · 283 texto +
+      63 audio**. Exportado (so ids e horarios). **Nada apagado.**
+- [ ] 🗑️ **D3 — decidir agora o que fazer com os 346 pares ja gravados.** A correcao esta provada;
+      a limpeza era pra ser decidida depois disso. Export pronto.
+- [ ] 🪤 **Chat antigo do GPT Maker morre:** envio numa conversa parada desde 03/08 deu
+      `400 {"error":"No value present"}`. **Nao e regressao** (falha no POST, antes do webhook);
+      destrava recriando a conversa via `start-conversation`.
 - [ ] 🟢 Limite conhecido: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje (o canal nao
       expoe recibo de entrega) e o erro seria conservador. Revisar se o canal ganhar recibo.
 - [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
