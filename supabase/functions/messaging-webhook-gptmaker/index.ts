@@ -57,6 +57,15 @@ import {
   type ConversationPreviewClient,
 } from "./conversation-preview.ts";
 
+// O eco da mensagem que o CRM acabou de enviar volta por este webhook com o id
+// REAL do provedor e virava uma SEGUNDA linha (100% dos 346 envios medidos).
+// O critério de casamento vive em módulo próprio — é delicado e testável sem
+// banco. Story 2.53.
+import {
+  casarEcoComMensagemEnviada,
+  type EchoMatchClient,
+} from "./echo-match.ts";
+
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -272,6 +281,42 @@ async function handleMessage(
 
   const externalMessageId =
     event.externalMessageId ?? `gptmaker:${chatId}:${event.timestamp.getTime()}`;
+
+  // ---------------------------------------------------------------------------
+  // Eco de um envio do próprio CRM? (story 2.53)
+  // ---------------------------------------------------------------------------
+  // O GPT Maker não devolve id no envio: o CRM grava a linha com um id sintético
+  // (`gptmaker:...`) e o mesmo envio volta aqui com o id REAL — como `outbound`,
+  // indistinguível de uma resposta da IA ou do painel. Quando o casamento acha a
+  // linha que o CRM já gravou, o eco **carimba** o id real nela em vez de criar
+  // outra.
+  //
+  // ⚠️ O caminho comum continua sendo o INSERT logo abaixo: ~92% das outbound
+  // NÃO vêm do CRM. Na dúvida o casamento não casa e a mensagem é inserida —
+  // duplicar um balão incomoda, engolir mensagem apaga histórico.
+  if (event.direction === "outbound" && event.externalMessageId) {
+    const casamento = await casarEcoComMensagemEnviada(
+      supabase as unknown as EchoMatchClient,
+      {
+        conversationId,
+        contentType: event.contentType,
+        content: event.content,
+        ecoTimestamp: event.timestamp,
+        externalMessageId: event.externalMessageId,
+        chatId,
+      },
+      (msg) => console.error(msg, { conversationId })
+    );
+
+    if (casamento.casou) {
+      // A prévia e os contadores da conversa já foram atualizados pelo trigger
+      // quando o CRM inseriu a linha. Tocar de novo só reescreveria o mesmo.
+      console.log(
+        `[GPTMaker] Eco carimbado na mensagem do CRM: ${casamento.messageId} <- ${event.externalMessageId}`
+      );
+      return;
+    }
+  }
 
   // O webhook NÃO traz a transcrição do áudio (auditados 358 eventos: `audios` é
   // array de URLs e `message` vem vazio em 100% deles). O texto existe do lado do
