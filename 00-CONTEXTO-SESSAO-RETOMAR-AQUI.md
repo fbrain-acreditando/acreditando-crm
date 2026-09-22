@@ -7,6 +7,49 @@
 > Manual da arquitetura do repo: `CLAUDE.md` + `AGENTS.md` (na raiz).
 
 ---
+## Sessao 2026-09-22 (29) — 🪪 o lead que ganhou um segundo card: o numero oculto do WhatsApp (@lid)
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o mecanismo
+> do card duplicado esta provado NO CODIGO; falta provar NO BANCO qual card e o antigo (token Supabase venceu)."*
+
+### 0. De onde veio
+
+A **Fernanda** relatou em 22/09: o lead **11 95134-2931** ja tinha card no quadro e apareceu **mais um**.
+
+### 1. O que foi MEDIDO (API publica, somente leitura, 22/09)
+
+- Base inteira: **1.735 contatos, 1.204 cards**. O numero existe **uma unica vez**:
+  contato `c25d65f2` (phone `+5511951342931`, **nome vazio**, source whatsapp, criado **21/09 15:02 BRT**)
+  → card `bfe86a1a` **" - WhatsApp"**, etapa **Lead novo**, criado 1 s depois.
+- ⇒ O card antigo **NAO esta ligado a esse telefone**. Esta num contato **sem telefone**.
+- **22 cards de setembro vem do WhatsApp com contato SEM telefone** (1 deles literalmente `5441790689321@lid`).
+  Candidato mais parecido: card `42da6696` **" - WhatsApp"**, 18/09 17:28 BRT, contato `ed7e97a3` tambem
+  **sem nome e sem telefone**, hoje em **Qualificado**. ⚠️ **Nao provado que e o mesmo lead.**
+
+### 2. O mecanismo — FATO lido no codigo (@dev)
+
+1. Evento com `contactPhone` `@lid` (numero oculto do WhatsApp) ⇒ `normalizePhone` devolve null (`parser.ts:166`).
+2. Com phone null, `find_or_create_contact` **insere direto, sem procurar** (migration `20260804120000:59-64`).
+3. Conversa e achada por `(channel_id, external_contact_id = contextId)` (`index.ts:825-841`); contextId = `<canal>-<recipient>`.
+4. Quando o lead volta com o **telefone real**, o contextId muda ⇒ conversa nova ⇒ contato procurado por phone,
+   nao acha o do lid ⇒ **contato novo + card novo**. `autoCreateDeal` (`index.ts:978-1056`) **nao checa deal aberto**.
+5. **Nao existe reconciliacao lid → telefone** em lugar nenhum; `merge_contacts` ignora contato sem phone.
+- Bug lateral: o filtro de nome em `parser.ts:287` e **no-op** — por isso contato nasce com nome `...@lid`.
+
+### 3. ⏭️ Pendencias
+
+- [ ] 🔑 **Token `supabase-crm-mgmt` novo** (venceu 21/09) — so o Filipe gera. Com ele, rodar:
+      conversas dos contatos `c25d65f2` e `ed7e97a3` (`external_contact_id`, `metadata.gptmaker_chat_id`)
+      + `messaging_webhook_events` com `1342931` ou lid. Prova qual e o card antigo.
+- [ ] ❓ Alternativa sem banco: perguntar a Fernanda **o nome do card antigo**.
+- [ ] 🧭 Story nova (@sm): reconciliar lid → telefone e/ou checar deal aberto antes do `autoCreateDeal`.
+      Medir antes: quantos dos 22 contatos sem telefone ja ganharam um segundo card.
+- [ ] 🗑️ Merge dos 2 cards — decisao do Filipe/Fernanda, **nada apagado**.
+
+---
+
 
 ## Sessao 2026-09-20 (28) — 🪞 o eco que o CRM nao reconhecia: 100% do que ele envia entra duas vezes
 
