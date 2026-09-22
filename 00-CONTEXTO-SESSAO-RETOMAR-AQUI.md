@@ -8,6 +8,175 @@
 
 ---
 
+## Sessao 2026-09-20 (28) — 🪞 o eco que o CRM nao reconhecia: 100% do que ele envia entra duas vezes
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 28) e continue — a 2.53
+> esta EM PRODUCAO e provada (edge function v14); o PR #17 esta com CI verde esperando merge; a 2.55
+> (o erro cru na tela) esta escrita na branch `docs/2.55-erro-de-envio-na-tela`, esperando D1/D2/D3.
+> 🔴 Antes de tudo: a Fernanda parou de enviar pelo CRM em 18/09 — ver secao 7."*
+
+### 0. De onde veio
+
+A **Fernanda** reclamou em **15/09** que as mensagens enviadas pelo CRM aparecem **duplicadas**
+(print: dois baloes identicos as 14:40, contato "Vd transportes"). SDC rodado inteiro: investigacao
+medida → @sm → @po → @dev → @qa.
+
+### 1. 🔑 O diagnostico — e ele e determinstico, nao intermitente
+
+O GPT Maker **nao devolve id de mensagem no envio**. O provider fabrica um
+(`external_id = "gptmaker:{chatId}:{timestamp}"`, `gptmaker.provider.ts:345`). Segundos depois o
+**mesmo envio volta pelo webhook** com o id REAL, `role: "assistant"` ⇒ outbound ⇒ o webhook
+**insere uma segunda linha**. O indice unico `(conversation_id, external_id)` nao pega nada: um id
+e inventado, o outro e real.
+
+| Medida (banco de producao, 20/09) | Valor |
+|---|---|
+| Envios do CRM pelo canal GPT Maker | **346** |
+| Que viraram duas linhas | **346 — 100%** (283 texto + 63 audio) |
+| Conversas afetadas | **294** · periodo **07/08 a 18/09** |
+| Intervalo envio→eco | min 0,81 s · p50 1,89 s · p99 5,46 s · **max 16,30 s** · zero acima de 30 s |
+
+✅ **A cliente recebeu UMA mensagem.** O WhatsApp entregou uma vez; quem duplica e o registro.
+
+### 2. 🪤 As duas correcoes que mudaram a solucao no meio do caminho
+
+- **"82%" era 100%.** Os 63 envios "sem eco" eram **falso negativo do meu medidor**: sao audio, TEM
+  eco, e o hash nao casava porque **a URL da midia no eco e diferente da que o CRM gravou**.
+  ⇒ Isso matou a solucao ingenua: **casar por conteudo conserta 82% e deixa o defeito vivo na midia**,
+  com cara de resolvido. O criterio passou a ter **ramo por `content_type`**.
+- **A janela de 15 s do @po reprovaria um caso real.** Ele recomendou 15 s sobre a medicao antiga;
+  depois apareceu um eco de **16,30 s** (audio, 10/09). Fixada em **30 s**, e ele retirou os 15 s.
+
+### 3. 🔴 A armadilha central — o pior desfecho nao e duplicar, e APAGAR
+
+**~92% das outbound que chegam pelo webhook NAO vem do CRM** (IA do fornecedor respondendo, ou
+humano no painel). E **nao existe campo que as distinga**: os 4.438 eventos `role:"assistant"`
+auditados tem sempre os **mesmos 12 campos**, zero correlacao (`memberId`/`memberName`: nenhum).
+Filtrar por role — como o webhook da Meta faz com `is_echo` — **sumiria com quase todo o historico**.
+Por isso o modulo e conservador: **na duvida nao casa, e o chamador insere**.
+
+### 4. O furo que o @qa achou (D-1) — e que ninguem tinha visto
+
+Envio que **falha** grava `status='failed'` **sem** `external_id` (`route.ts:190`) ⇒ a linha ficava
+elegivel para sempre. Cenario: envio falha em t=0; em ≤30 s a IA manda um **audio**; como o ramo de
+midia nao olha conteudo, o eco legitimo **carimbaria a linha morta** — a mensagem real **nao seria
+inserida** e uma que nunca saiu viraria `sent`. Corrigido com
+`STATUS_ELEGIVEIS = ['pending','queued','sent']`, aplicado no SELECT **e dentro do UPDATE**.
+
+### 5. Entregue
+
+| Fase | Agente | Resultado |
+|---|---|---|
+| Story | @sm | `docs/stories/2.53.a-mensagem-que-o-crm-grava-duas-vezes.story.md` |
+| Validacao | @po | NO-GO 6/10 (numeros errados) → remedicao → ✅ **GO 9/10** |
+| Implementacao | @dev | `echo-match.ts` (novo) + `echo-match.test.ts` (14 testes) + `index.ts` |
+| Gate | @qa | CONCERNS (D-1 medio) → correcao → ✅ **PASS de codigo** |
+
+Commits na branch `feat/2.53-mensagem-gravada-duas-vezes`: `d7dfabf`, `40d0ca5`, `978ad30`.
+`precheck:fast` rodado pelo @dev **e** pelo @qa: **exit 0 · 996 testes, 991 passaram, 5 pulados**.
+
+**Decisoes do Filipe (20/09):** D1 = casamento no webhook com ramo por tipo (opcao A) · D2 = story
+propria para o `evolution` (**2.54 aberta**) · D3 = **nao apagar agora** — estancar primeiro.
+
+### 6. ⏭️ Pendencias
+
+- [x] ✅ **DEPLOY FEITO** — edge function `messaging-webhook-gptmaker` **v13 → v14**, ACTIVE,
+      `verify_jwt: false` preservado. ⚠️ **O CI NAO publica edge function** — o merge do PR **nao**
+      coloca nada no ar; o deploy e manual, sempre. 🪤 **Producao e o projeto `nossocrmv2`**
+      (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm` — conferir pelo `NEXT_PUBLIC_SUPABASE_URL`.
+- [x] ✅ **AC4.1 PROVADO — texto e audio.** Texto 17:59:03 ⇒ **1 linha**, id real
+      `3F974AE3...`, carimbada em **1 s**. Audio 18:04:45 ⇒ **1 linha**, id real `3F974BAF...`,
+      carimbada em **3 s** — prova o **ramo por `content_type`**, que e onde o criterio so de
+      conteudo quebrava. `sender_type='user'` preservado nos dois. 1 balao na tela.
+- [x] ✅ **AC4.2 PROVADO** — `start-conversation` disparado direto na API do GPT Maker (sem passar
+      pelo CRM): evento processado sem erro e **linha INSERIDA**; as respostas da IA aparecem
+      normalmente. **A correcao nao engole mensagem legitima.** Sem reversao.
+- [ ] 📤 **Push + PR** — exclusivo do @devops. Conferir o CI **antes** de pedir merge (a 2.48 ficou 6
+      dias parada, e o PR #16 reprovou por titulo de 103 caracteres).
+- [x] ✅ **AC5 feito** — query em producao bateu exata: **346 pares · 294 conversas · 283 texto +
+      63 audio**. Exportado (so ids e horarios). **Nada apagado.**
+- [ ] 🗑️ **D3 — decidir agora o que fazer com os 346 pares ja gravados.** A correcao esta provada;
+      a limpeza era pra ser decidida depois disso. Export pronto.
+- [ ] 🪤 **Chat antigo do GPT Maker morre:** envio numa conversa parada desde 03/08 deu
+      `400 {"error":"No value present"}`. **Nao e regressao** (falha no POST, antes do webhook);
+      destrava recriando a conversa via `start-conversation`.
+- [ ] 🟢 Limite conhecido: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje (o canal nao
+      expoe recibo de entrega) e o erro seria conservador. Revisar se o canal ganhar recibo.
+- [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 7. 🔴 Adendo de 22/09 — conferido com 2 dias de trafego real, e a usuaria parou antes da correcao
+
+Conferido em **22/09 08:31 BRT**, lendo o banco (nao a memoria da sessao):
+
+- ✅ **Zero duplicatas desde o deploy.** O medidor apontou 1 — conferi: era a resposta automatica da
+  IA ("Ola! Tudo bem? Sou a Assistente Virtual...") chegando 16 s depois, com **texto diferente**. Um
+  medidor de janela sem comparar conteudo conta resposta como eco. **0 linhas repetem o texto enviado.**
+- ✅ **Webhook saudavel:** segunda 21/09 = **730 eventos** (maior volume da semana), 309 inbound,
+  **0 eventos com erro**. O deploy nao quebrou a entrada.
+- 🔴 **So UMA pessoa envia pelo CRM — a Fernanda — e ela parou em 18/09 as 17:25 BRT**, dois dias
+  ANTES do deploy:
+
+  | | 10/09 | 11/09 | 15/09 | 16/09 | 17/09 | **18/09** | 19 a 22/09 |
+  |---|---|---|---|---|---|---|---|
+  | Fernanda | 41 | 55 | 52 | 75 | 36 | **6** | **0** |
+
+  Na segunda, com 309 leads falando, **nenhuma resposta saiu pelo CRM** — as conversas continuam, mas
+  por fora dele. ⚠️ **A causa NAO foi medida** (pode ser folga). A data bate com a reclamacao da
+  duplicata: se ela saiu do CRM achando que mandava tudo 2x ao cliente, **ela nao sabe que foi
+  corrigido**. ⇒ **A correcao nunca foi exercitada por quem reclamou**; a prova e so os 3 testes
+  de 20/09.
+
+### 8. Story 2.55 — o erro que a atendente le e nao entende (aberta em 20/09)
+
+Nasceu do erro que o Filipe **viu na tela** depois do teste: `GPT Maker API request failed: 400
+{"error":"No value present"}`. Era do teste (ele tinha excluido a conversa no fornecedor), mas a
+investigacao achou 3 defeitos no caminho de **SAIDA** — a 2.53 e no de entrada, nao e regressao:
+
+1. **Sem recuperacao quando o chat some do fornecedor.** O ramo `isPhone` do provider (`:310`) e
+   **inalcancavel**: MEDIDO, **1.601 conversas, 100% com hifen, ZERO usam `start-conversation`**. O
+   telefone esta no sufixo do `external_contact_id` e em `contacts.phone` — a recuperacao existe e
+   nao e usada. Importa porque **reativar lead antigo e caso real** (foi o que a Fernanda fazia).
+2. **O erro tecnico cru chega a atendente** (`MessageBubble.tsx:544-545`): em ingles, com o **nome do
+   fornecedor** (7 pontos) e ate **300 caracteres do corpo bruto da resposta HTTP** (`:606`). Correcao
+   por **lista branca** (licao da 2.51).
+3. **Reacao com emoji falha** (2 ocorrencias reais, 10/09 e 16/09).
+
+Frequencia: **3 falhas de envio em todo o historico** — a severidade vem do impacto, nao da frequencia.
+Arquivo: `docs/stories/2.55.o-erro-que-a-atendente-le-e-nao-entende.story.md` (commit `9e04f59`, branch
+`docs/2.55-erro-de-envio-na-tela`, **local, sem push**).
+
+### 9. ⏭️ Pendencias — estado final em 22/09
+
+- [ ] 📩 **Avisar a Fernanda que a duplicata foi corrigida** e perguntar por que parou em 18/09.
+      **Mensagem para terceiro — envio e do Filipe**, nao disparar sem ele.
+- [ ] 🔀 **Merge do PR #17** — CI verde (4/4), `MERGEABLE`. ⚠️ **O merge NAO muda producao**: a edge
+      function ja esta no ar (v14) por deploy manual.
+- [ ] 🗑️ **As 346 linhas duplicadas antigas** (294 conversas) — decisao do Filipe. Export pronto
+      (so ids e horarios). **Nada apagado.**
+- [ ] 🧭 **2.55 — D1** 🔴 gatilho do fallback (so existe 1 amostra do erro ⇒ spike antes de escolher) ·
+      **D2** 🟡 reacao: suportar ou explicar · **D3** 🟢 texto da mensagem generica (texto de produto).
+- [ ] 🔑 **Token `supabase-crm-mgmt` VENCEU em 21/09** (era de 1 dia) — o proximo deploy de edge function
+      precisa de token novo. Registrado em `.credenciais/VALIDADES.md`.
+- [ ] 🟢 Limite conhecido da 2.53: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje.
+- [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 10. 🪤 Licoes que valem para qualquer sessao futura deste repo
+
+- **O CI nao publica Edge Function.** Merge nao coloca nada no ar; o deploy e sempre manual:
+  `supabase functions deploy <nome> --project-ref jmjhtprnxjffaqhdzfmc --no-verify-jwt`.
+  **Ler o `verify_jwt` atual antes** — publicar sem a flag faria o fornecedor parar de entregar.
+- **Producao e o projeto `nossocrmv2` (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm`** — o nome sem sufixo
+  parece o certo e e o antigo. Conferir pelo `NEXT_PUBLIC_SUPABASE_URL`, nunca pelo nome.
+- **O medidor errou duas vezes para lados opostos:** casando por conteudo, **nao via a midia** (a URL
+  muda no eco ⇒ falso negativo, "82%" era 100%); casando so por janela, **contou resposta da IA como
+  eco** (falso positivo). Conferir amostra antes de publicar a taxa.
+- **Chat antigo do fornecedor morre:** `400 {"error":"No value present"}` = o chat nao existe mais la.
+  Destrava com `POST /v2/channel/{channelId}/start-conversation` `{message, phone}`.
+
+---
+
 ## Sessao 2026-09-18/19 (27) — 🕳️ o lead que sumia em 500, e o botao que nao existe pra quem nunca conversou
 
 ### Como retomar
