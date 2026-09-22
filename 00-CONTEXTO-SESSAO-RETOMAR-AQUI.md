@@ -7,46 +7,67 @@
 > Manual da arquitetura do repo: `CLAUDE.md` + `AGENTS.md` (na raiz).
 
 ---
-## Sessao 2026-09-22 (29) — 🪪 o lead que ganhou um segundo card: o numero oculto do WhatsApp (@lid)
+## Sessao 2026-09-22 (29) — 🪪 o lead virou DOIS cards: a mesma conversa do WhatsApp partida em duas (telefone x @lid)
 
 ### Como retomar
 
-> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o mecanismo
-> do card duplicado esta provado NO CODIGO; falta provar NO BANCO qual card e o antigo (token Supabase venceu)."*
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o defeito
+> esta PROVADO no banco e no codigo; falta a story do @sm e a decisao do Filipe sobre juntar os cards."*
 
 ### 0. De onde veio
 
-A **Fernanda** relatou em 22/09: o lead **11 95134-2931** ja tinha card no quadro e apareceu **mais um**.
+A **Fernanda** relatou em 22/09: o lead **11 95134-2931** ja tinha card e apareceu **mais um**.
 
-### 1. O que foi MEDIDO (API publica, somente leitura, 22/09)
+### 1. 🔑 O que esta provado (banco de producao, 22/09)
 
-- Base inteira: **1.735 contatos, 1.204 cards**. O numero existe **uma unica vez**:
-  contato `c25d65f2` (phone `+5511951342931`, **nome vazio**, source whatsapp, criado **21/09 15:02 BRT**)
-  → card `bfe86a1a` **" - WhatsApp"**, etapa **Lead novo**, criado 1 s depois.
-- ⇒ O card antigo **NAO esta ligado a esse telefone**. Esta num contato **sem telefone**.
-- **22 cards de setembro vem do WhatsApp com contato SEM telefone** (1 deles literalmente `5441790689321@lid`).
-  Candidato mais parecido: card `42da6696` **" - WhatsApp"**, 18/09 17:28 BRT, contato `ed7e97a3` tambem
-  **sem nome e sem telefone**, hoje em **Qualificado**. ⚠️ **Nao provado que e o mesmo lead.**
+O lead e **Bruno Nascimento Motta** (nome lido do formulario medico que ele enviou no chat — o CRM nao
+tinha o nome em lugar nenhum). Ele tem **DOIS cards criados no mesmo dia, com 7 minutos de diferenca**,
+e a **mesma conversa do WhatsApp foi partida em duas**:
 
-### 2. O mecanismo — FATO lido no codigo (@dev)
+| | Card 1 `bfe86a1a` | Card 2 `38a70768` |
+|---|---|---|
+| Titulo | **" - WhatsApp"** (sem nome) | **"T - Bruno Nascimento Motta - WhatsApp"** |
+| Contato | `c25d65f2` · phone **+5511951342931** · **nome vazio** | `a70742e1` · **phone NULL** · nome com prefixo T- |
+| Conversa | `621ff8aa` · contextId `<canal>-5511951342931` | `924515db` · contextId `<canal>-150439953756312@lid` |
+| Mensagens | **8, TODAS `inbound`** (so o cliente) | **5, TODAS `outbound`** (so as respostas da Fernanda) |
+| Criado | 21/09 **18:02 UTC** (15:02 BRT) | 21/09 **18:09 UTC** (15:09 BRT) |
+| Etapa hoje | **Lead novo** (parado) | **Avaliacao agendada** (mexido em 22/09) |
 
-1. Evento com `contactPhone` `@lid` (numero oculto do WhatsApp) ⇒ `normalizePhone` devolve null (`parser.ts:166`).
-2. Com phone null, `find_or_create_contact` **insere direto, sem procurar** (migration `20260804120000:59-64`).
-3. Conversa e achada por `(channel_id, external_contact_id = contextId)` (`index.ts:825-841`); contextId = `<canal>-<recipient>`.
-4. Quando o lead volta com o **telefone real**, o contextId muda ⇒ conversa nova ⇒ contato procurado por phone,
-   nao acha o do lid ⇒ **contato novo + card novo**. `autoCreateDeal` (`index.ts:978-1056`) **nao checa deal aberto**.
-5. **Nao existe reconciliacao lid → telefone** em lugar nenhum; `merge_contacts` ignora contato sem phone.
-- Bug lateral: o filtro de nome em `parser.ts:287` e **no-op** — por isso contato nasce com nome `...@lid`.
+⇒ **O card 1 tem as perguntas e o card 2 tem as respostas.** Nenhum dos dois mostra a conversa inteira.
+A sessao dele foi combinada para **29/10** — o combinado esta no card 2, o telefone esta no card 1.
 
-### 3. ⏭️ Pendencias
+### 2. O mecanismo — FATO no codigo (@dev)
 
-- [ ] 🔑 **Token `supabase-crm-mgmt` novo** (venceu 21/09) — so o Filipe gera. Com ele, rodar:
-      conversas dos contatos `c25d65f2` e `ed7e97a3` (`external_contact_id`, `metadata.gptmaker_chat_id`)
-      + `messaging_webhook_events` com `1342931` ou lid. Prova qual e o card antigo.
-- [ ] ❓ Alternativa sem banco: perguntar a Fernanda **o nome do card antigo**.
-- [ ] 🧭 Story nova (@sm): reconciliar lid → telefone e/ou checar deal aberto antes do `autoCreateDeal`.
-      Medir antes: quantos dos 22 contatos sem telefone ja ganharam um segundo card.
-- [ ] 🗑️ Merge dos 2 cards — decisao do Filipe/Fernanda, **nada apagado**.
+1. O GPT Maker as vezes identifica o mesmo chat pelo **numero oculto do WhatsApp (`@lid`)** em vez do telefone.
+2. `normalizePhone` recusa qualquer valor com `@` e devolve null (`parser.ts:166`).
+3. Com phone null, `find_or_create_contact` **insere direto, sem procurar** (migration `20260804120000:59-64`)
+   ⇒ contato novo **sem telefone**.
+4. A conversa e achada por `(channel_id, external_contact_id = contextId)` (`index.ts:825-841`). Se o
+   contextId muda (telefone → lid), **e outra conversa**.
+5. `autoCreateDeal` (`index.ts:978-1056`) **nao checa se o contato ja tem card aberto** ⇒ card novo.
+6. **Nao existe reconciliacao lid → telefone** em lugar nenhum. `merge_contacts` so junta por phone/email,
+   e contato sem phone fica de fora.
+- Bug lateral: o filtro de nome em `parser.ts:287` e **no-op** — por isso existe contato chamado `...@lid`.
+
+### 3. 📏 Escala medida (banco inteiro, 24/07 a 22/09)
+
+| Medida | Valor |
+|---|---|
+| Conversas com contextId `@lid` | **143** |
+| Delas, que **criaram card** | **139** |
+| Cards "espelho" — conversa `@lid` **so com saida** (como o card 2 do Bruno) | **42** |
+| Cards vindos de `@lid` so em setembro | **32** |
+| Contatos sem telefone na base | **164** |
+
+### 4. ⏭️ Pendencias
+
+- [ ] 🔴 **Juntar os 2 cards do Bruno** (decisao do Filipe/Fernanda) — `merge_contacts` **nao serve**
+      (o contato do lid nao tem phone). **Nada foi alterado nem apagado.**
+- [ ] 🧭 **Story nova (@sm):** (a) reconciliar `@lid` → telefone (o GPT Maker sabe o telefone do chat;
+      checar se a API devolve o vinculo), (b) checar card aberto antes do `autoCreateDeal`,
+      (c) corrigir o no-op de `parser.ts:287`.
+- [ ] 📏 Antes da story: medir quantos dos 42 cards-espelho tem par obvio (mesmo canal, janela de minutos).
+- [ ] 🔑 Token `supabase-crm-mgmt` renovado em 22/09 — **validade de 1 dia**, vence 23/09.
 
 ---
 
