@@ -13,8 +13,9 @@
 ### Como retomar
 
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 28) e continue — a 2.53
-> esta commitada na branch `feat/2.53-mensagem-gravada-duas-vezes` com PASS de codigo do @qa; falta
-> DEPLOY da edge function, o AC4 em producao e o push (@devops)."*
+> esta EM PRODUCAO e provada (edge function v14); o PR #17 esta com CI verde esperando merge; a 2.55
+> (o erro cru na tela) esta escrita na branch `docs/2.55-erro-de-envio-na-tela`, esperando D1/D2/D3.
+> 🔴 Antes de tudo: a Fernanda parou de enviar pelo CRM em 18/09 — ver secao 7."*
 
 ### 0. De onde veio
 
@@ -104,6 +105,75 @@ propria para o `evolution` (**2.54 aberta**) · D3 = **nao apagar agora** — es
 - [ ] 🟢 Limite conhecido: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje (o canal nao
       expoe recibo de entrega) e o erro seria conservador. Revisar se o canal ganhar recibo.
 - [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 7. 🔴 Adendo de 22/09 — conferido com 2 dias de trafego real, e a usuaria parou antes da correcao
+
+Conferido em **22/09 08:31 BRT**, lendo o banco (nao a memoria da sessao):
+
+- ✅ **Zero duplicatas desde o deploy.** O medidor apontou 1 — conferi: era a resposta automatica da
+  IA ("Ola! Tudo bem? Sou a Assistente Virtual...") chegando 16 s depois, com **texto diferente**. Um
+  medidor de janela sem comparar conteudo conta resposta como eco. **0 linhas repetem o texto enviado.**
+- ✅ **Webhook saudavel:** segunda 21/09 = **730 eventos** (maior volume da semana), 309 inbound,
+  **0 eventos com erro**. O deploy nao quebrou a entrada.
+- 🔴 **So UMA pessoa envia pelo CRM — a Fernanda — e ela parou em 18/09 as 17:25 BRT**, dois dias
+  ANTES do deploy:
+
+  | | 10/09 | 11/09 | 15/09 | 16/09 | 17/09 | **18/09** | 19 a 22/09 |
+  |---|---|---|---|---|---|---|---|
+  | Fernanda | 41 | 55 | 52 | 75 | 36 | **6** | **0** |
+
+  Na segunda, com 309 leads falando, **nenhuma resposta saiu pelo CRM** — as conversas continuam, mas
+  por fora dele. ⚠️ **A causa NAO foi medida** (pode ser folga). A data bate com a reclamacao da
+  duplicata: se ela saiu do CRM achando que mandava tudo 2x ao cliente, **ela nao sabe que foi
+  corrigido**. ⇒ **A correcao nunca foi exercitada por quem reclamou**; a prova e so os 3 testes
+  de 20/09.
+
+### 8. Story 2.55 — o erro que a atendente le e nao entende (aberta em 20/09)
+
+Nasceu do erro que o Filipe **viu na tela** depois do teste: `GPT Maker API request failed: 400
+{"error":"No value present"}`. Era do teste (ele tinha excluido a conversa no fornecedor), mas a
+investigacao achou 3 defeitos no caminho de **SAIDA** — a 2.53 e no de entrada, nao e regressao:
+
+1. **Sem recuperacao quando o chat some do fornecedor.** O ramo `isPhone` do provider (`:310`) e
+   **inalcancavel**: MEDIDO, **1.601 conversas, 100% com hifen, ZERO usam `start-conversation`**. O
+   telefone esta no sufixo do `external_contact_id` e em `contacts.phone` — a recuperacao existe e
+   nao e usada. Importa porque **reativar lead antigo e caso real** (foi o que a Fernanda fazia).
+2. **O erro tecnico cru chega a atendente** (`MessageBubble.tsx:544-545`): em ingles, com o **nome do
+   fornecedor** (7 pontos) e ate **300 caracteres do corpo bruto da resposta HTTP** (`:606`). Correcao
+   por **lista branca** (licao da 2.51).
+3. **Reacao com emoji falha** (2 ocorrencias reais, 10/09 e 16/09).
+
+Frequencia: **3 falhas de envio em todo o historico** — a severidade vem do impacto, nao da frequencia.
+Arquivo: `docs/stories/2.55.o-erro-que-a-atendente-le-e-nao-entende.story.md` (commit `9e04f59`, branch
+`docs/2.55-erro-de-envio-na-tela`, **local, sem push**).
+
+### 9. ⏭️ Pendencias — estado final em 22/09
+
+- [ ] 📩 **Avisar a Fernanda que a duplicata foi corrigida** e perguntar por que parou em 18/09.
+      **Mensagem para terceiro — envio e do Filipe**, nao disparar sem ele.
+- [ ] 🔀 **Merge do PR #17** — CI verde (4/4), `MERGEABLE`. ⚠️ **O merge NAO muda producao**: a edge
+      function ja esta no ar (v14) por deploy manual.
+- [ ] 🗑️ **As 346 linhas duplicadas antigas** (294 conversas) — decisao do Filipe. Export pronto
+      (so ids e horarios). **Nada apagado.**
+- [ ] 🧭 **2.55 — D1** 🔴 gatilho do fallback (so existe 1 amostra do erro ⇒ spike antes de escolher) ·
+      **D2** 🟡 reacao: suportar ou explicar · **D3** 🟢 texto da mensagem generica (texto de produto).
+- [ ] 🔑 **Token `supabase-crm-mgmt` VENCEU em 21/09** (era de 1 dia) — o proximo deploy de edge function
+      precisa de token novo. Registrado em `.credenciais/VALIDADES.md`.
+- [ ] 🟢 Limite conhecido da 2.53: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje.
+- [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 10. 🪤 Licoes que valem para qualquer sessao futura deste repo
+
+- **O CI nao publica Edge Function.** Merge nao coloca nada no ar; o deploy e sempre manual:
+  `supabase functions deploy <nome> --project-ref jmjhtprnxjffaqhdzfmc --no-verify-jwt`.
+  **Ler o `verify_jwt` atual antes** — publicar sem a flag faria o fornecedor parar de entregar.
+- **Producao e o projeto `nossocrmv2` (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm`** — o nome sem sufixo
+  parece o certo e e o antigo. Conferir pelo `NEXT_PUBLIC_SUPABASE_URL`, nunca pelo nome.
+- **O medidor errou duas vezes para lados opostos:** casando por conteudo, **nao via a midia** (a URL
+  muda no eco ⇒ falso negativo, "82%" era 100%); casando so por janela, **contou resposta da IA como
+  eco** (falso positivo). Conferir amostra antes de publicar a taxa.
+- **Chat antigo do fornecedor morre:** `400 {"error":"No value present"}` = o chat nao existe mais la.
+  Destrava com `POST /v2/channel/{channelId}/start-conversation` `{message, phone}`.
 
 ---
 
