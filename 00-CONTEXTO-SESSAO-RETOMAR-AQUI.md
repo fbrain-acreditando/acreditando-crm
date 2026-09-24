@@ -12,7 +12,8 @@
 ### Como retomar
 
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o defeito
-> esta PROVADO no banco e no codigo; falta a story do @sm e a decisao do Filipe sobre juntar os cards."*
+> esta PROVADO, os 2 cards do Bruno ja foram JUNTADOS (secao 5) e a story 2.56 esta escrita —
+> falta o @po validar, as 3 decisoes do Filipe e o reparo dos outros 41 cards-espelho."*
 
 ### 0. De onde veio
 
@@ -59,15 +60,92 @@ A sessao dele foi combinada para **29/10** — o combinado esta no card 2, o tel
 | Cards vindos de `@lid` so em setembro | **32** |
 | Contatos sem telefone na base | **164** |
 
-### 4. ⏭️ Pendencias
+### 5. ✅ 23/09 — os 2 cards do Bruno foram JUNTADOS (autorizado pelo Filipe)
 
-- [ ] 🔴 **Juntar os 2 cards do Bruno** (decisao do Filipe/Fernanda) — `merge_contacts` **nao serve**
-      (o contato do lid nao tem phone). **Nada foi alterado nem apagado.**
-- [ ] 🧭 **Story nova (@sm):** (a) reconciliar `@lid` → telefone (o GPT Maker sabe o telefone do chat;
-      checar se a API devolve o vinculo), (b) checar card aberto antes do `autoCreateDeal`,
-      (c) corrigir o no-op de `parser.ts:287`.
-- [ ] 📏 Antes da story: medir quantos dos 42 cards-espelho tem par obvio (mesmo canal, janela de minutos).
-- [ ] 🔑 Token `supabase-crm-mgmt` renovado em 22/09 — **validade de 1 dia**, vence 23/09.
+`merge_contacts(source=c25d65f2 → target=a70742e1)` + **soft delete** do card vazio. Executado como o
+profile admin `c8360088` (fbraintech), setando `request.jwt.claims` na transacao — **a funcao exige
+`auth.uid()`**, entao o token de management sozinho da `Unauthorized`.
+
+**Read-back no banco (nao a resposta da chamada):**
+
+| Depois | Estado real |
+|---|---|
+| Contato `a70742e1` "T - Bruno Nascimento Motta" | **ativo, com phone +5511951342931**, 2 conversas, 1 card |
+| Contato `c25d65f2` (sem nome) | `deleted_at` + `merged_into_id` = a70742e1 — **nao apagado** |
+| Card `38a70768` (Avaliacao agendada) | ativo, no contato certo |
+| Card `bfe86a1a` (" - WhatsApp", vazio) | `deleted_at` preenchido ⇒ **sai do quadro, e reversivel** |
+| `contact_merge_log` | 1 linha, `merged_by` = admin, `deals:1, conversations:1` |
+
+🪤 **A exclusao da TELA e destrutiva** (`lib/supabase/deals.ts:569-578` faz `.delete()` cru, com CASCADE
+em notes/files/items). Por isso usei `deleted_at` — as listagens ja filtram `deleted_at is null`
+(`deals.ts:298,349,379`). Script: `scratchpad/merge-bruno.mjs` (SQL registrado na sessao).
+
+### 6. 🔬 Spike do @analyst — da para ligar lid → telefone?
+
+| Via | Cobertura | Ambiguidade |
+|---|---|---|
+| **`contactPhone` no payload do webhook** (mesmo evento traz `contextId` @lid **e** o telefone) | **95 de 196 lids (48%)** | **ZERO** — os 95 resolvem para telefone unico |
+| `whatsappPhone` na listagem de chats da API do fornecedor | 276 de 473 chats @lid (58%) | baixa |
+| Janela de ±30 min entre conversas | 41 pares unicos (28,7%) | **79 ambiguos (55,2%)** ⇒ inviavel sozinha |
+
+🪤 **Armadilha:** em eventos `role:"assistant"` o `contactPhone` as vezes **ecoa o proprio lid** — filtrar
+por `^[0-9]{10,15}$`. `onFirstInteraction`/`onTransfer` vem com `contactPhone` vazio.
+🔴 **O caso Bruno nao e resolvivel por nenhuma das duas vias** (os 5 eventos do lid sao todos
+`assistant` com contactPhone = o lid). INFERENCIA do analista: o telefone so vaza quando ha mensagem
+**inbound** — e chat @lid puramente outbound e exatamente onde a duplicata nasce. ⇒ **fila de revisao
+humana e obrigatoria**; reconciliacao 100% automatica nao existe.
+🪤 `merge_contacts` **nao move `whatsapp_calls`** · `find_duplicate_contacts` so agrupa por phone/email
+iguais ⇒ **a Fernanda nunca ve esse par na tela de duplicados**.
+
+
+### 8. 📋 SDC rodado em 23/09 — story 2.56 escrita, validada e DESTRAVADA
+
+| Fase | Agente | Resultado |
+|---|---|---|
+| Spike | @analyst | mapa lid→telefone: `contactPhone` do webhook resolve **95 de 196 lids com ZERO ambiguidade** (secao 6) |
+| Story | @sm | `docs/stories/2.56.a-conversa-que-nasce-partida-em-dois-cards.story.md` (8 ACs, 466 linhas) |
+| Validacao | @po | 🟢 **GO 8/10** + 5 correcoes obrigatorias, todas aplicadas |
+
+🪤 **Numeracao:** o @sm ia gravar como 2.55 — **a 2.55 ja existe** na branch `docs/2.55-erro-de-envio-na-tela`
+(local, sem push). `ls docs/stories` na branch atual **nao ve** story de outra branch. Renumerada para 2.56.
+
+🔴 **O @po DERRUBOU um numero da story:** o "32 cards espelho em setembro" era falso — sao **5**
+(jul 21 · ago 17 · set 5). A frase *"o volume esta subindo"* caiu junto: **a tendencia e de QUEDA**.
+A urgencia passou a se apoiar no passivo e no dano por caso. (Os outros 5 numeros conferidos bateram,
+com drift de +1 por ser outro dia.) 📌 Vale a licao do projeto: **numero que vira justificativa
+precisa ser refeito por quem valida.**
+
+**Decisoes do Filipe (23/09):**
+
+| # | Pergunta | Decisao |
+|---|---|---|
+| D1 | Onde fica a identidade | **A — tabela de apelidos lid→telefone** (aditiva; nao mexe na chave atual) |
+| D2 | Quando o lid NAO resolve | **B — cria o card, porem MARCADO para revisao.** ⚠️ Contraria a recomendacao do @sm (era A, nao criar card): *nada pode ficar invisivel para a atendente*. Efeito colateral bom: a story deixou de depender da fila |
+| D3 | Os 41 cards-espelho antigos | **C — nao mexer no passado.** Passivo aceito; nenhuma story aberta |
+| D4 | Card em estagio final conta como "aberto"? | **Nao conta** — lead que volta ganha card novo. Terminais: **Ganho · Perdido · Clientes** (os outros 10 contam). Risco aceito: quem volta muitas vezes acumula cards |
+
+- Interface da fila de revisao fatiada para a **2.57** (so citada, nao aberta).
+- 🪤 Casar estagio **por id, nunca por nome**: existe `" Proposta enviada"` com espaco no comeco.
+- 🪤 A lista de terminais e **de um quadro so**; quadro novo precisa da lista dele (a coluna `is_closing`
+  resolveria — registrada como evolucao, fora de escopo).
+- 🔑 O token do banco **venceu no meio da sessao**; os ids dos estagios vieram da **API publica do CRM**
+  (a `crm-api-key` nao expira) — caminho alternativo util quando o management token cai.
+
+
+### 7. ⏭️ Pendencias — estado em 23/09
+
+- [x] ✅ **Cards do Bruno juntados** (ver secao 5). ⚠️ **Avisar a Fernanda:** o card que ficou e o
+      **"T - Bruno Nascimento Motta"** (Avaliacao agendada), agora COM o telefone; o card vazio sumiu
+      do quadro. A sessao dele esta marcada para **29/10**.
+- [x] ✅ **Story 2.56 escrita, validada (@po GO 8/10) e com as 4 decisoes fechadas** — ver secao 8.
+- [ ] 🟠 **2.56 pro @dev** — status **Ready**, sem bloqueio. Depois @qa, e o deploy da edge function
+      e **manual** (o CI nao publica). ⚠️ Vai precisar de **token novo do Supabase**.
+- [ ] 📋 **2.57** — interface da fila de revisao (fatiada da 2.56). Ainda nao escrita.
+- [x] 🗑️ **Os outros 41 cards-espelho:** decisao D3 = **nao mexer no passado**. Passivo aceito, nada apagado.
+- [x] 🔑 Token `supabase-crm-mgmt` **JA VENCEU** no meio da sessao (era de 1 dia). Alternativa que
+      salvou a sessao: a **API publica do CRM** com a `crm-api-key`, que nao expira.
+- [ ] 🐛 Divida pequena: `parser.ts:287` (filtro de nome no-op) · `find_or_create_contact` nao filtra
+      `merged_into_id` · `merge_contacts` nao move `whatsapp_calls`.
 
 ---
 
