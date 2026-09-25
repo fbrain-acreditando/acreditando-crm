@@ -132,8 +132,71 @@ export interface DealGuardQuery {
   limit(n: number): Promise<{ data: DealRow[] | null; error: DbError | null }>;
 }
 
+export interface DealGuardUpdateQuery {
+  eq(col: string, val: unknown): DealGuardUpdateQuery;
+  select(cols: string): Promise<{ data: Array<{ id: string }> | null; error: DbError | null }>;
+}
+
 export interface DealGuardClient {
-  from(table: string): { select(cols: string): DealGuardQuery };
+  from(table: string): {
+    select(cols: string): DealGuardQuery;
+    update(values: Record<string, unknown>): DealGuardUpdateQuery;
+  };
+}
+
+/**
+ * O card reusado **dá sinal** — D5, decidida pelo Filipe em 25/09.
+ *
+ * Com o AC3, a conversa nova passa a entrar num card que já existe. Sem nenhum
+ * sinal, um lead que voltou depois de semanas continuaria parecendo parado: a
+ * atendente não tem como saber que chegou mensagem nova naquele card.
+ *
+ * **A escolha do Filipe foi marcar o card como ATUALIZADO** — `updated_at = now()`
+ * — para ele subir nas listas ordenadas por atualização. Sem mudar de coluna e
+ * **sem inventar etapa**: mover card sozinho é o tipo de coisa que vira chamado
+ * ("quem moveu meu lead?"), e a D4 já decidiu que estágio é decisão humana.
+ *
+ * ❌ **Criar atividade foi descartado** pelo Filipe na mesma conversa: é mais
+ * código e polui o histórico do card com linha automática a cada mensagem.
+ *
+ * ⚠️ **Onde isso aparece de fato, medido no código em 25/09:** a lista do
+ * cockpit (`features/deals/cockpit/DealCockpitClient.tsx:689`) ordena por
+ * `updatedAt` desc — lá o card sobe. O **quadro (kanban)** busca os cards com
+ * `order('created_at', desc)` (`lib/supabase/deals.ts:301`), ou seja, **a coluna
+ * do kanban NÃO reordena** com isto. Fazer o kanban ordenar por atualização é
+ * mudança de produto na tela, não neste webhook — fica registrado na story, não
+ * escondido.
+ *
+ * Nunca lança: o card já foi reusado; falhar o carimbo não desfaz nada.
+ */
+export async function marcarCardComoAtualizado(
+  client: DealGuardClient,
+  dealId: string,
+  log: (msg: string) => void = () => {},
+  agora: string = new Date().toISOString()
+): Promise<{ marcado: boolean }> {
+  try {
+    const { data, error } = await client
+      .from("deals")
+      .update({ updated_at: agora })
+      .eq("id", dealId)
+      .select("id");
+
+    if (error) {
+      log(`[GPTMaker] Falha ao marcar card ${dealId} como atualizado: ${error.message ?? "sem detalhe"}`);
+      return { marcado: false };
+    }
+
+    // Rule 7 dentro do código: PostgREST devolve sucesso com ZERO linhas.
+    const ok = !!data && data.length > 0;
+    if (!ok) {
+      log(`[GPTMaker] UPDATE de updated_at no card ${dealId} afetou 0 linhas (verificar RLS)`);
+    }
+    return { marcado: ok };
+  } catch (e) {
+    log(`[GPTMaker] Erro inesperado ao marcar card: ${e instanceof Error ? e.message : String(e)}`);
+    return { marcado: false };
+  }
 }
 
 export type CardAbertoOutcome =

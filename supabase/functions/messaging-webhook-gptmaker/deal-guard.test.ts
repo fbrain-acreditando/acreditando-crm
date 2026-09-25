@@ -9,14 +9,33 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   encontrarCardAberto,
+  marcarCardComoAtualizado,
   estagiosTerminaisDoQuadro,
   BOARD_ACREDITANDO,
   ESTAGIOS_CONHECIDOS_ACREDITANDO,
   ESTAGIOS_TERMINAIS_ACREDITANDO,
   type DealGuardClient,
 } from './deal-guard';
+
+/**
+ * O token de leitura existe nesta máquina? (Mesmos caminhos do `sql-ro.mjs`.)
+ *
+ * ⚠️ Serve para `it.skipIf` — e **skip é reportado como skip**, não como passed.
+ * A versão anterior usava `return` dentro do `it()`, e o vitest contava
+ * **passed** num teste que não tinha provado nada (achado MÉDIA-4 do @qa).
+ */
+const TEM_TOKEN =
+  !!process.env.SUPABASE_CRM_MGMT_TOKEN ||
+  [
+    process.env.SUPABASE_CRM_MGMT_TOKEN_FILE,
+    join(homedir(), 'grupo-acreditando', '.credenciais', 'supabase-crm-mgmt.token'),
+    join(homedir(), '.credenciais', 'supabase-crm-mgmt.token'),
+  ].some((p) => !!p && existsSync(p));
 
 const ORG = 'a1b2c3d4-e5f6-4a7b-8c9d-e0f1a2b3c4d5';
 const CONTATO = 'd4e5f6a7-b8c9-4d0e-8f1a-b2c3d4e5f6a7';
@@ -237,7 +256,7 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
    * coluna `is_closing` em `board_stages` (opção B da D4) — registrada na story
    * como evolução fora do escopo.
    */
-  it('a lista bate com o banco de produção (pulado sem token de leitura)', () => {
+  it.skipIf(!TEM_TOKEN)('a lista bate com o banco de produção', () => {
     let saida: string;
     try {
       saida = execFileSync(
@@ -248,10 +267,17 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
         ],
         { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }
       );
-    } catch {
-      // Sem token, sem rede, ou token vencido — não é falha da constante.
-      console.warn('[2.56] 8c pulado: leitura do banco indisponível (token/rede).');
-      return;
+    } catch (e) {
+      // ⚠️ O token EXISTE (senão o teste nem rodaria) — então falhar aqui é
+      // falha de verdade: token vencido, rede caída ou consulta quebrada. Antes
+      // isto era um `return` e o vitest reportava **passed** sem ter provado
+      // nada (achado MÉDIA-4 do @qa). Teste verde que não provou nada é pior
+      // que teste ausente.
+      throw new Error(
+        `8c não conseguiu ler o banco com o token presente: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
     }
 
     const doBanco = JSON.parse(saida)?.[0]?.stages as Array<{
@@ -260,13 +286,78 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
       order: number;
     }> | null;
 
-    if (!doBanco) {
-      console.warn('[2.56] 8c pulado: consulta não devolveu estágios.');
-      return;
-    }
+    expect(doBanco, 'a consulta não devolveu estágio nenhum').toBeTruthy();
 
-    expect(doBanco.map((s) => ({ id: s.id, name: s.name, order: s.order }))).toEqual(
+    expect((doBanco ?? []).map((s) => ({ id: s.id, name: s.name, order: s.order }))).toEqual(
       ESTAGIOS_CONHECIDOS_ACREDITANDO.map((s) => ({ id: s.id, name: s.name, order: s.order }))
     );
+  });
+});
+
+// =============================================================================
+// D5 (Filipe, 25/09) — o card reusado DA SINAL
+// =============================================================================
+
+function clienteDeUpdate(existentes: string[], falhar = false) {
+  const tocados: Array<{ id: string; values: Record<string, unknown> }> = [];
+  const client = {
+    from() {
+      return {
+        update(values: Record<string, unknown>) {
+          const filtros: Array<[string, unknown]> = [];
+          const q = {
+            eq(col: string, val: unknown) {
+              filtros.push([col, val]);
+              return q;
+            },
+            async select() {
+              if (falhar) return { data: null, error: { message: 'banco fora do ar' } };
+              const alvo = filtros.find(([c]) => c === 'id')?.[1] as string;
+              if (!existentes.includes(alvo)) return { data: [], error: null };
+              tocados.push({ id: alvo, values });
+              return { data: [{ id: alvo }], error: null };
+            },
+          };
+          return q;
+        },
+      };
+    },
+  } as unknown as DealGuardClient;
+  return { client, tocados };
+}
+
+describe('D5 — card reusado sobe na lista, sem mudar de coluna', () => {
+  it('carimba `updated_at` no card reaproveitado', async () => {
+    const { client, tocados } = clienteDeUpdate(['deal-aberto']);
+
+    const r = await marcarCardComoAtualizado(client, 'deal-aberto', () => {}, '2026-09-25T13:00:00.000Z');
+
+    expect(r.marcado).toBe(true);
+    expect(tocados).toHaveLength(1);
+    expect(tocados[0].values).toEqual({ updated_at: '2026-09-25T13:00:00.000Z' });
+  });
+
+  it('NAO mexe em stage_id — mover card sozinho vira chamado', async () => {
+    const { client, tocados } = clienteDeUpdate(['deal-aberto']);
+
+    await marcarCardComoAtualizado(client, 'deal-aberto');
+
+    expect(Object.keys(tocados[0].values)).toEqual(['updated_at']);
+  });
+
+  it('UPDATE que afeta ZERO linhas nao e reportado como sucesso (Rule 7)', async () => {
+    const { client } = clienteDeUpdate(['outro-deal']);
+
+    const r = await marcarCardComoAtualizado(client, 'deal-aberto');
+
+    expect(r.marcado).toBe(false);
+  });
+
+  it('falha de banco NAO lanca — o card ja foi reusado de qualquer jeito', async () => {
+    const { client } = clienteDeUpdate(['deal-aberto'], true);
+
+    const r = await marcarCardComoAtualizado(client, 'deal-aberto');
+
+    expect(r.marcado).toBe(false);
   });
 });
