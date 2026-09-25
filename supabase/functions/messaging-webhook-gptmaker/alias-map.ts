@@ -356,18 +356,12 @@ export async function marcarIdentidadeNaoConfirmada(
       return { marcado: false };
     }
 
-    // Ids só ENTRAM, nunca são apagados: um evento seguinte sem conversa/card
-    // não pode esvaziar o que a revisão já tinha para olhar.
-    const patch: Record<string, unknown> = {
-      last_seen_at: agora,
-      review_reason: input.motivo,
-    };
-    if (input.conversationId && !existente.row?.conversation_id) {
-      patch.conversation_id = input.conversationId;
-    }
-    if (input.dealId && !existente.row?.deal_id) {
-      patch.deal_id = input.dealId;
-    }
+    // ⚠️ A linha de referência para montar o patch é relida DEPOIS da corrida
+    // (achado BAIXA-9 do @qa): montar o patch aqui em cima, com
+    // `existente.row === null`, fazia o ramo de insert-duplicado **sobrescrever**
+    // `conversation_id` e `deal_id` que a entrega vencedora acabara de gravar —
+    // justamente o contrário do "ids só entram" escrito logo abaixo.
+    let referencia = existente.row;
 
     if (!existente.row) {
       const { error } = await client
@@ -395,15 +389,32 @@ export async function marcarIdentidadeNaoConfirmada(
           );
           return { marcado: false };
         }
-        // Corrida: a linha já existe. Cai no update abaixo.
+        // Corrida: a linha já existe, gravada por outra entrega. Relê ANTES de
+        // montar o patch — é o que impede sobrescrever os ids da vencedora.
+        const relido = await resolverAlias(client, input, log);
+        if (relido.row?.status === "resolved") return { marcado: false };
+        referencia = relido.row;
       } else {
         log(`[GPTMaker] 🔖 identidade não confirmada: lid "${input.alias}" (${input.motivo})`);
         return { marcado: true };
       }
     }
 
+    // Ids só ENTRAM, nunca são apagados nem trocados: um evento seguinte sem
+    // conversa/card não pode esvaziar o que a revisão já tinha para olhar.
+    const patch: Record<string, unknown> = {
+      last_seen_at: agora,
+      review_reason: input.motivo,
+    };
+    if (input.conversationId && !referencia?.conversation_id) {
+      patch.conversation_id = input.conversationId;
+    }
+    if (input.dealId && !referencia?.deal_id) {
+      patch.deal_id = input.dealId;
+    }
+
     // Alias ambíguo mantém o motivo dele — é mais específico que "sem telefone".
-    if (existente.row?.status === "ambiguous") {
+    if (referencia?.status === "ambiguous") {
       patch.review_reason = MOTIVO_AMBIGUO;
     }
 

@@ -398,3 +398,115 @@ describe('AC4 — identidade não confirmada é DADO gravado', () => {
     expect(r.marcado).toBe(false);
   });
 });
+
+// =============================================================================
+// BAIXA-9 (@qa, 25/09) — a corrida nao pode sobrescrever os ids da vencedora
+// =============================================================================
+
+describe('BAIXA-9 — corrida na marcacao', () => {
+  /**
+   * O falso abaixo simula a corrida REAL: no momento do insert, a linha ja
+   * existe (gravada pela entrega vencedora, com os ids DELA). A perdedora leva
+   * 23505, rele e cai no update.
+   *
+   * O defeito: o `patch` era montado ANTES, com `existente.row = null` — entao
+   * `!existente.row?.conversation_id` dava true e a perdedora SOBRESCREVIA
+   * `conversation_id`/`deal_id` da vencedora, contrariando o "ids so entram".
+   */
+  function clienteComCorrida(vencedora: Partial<Linha>) {
+    const { client, linhas } = criarClienteFalso();
+    const original = client.from(ALIAS_TABLE);
+    void original;
+
+    // A vencedora grava a linha no instante em que a perdedora tenta inserir.
+    let jaCorreu = false;
+    const base = criarClienteFalso();
+    const wrapped: AliasMapClient = {
+      from(table: string) {
+        const t = base.client.from(table);
+        return {
+          ...t,
+          insert(values: Record<string, unknown>) {
+            if (!jaCorreu) {
+              jaCorreu = true;
+              base.linhas.push({
+                id: 'alias-vencedora',
+                organization_id: ORG,
+                channel_id: CANAL,
+                alias: LID_BRUNO,
+                phone: null,
+                status: 'unresolved',
+                conflicting_phones: [],
+                conversation_id: null,
+                deal_id: null,
+                review_reason: null,
+                ...vencedora,
+              } as never);
+            }
+            return t.insert(values);
+          },
+        };
+      },
+    } as unknown as AliasMapClient;
+
+    void linhas;
+    return { client: wrapped, linhas: base.linhas };
+  }
+
+  it('a perdedora NAO sobrescreve conversation_id/deal_id da vencedora', async () => {
+    const { client, linhas } = clienteComCorrida({
+      conversation_id: 'conv-da-vencedora',
+      deal_id: 'deal-da-vencedora',
+      review_reason: MOTIVO_SEM_TELEFONE,
+    });
+
+    await marcarIdentidadeNaoConfirmada(client, {
+      ...base,
+      alias: LID_BRUNO,
+      motivo: MOTIVO_SEM_TELEFONE,
+      conversationId: 'conv-da-perdedora',
+      dealId: 'deal-da-perdedora',
+    });
+
+    expect(linhas).toHaveLength(1);
+    expect(linhas[0].conversation_id).toBe('conv-da-vencedora');
+    expect(linhas[0].deal_id).toBe('deal-da-vencedora');
+  });
+
+  it('se a vencedora gravou SEM ids, a perdedora preenche', async () => {
+    const { client, linhas } = clienteComCorrida({
+      conversation_id: null,
+      deal_id: null,
+    });
+
+    await marcarIdentidadeNaoConfirmada(client, {
+      ...base,
+      alias: LID_BRUNO,
+      motivo: MOTIVO_SEM_TELEFONE,
+      conversationId: 'conv-da-perdedora',
+      dealId: 'deal-da-perdedora',
+    });
+
+    expect(linhas[0].conversation_id).toBe('conv-da-perdedora');
+    expect(linhas[0].deal_id).toBe('deal-da-perdedora');
+  });
+
+  it('se a vencedora ja RESOLVEU o alias, a perdedora nao remarca', async () => {
+    const { client, linhas } = clienteComCorrida({
+      phone: TELEFONE,
+      status: 'resolved',
+    });
+
+    const r = await marcarIdentidadeNaoConfirmada(client, {
+      ...base,
+      alias: LID_BRUNO,
+      motivo: MOTIVO_SEM_TELEFONE,
+      conversationId: 'conv-da-perdedora',
+      dealId: 'deal-da-perdedora',
+    });
+
+    expect(r.marcado).toBe(false);
+    expect(linhas[0].status).toBe('resolved');
+    expect(linhas[0].review_reason).toBeNull();
+  });
+});
