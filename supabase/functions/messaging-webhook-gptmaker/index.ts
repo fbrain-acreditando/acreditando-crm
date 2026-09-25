@@ -41,7 +41,6 @@ import {
   getSecretFromRequest,
   timingSafeEqual,
   telefoneConfiavelDoPayload,
-  chatIdPorTelefone,
   type GptMakerPayload,
   type NormalizedEvent,
 } from "./parser.ts";
@@ -82,11 +81,23 @@ import {
   registrarAlias,
   resolverAlias,
   marcarIdentidadeNaoConfirmada,
-  MOTIVO_SEM_TELEFONE,
-  MOTIVO_AMBIGUO,
   type AliasMapClient,
 } from "./alias-map.ts";
-import { encontrarCardAberto, type DealGuardClient } from "./deal-guard.ts";
+import {
+  encontrarCardAberto,
+  marcarCardComoAtualizado,
+  type DealGuardClient,
+} from "./deal-guard.ts";
+
+// 🔴 A DECISÃO de qual conversa/contato/card o evento pertence NÃO mora mais
+// aqui. Ela vive em `conversation-identity.ts`, puro e testável — porque este
+// arquivo está no `exclude` do `tsconfig.json` e um `throw` na fiação faria o
+// handler responder 200 sem inserir a mensagem (achado ALTA-1 do @qa, 25/09).
+// O que sobrou aqui embaixo são os ADAPTADORES: cada porta ligada ao Supabase.
+import {
+  garantirIdentidadeDaConversa,
+  type ConversationPorts,
+} from "./conversation-identity.ts";
 
 // =============================================================================
 // TYPES
@@ -894,6 +905,12 @@ async function findConversation(
 /**
  * Garante conversa + contato (+ deal, se houver routing rule).
  *
+ * 📌 **Aqui só moram os ADAPTADORES.** A decisão — resolver o `@lid`, achar ou
+ * criar a conversa, marcar identidade não confirmada, apontar a conversa antiga
+ * — vive em `conversation-identity.ts` e tem teste (`conversation-identity.test.ts`).
+ * Foi para lá justamente porque ESTE arquivo não é checado pelo `tsc` e não era
+ * coberto por teste nenhum (achado ALTA-1 do @qa).
+ *
  * ⚠️ **Precisa aguentar corrida.** O GPT Maker dispara `onNewMessage` e
  * `onFirstInteraction` quase juntos (observado: 137 ms de diferença) para o
  * mesmo contato novo. As duas entregas chegam concorrentes, as duas não acham
@@ -907,143 +924,176 @@ async function ensureConversation(
   channel: ChannelRow,
   event: NormalizedEvent
 ): Promise<{ conversationId: string; contactId: string | null }> {
-  // ---------------------------------------------------------------------------
-  // `@lid` → telefone, ANTES de procurar conversa e contato (story 2.56, AC2)
-  // ---------------------------------------------------------------------------
-  // Quando o alias já é conhecido, a identidade desta conversa é o TELEFONE: a
-  // mensagem entra na conversa que já existe para ele, nenhum contato novo nasce
-  // e nenhum card novo é criado. Se ainda não houver conversa para esse telefone,
-  // criamos uma **chaveada pelo telefone**, não pelo lid.
-  //
-  // 🔴 Só `status = 'resolved'` chega aqui. Lid nunca visto com telefone, ou lid
-  // ambíguo, devolvem `null` e o evento segue pelo caminho de hoje. Na dúvida,
-  // NÃO casar — juntar duas pessoas diferentes é pior que um card a mais.
-  let chatId = event.chatId!;
-  let eventoEfetivo = event;
-  let aliasResolvido = false;
+  const chatIdOriginal = event.chatId!;
 
-  if (event.lid) {
-    const lookup = await resolverAlias(
-      supabase as unknown as AliasMapClient,
-      { channelId: channel.id, alias: event.lid },
-      (msg) => console.warn(msg)
-    );
+  const ports: ConversationPorts = {
+    log: (msg) => console.log(msg),
 
-    if (lookup.phone) {
-      const chatIdDoTelefone = chatIdPorTelefone(event.chatId, lookup.phone);
-      if (chatIdDoTelefone) {
-        console.log(
-          `[GPTMaker] alias "${event.lid}" resolvido → ${lookup.phone}; conversa chaveada por telefone (${chatIdDoTelefone})`
+    resolverAlias: (alias) =>
+      resolverAlias(
+        supabase as unknown as AliasMapClient,
+        { channelId: channel.id, alias },
+        (msg) => console.warn(msg)
+      ).then((r) => ({ phone: r.phone, status: r.status })),
+
+    // ⚠️ A porta ABSORVE o erro: `findConversation` lança, e um throw aqui
+    // derrubaria a decisão inteira — com o handler respondendo 200 e a mensagem
+    // nunca sendo inserida. Não achar a conversa faz criar outra (aborrecimento);
+    // estourar faz sumir mensagem (a lição da 2.53).
+    acharConversa: async (chatId) => {
+      try {
+        return await findConversation(supabase, channel.id, chatId);
+      } catch (e) {
+        console.error(
+          `[GPTMaker] Falha ao buscar conversa ${chatId} (seguindo sem ela):`,
+          e instanceof Error ? e.message : e
         );
-        chatId = chatIdDoTelefone;
-        eventoEfetivo = { ...event, chatId: chatIdDoTelefone, contactPhone: lookup.phone };
-        aliasResolvido = true;
+        return null;
       }
-    }
-  }
+    },
 
-  const existing = await findConversation(supabase, channel.id, chatId);
-  if (existing) return existing;
+    resolverContato: (input) =>
+      findOrCreateContact(supabase, channel, {
+        ...event,
+        contactPhone: input.phone,
+        contactName: input.nome,
+      }),
 
-  // A conversa não existe ⇒ é AQUI que o card espelho nasceria. Se o lid não
-  // resolveu, a marcação de identidade não confirmada acompanha a criação
-  // (D2 = B — o card nasce, mas à vista).
-  const precisaMarcar = !!event.lid && !aliasResolvido;
+    criarConversa: async (input) => {
+      const { data: newConv, error } = await supabase
+        .from("messaging_conversations")
+        .insert({
+          organization_id: channel.organization_id,
+          channel_id: channel.id,
+          business_unit_id: channel.business_unit_id,
+          external_contact_id: input.chatId,
+          external_contact_name: input.nome ?? input.phone ?? input.chatId,
+          contact_id: input.contactId,
+          status: "open",
+          priority: "normal",
+          metadata: {
+            gptmaker_chat_id: input.chatId,
+            gptmaker_phone: input.phone,
+            // O lid fica gravado mesmo quando o alias resolveu: é o rastro de
+            // que esta conversa já foi identificada pelo número oculto.
+            ...(input.lid ? { gptmaker_lid: input.lid } : {}),
+            ...(input.identidadeNaoConfirmada ? { identidade_nao_confirmada: true } : {}),
+            source: "gptmaker",
+            // Defesa em profundidade: mesmo que alguém dispare o processamento
+            // da IA do CRM manualmente, ela pula esta conversa.
+            ai_paused: true,
+          },
+        })
+        .select("id")
+        .single();
 
-  const contactId = await findOrCreateContact(supabase, channel, eventoEfetivo);
-
-  const { data: newConv, error: convCreateErr } = await supabase
-    .from("messaging_conversations")
-    .insert({
-      organization_id: channel.organization_id,
-      channel_id: channel.id,
-      business_unit_id: channel.business_unit_id,
-      external_contact_id: chatId,
-      external_contact_name: eventoEfetivo.contactName ?? eventoEfetivo.contactPhone ?? chatId,
-      contact_id: contactId,
-      status: "open",
-      priority: "normal",
-      metadata: {
-        gptmaker_chat_id: chatId,
-        gptmaker_phone: eventoEfetivo.contactPhone,
-        // O lid fica gravado mesmo quando o alias resolveu: é o rastro de que
-        // esta conversa já foi identificada pelo número oculto.
-        ...(eventoEfetivo.lid ? { gptmaker_lid: eventoEfetivo.lid } : {}),
-        ...(precisaMarcar ? { identidade_nao_confirmada: true } : {}),
-        source: "gptmaker",
-        // Defesa em profundidade: mesmo que alguém dispare o processamento da IA
-        // do CRM manualmente, ela pula esta conversa (agent.service.ts checa isto).
-        ai_paused: true,
-      },
-    })
-    .select("id")
-    .single();
-
-  if (convCreateErr) {
-    // Perdemos a corrida para outra entrega do mesmo contato: relê e segue.
-    if (isDuplicateError(convCreateErr)) {
-      const raced = await findConversation(supabase, channel.id, chatId);
-      if (raced) {
-        console.log(`[GPTMaker] Conversa criada em paralelo, reusando: ${raced.conversationId}`);
-        return raced;
+      if (error) {
+        // Perdemos a corrida para outra entrega do mesmo contato.
+        if (isDuplicateError(error)) return { corrida: true as const };
+        return { erro: toError("Falha ao criar conversa", error).message };
       }
-    }
-    throw toError("Falha ao criar conversa", convCreateErr);
-  }
 
-  const conversationId = newConv.id;
+      return { conversationId: newConv.id as string };
+    },
 
-  // Deal automático conforme a "Entrada de Leads" configurada no canal.
-  let dealId: string | null = null;
-  if (contactId) {
-    const routingRule = await getLeadRoutingRule(supabase, channel.id);
-    if (routingRule) {
-      dealId = await autoCreateDeal(supabase, {
+    regraDeEntrada: () => getLeadRoutingRule(supabase, channel.id),
+
+    garantirCard: (input) =>
+      autoCreateDeal(supabase, {
         organizationId: channel.organization_id,
-        contactId,
-        boardId: routingRule.boardId,
-        stageId: routingRule.stageId,
-        conversationId,
-        contactName: eventoEfetivo.contactName ?? eventoEfetivo.contactPhone ?? chatId,
-      });
-    }
-  }
+        contactId: input.contactId,
+        boardId: input.boardId,
+        stageId: input.stageId,
+        conversationId: input.conversationId,
+        contactName: input.titulo,
+      }),
 
-  // ---------------------------------------------------------------------------
-  // IDENTIDADE NÃO CONFIRMADA — dado gravado, nunca rótulo de tela (AC4)
-  // ---------------------------------------------------------------------------
-  // D2 = B: o card nasce (como hoje), mas MARCADO. O que a story elimina é a
-  // duplicata **silenciosa** — o caso Bruno continuaria gerando dois cards, só
-  // que agora com o motivo, o lid, a conversa e o card registrados no banco. A
-  // story 2.57 põe a tela em cima disso; até lá, é consultável por SQL.
-  //
-  // ⚠️ **Nada acontece sozinho.** Nenhum merge, nenhum delete, nenhum card
-  // movido — nem aqui, nem em lugar nenhum desta story.
-  //
-  // 📌 Só o caminho de CRIAÇÃO marca. Conversa `@lid` que já existia antes desta
-  // story não é tocada (D3 = C, não mexer no passado).
-  if (precisaMarcar && event.lid) {
-    const lookup = await resolverAlias(
-      supabase as unknown as AliasMapClient,
-      { channelId: channel.id, alias: event.lid },
-      (msg) => console.warn(msg)
-    );
+    marcarIdentidade: async (input) => {
+      await marcarIdentidadeNaoConfirmada(
+        supabase as unknown as AliasMapClient,
+        {
+          organizationId: channel.organization_id,
+          channelId: channel.id,
+          alias: input.alias,
+          motivo: input.motivo,
+          conversationId: input.conversationId,
+          dealId: input.dealId,
+        },
+        (msg) => console.log(msg)
+      );
+    },
 
-    await marcarIdentidadeNaoConfirmada(
-      supabase as unknown as AliasMapClient,
-      {
-        organizationId: channel.organization_id,
-        channelId: channel.id,
-        alias: event.lid,
-        motivo: lookup.status === "ambiguous" ? MOTIVO_AMBIGUO : MOTIVO_SEM_TELEFONE,
-        conversationId,
-        dealId,
-      },
-      (msg) => console.log(msg)
+    marcarSucessao: (antiga, nova) => marcarSucessaoDaConversa(supabase, antiga, nova),
+  };
+
+  const resultado = await garantirIdentidadeDaConversa(ports, {
+    chatId: chatIdOriginal,
+    lid: event.lid,
+    contactName: event.contactName,
+    contactPhone: event.contactPhone,
+  });
+
+  if (!resultado.conversationId) {
+    // A decisão nunca lança; quem lança é este chamador, de propósito. O handler
+    // grava o erro em `messaging_webhook_events` e o payload cru fica no banco
+    // para reprocessar — melhor que seguir e inserir mensagem sem conversa.
+    throw new Error(
+      `Não foi possível garantir a conversa do chat ${resultado.chatIdUsado}`
     );
   }
 
-  return { conversationId, contactId };
+  return { conversationId: resultado.conversationId, contactId: resultado.contactId };
+}
+
+/**
+ * Deixa o ponteiro `sucedida_por` na conversa antiga do lid — achado MÉDIA-2.
+ *
+ * Quando o alias resolve, a conversa passa a ser a do telefone. Medido em 23/09:
+ * **93 dos 94 lids resolvidos não têm gêmea**, ou seja, o caso COMUM é nascer
+ * uma conversa nova e a `@lid` **emudecer** — sem nada, em lugar nenhum,
+ * apontando para onde a conversa continuou.
+ *
+ * Isto não move nem apaga nada (D3 = não mexer no passado): só acrescenta o
+ * ponteiro no metadata. Falhar aqui não desfaz nada.
+ */
+async function marcarSucessaoDaConversa(
+  supabase: ReturnType<typeof createClient>,
+  conversationIdAntiga: string,
+  conversationIdNova: string
+): Promise<void> {
+  try {
+    const { data: conv, error: readErr } = await supabase
+      .from("messaging_conversations")
+      .select("metadata")
+      .eq("id", conversationIdAntiga)
+      .maybeSingle();
+
+    if (readErr) {
+      console.error("[GPTMaker] Falha ao ler metadata da conversa antiga:", readErr);
+      return;
+    }
+
+    const metadata = (conv?.metadata as Record<string, unknown>) || {};
+    // Idempotente e sem reescrever histórico: o primeiro ponteiro fica.
+    if (metadata.sucedida_por === conversationIdNova) return;
+
+    const { error: updErr } = await supabase
+      .from("messaging_conversations")
+      .update({
+        metadata: {
+          ...metadata,
+          sucedida_por: conversationIdNova,
+          sucedida_em: new Date().toISOString(),
+        },
+      })
+      .eq("id", conversationIdAntiga);
+
+    if (updErr) {
+      console.error("[GPTMaker] Falha ao gravar `sucedida_por` (não fatal):", updErr);
+    }
+  } catch (e) {
+    console.error("[GPTMaker] Erro inesperado ao marcar sucessão (não fatal):", e);
+  }
 }
 
 /**
@@ -1150,6 +1200,14 @@ async function autoCreateDeal(
         `[GPTMaker] Card já aberto para o contato ${params.contactId} no quadro ${params.boardId} — criação evitada, reusando deal ${guarda.dealId} (estágio ${guarda.stageId})`
       );
       await vincularConversaAoDeal(supabase, params.conversationId, guarda.dealId, false);
+      // D5 (Filipe, 25/09): card reusado precisa DAR SINAL. Carimba
+      // `updated_at` para ele subir nas listas ordenadas por atualização —
+      // sem mudar de coluna e sem criar atividade.
+      await marcarCardComoAtualizado(
+        supabase as unknown as DealGuardClient,
+        guarda.dealId,
+        (msg) => console.warn(msg)
+      );
       return guarda.dealId;
     }
 
