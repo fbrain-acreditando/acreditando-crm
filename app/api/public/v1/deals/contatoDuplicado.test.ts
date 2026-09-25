@@ -354,3 +354,47 @@ describe('AC7 teste 10 — dois contatos com o mesmo telefone', () => {
     expect(contatoEscolhido).toBe('33333333-3333-4333-8333-333333333333');
   });
 });
+
+describe('MEDIA-5 — e-mail vence telefone, e nao em silencio', () => {
+  const PAYLOAD_EMAIL_E_FONE = {
+    title: 'Lead da LP',
+    board_id: BOARD_ID,
+    stage_id: STAGE_ID,
+    contact: { name: 'Maria Aparecida Silva', email: 'maria@exemplo.com', phone: TELEFONE },
+  };
+
+  it('contato que casa por E-MAIL vence o mais velho que casa por telefone', async () => {
+    contatos = [
+      // Mais velho, casa so por telefone — antes ganhava so por ser antigo.
+      { ...CONTATO_ANTIGO, organization_id: ORG_ID, email: null },
+      // Mais novo, casa por e-mail — e-mail e a chave mais forte.
+      { ...CONTATO_NOVO, organization_id: ORG_ID, email: 'maria@exemplo.com', phone: null },
+    ];
+
+    const res = await post(PAYLOAD_EMAIL_E_FONE);
+
+    expect(res.status).toBe(201);
+    expect(contatoEscolhido).toBe(CONTATO_NOVO.id);
+  });
+
+  it('sem ninguem por e-mail, cai para o telefone', async () => {
+    contatos = [{ ...CONTATO_ANTIGO, organization_id: ORG_ID, email: null }];
+
+    const res = await post(PAYLOAD_EMAIL_E_FONE);
+
+    expect(res.status).toBe(201);
+    expect(contatoEscolhido).toBe(CONTATO_ANTIGO.id);
+  });
+
+  it('dois contatos com o MESMO e-mail tambem nao estouram', async () => {
+    contatos = [
+      { ...CONTATO_NOVO, organization_id: ORG_ID, email: 'maria@exemplo.com', phone: null },
+      { ...CONTATO_ANTIGO, organization_id: ORG_ID, email: 'maria@exemplo.com', phone: null },
+    ];
+
+    const res = await post(PAYLOAD_EMAIL_E_FONE);
+
+    expect(res.status).toBe(201);
+    expect(contatoEscolhido).toBe(CONTATO_ANTIGO.id);
+  });
+});
