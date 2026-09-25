@@ -151,12 +151,27 @@ async function upsertContactForDeal(opts: {
     .from('contacts')
     .select('id')
     .eq('organization_id', opts.organizationId)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    // Contato já mesclado é registro morto — escrever nele some com o lead da
+    // vista sem erro nenhum aparecer. Mesma correção da story 2.56 em
+    // `find_or_create_contact`.
+    .is('merged_into_id', null);
   if (email && phone) lookup = lookup.or(`email.eq.${email},phone.eq.${phone}`);
   else if (email) lookup = lookup.eq('email', email);
   else lookup = lookup.eq('phone', phone);
 
-  const existing = await lookup.maybeSingle();
+  // ⚠️ Era `.maybeSingle()` — e `.maybeSingle()` ESTOURA (PGRST116) quando a
+  // busca acha mais de uma linha. Dois contatos com o mesmo telefone são estado
+  // POSSÍVEL neste CRM (a feature de dedup + merge existe exatamente por isso), e
+  // a story 2.56 aumenta a chance de eles conviverem. Resultado: a rota pública
+  // devolvia erro 500 num cenário legítimo, e o lead da landing page se perdia.
+  //
+  // O critério de desempate é o mesmo de `find_or_create_contact`: o mais antigo
+  // vivo. Story 2.56, AC7 item 10.
+  const existing = await lookup
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
   if (existing.error) throw existing.error;
 
   const now = new Date().toISOString();
