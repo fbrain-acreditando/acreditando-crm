@@ -12,8 +12,9 @@
 ### Como retomar
 
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o defeito
-> esta PROVADO, os 2 cards do Bruno ja foram JUNTADOS (secao 5) e a story 2.56 esta escrita —
-> falta o @po validar, as 3 decisoes do Filipe e o reparo dos outros 41 cards-espelho."*
+> esta PROVADO, os cards do Bruno foram juntados (secao 5) e a **2.56 esta EM PRODUCAO desde 26/09**
+> (v15, secao 10). Falta: ver o primeiro `@lid` real passar pelo caminho novo, push/PR (@devops),
+> e as 4 decisoes da 2.58."*
 
 ### 0. De onde veio
 
@@ -193,6 +194,59 @@ sozinho. ⚠️ A 2.58 esta **sem numeros de volume**: o token venceu no meio e 
 vez de inventar.
 
 
+### 10. 🚀 26/09 — 2.56 EM PRODUCAO (gate PASS, deploy autorizado pelo Filipe)
+
+**Gate rodada 3 = 🟢 PASS** (condicionado ao read-back). O @qa reescreveu o PROPRIO teste do furo:
+6 casos, todos passando — as 4 portas acessorias explodindo mantem o `conversationId`, a conversa
+reusada mantem `'conv-ANTIGA'`, e o **controle negativo** (explodir ANTES da criacao ⇒ `null`) tambem.
+Furou 3 testes por mutacao (8 · 2 · 2 quebras). `precheck:fast` **exit 0 · 1.103 testes** · **o 8c
+RODOU** (provado por mutacao: falhou contra o banco) e os 3 uuids terminais batem com producao.
+
+🪤 **Achado PRE-EXISTENTE que o @qa isolou (e NAO e desta story):** `echo-match.ts` (da 2.53) **nao tem
+try/catch** e roda ANTES do insert — rejeicao de rede do fetch do Deno propaga ⇒ 200 sem mensagem.
+Atinge so outbound com `externalMessageId` real. **Candidata a story propria:** envolver a chamada e,
+na duvida, **inserir** (o proprio comentario do arquivo ja diz que duplicar balao incomoda e engolir
+mensagem apaga historico).
+
+#### Sequencia do deploy (nesta ordem, com leitura de volta em cada passo)
+
+| Passo | Resultado REAL lido de volta |
+|---|---|
+| 1. Migration do mapa de apelidos | tabela `messaging_contact_aliases` criada · **4 indices · 1 policy** · 0 linhas |
+| 2. Migration do contato mesclado | `find_or_create_contact` com `merged_into_id IS NULL` · **1 unica versao** · advisory lock preservado |
+| 3. `functions deploy … --no-verify-jwt` | **v14 → v15 ACTIVE**, `verify_jwt: false` **preservado** |
+| 4. Read-back de trafego | ver abaixo |
+
+#### ✅ AC6 — parte provada (26/09 22:46 UTC)
+
+Teste com mensagem REAL do celular do Filipe (`+5512997534278`, texto "teste"):
+evento `onNewMessage` **sem erro** · **1 mensagem inserida** · contato **Filipe Costa** ja existente ·
+**conversa reusada** (1 unica conversa para o numero) · **nenhum** contato/conversa/card novo.
+
+**Controle negativo do volume — os totais nao se mexeram:**
+
+| | Antes | Depois |
+|---|---|---|
+| Contatos | 1.827 | **1.827** |
+| Conversas | 1.729 | **1.729** |
+| Cards | 1.288 | **1.288** |
+| Contatos com nome `@lid` | 35 | **35** |
+| Eventos com erro | 0 | **0** |
+
+⚠️ **O que AINDA nao foi exercitado:** o caminho do `@lid` — depende de um lead real chegar com numero
+oculto, e isso nao da para forcar. Ficou um monitor lendo o banco a cada 45 s (eventos, erros,
+mensagens novas e linhas no mapa de apelidos).
+
+📌 **Foto do problema no dia do deploy:** **155 conversas `@lid`** (eram 143 em 23/09) — o defeito
+seguiu produzindo durante a correcao. Daqui pra frente esta estancado; os 41 cards antigos ficam
+como estao (D3).
+
+🪤 **A trava do `sql-ro.mjs` barra consulta legitima por causa do NOME do objeto:** `find_or_create_contact`
+tem "create" dentro, `pg_advisory_xact_lock` tem "lock", e ate um alias `conversas_do_filipe` tem "do".
+**Nao contornar a trava** — reescrever a consulta (ex.: `proname like 'find_or_%contact'`, `prosrc like
+'%advisory%'`). Errar para o lado de bloquear e o lado certo.
+
+
 ### 7. ⏭️ Pendencias — estado em 23/09
 
 - [x] ✅ **Cards do Bruno juntados** (ver secao 5). ⚠️ **Avisar a Fernanda:** o card que ficou e o
@@ -200,10 +254,13 @@ vez de inventar.
       do quadro. A sessao dele esta marcada para **29/10**.
 - [x] ✅ **Story 2.56 escrita, validada (@po GO 8/10) e com as 4 decisoes fechadas** — ver secao 8.
 - [x] ✅ **2.56 implementada** — 12 commits locais, precheck exit 0 (1.102 testes). Ver secao 9.
-- [ ] 🟠 **Rodada 3 do gate (@qa)** — confirmar que o ALTA-1b fechou de verdade.
-- [ ] 🔴 **AC6 continua NAO PROVADO** — exige deploy. Sequencia: token novo → aplicar as 2 migrations →
-      `supabase functions deploy messaging-webhook-gptmaker --project-ref jmjhtprnxjffaqhdzfmc --no-verify-jwt`
-      → rodar as **6 consultas de read-back** que ja estao escritas na story. **O CI nao publica edge function.**
+- [x] ✅ **Gate rodada 3 = PASS** e **DEPLOY FEITO em 26/09** — edge function **v15 ACTIVE**, as 2
+      migrations aplicadas, caminho normal provado com mensagem real. Ver secao 10.
+- [ ] 🟠 **AC6 so metade provado** — falta o caminho `@lid` (depende de lead real com numero oculto).
+      Conferir: conversa reusada · contato com telefone · 1 card · `sucedida_por` na conversa antiga ·
+      ou, sem telefone no payload, linha `unresolved` em `messaging_contact_aliases` com motivo.
+- [ ] 🧭 **Story nova (candidata):** `echo-match.ts` sem try/catch roda antes do insert — mesmo
+      200-sem-mensagem, mas e defeito da 2.53. Na duvida, INSERIR.
 - [ ] 🔀 **Push e PR sao do @devops** — nada foi pushado.
 - [ ] 📋 **2.57** — interface da fila de revisao (fatiada da 2.56). Ainda nao escrita.
 - [ ] 📋 **2.58** — card com mensagem nao lida sobe na coluna. Escrita, **Draft**, com **4 decisoes
