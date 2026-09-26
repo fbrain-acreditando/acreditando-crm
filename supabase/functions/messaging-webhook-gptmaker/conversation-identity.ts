@@ -127,39 +127,69 @@ function titulo(event: IdentityEvent, chatId: string): string {
 }
 
 /**
+ * O que já foi conquistado até o ponto em que a execução chegou.
+ *
+ * 🔴 **Existe por causa de um furo real** — achado ALTA-1b do @qa (26/09), provado
+ * com teste: o `catch` de segunda camada montava um resultado **do zero** e, se
+ * uma porta ACESSÓRIA explodisse **depois** da conversa já existir no banco
+ * (`regraDeEntrada`, `garantirCard`, `marcarIdentidade`, `marcarSucessao`), o
+ * `conversationId` recém-criado era **descartado**. E `ensureConversation`
+ * **lança** quando ele vem `null` ⇒ handler responde 200 ⇒ **mensagem nunca
+ * inserida**. Exatamente o desfecho que este módulo foi criado para impedir.
+ *
+ * Era latente (nenhum adaptador de hoje lança), mas "impossível por construção"
+ * não pode depender de os adaptadores se comportarem. Agora o progresso vive
+ * aqui, fora do `try`, e o `catch` **devolve o que já foi conquistado**.
+ */
+interface ProgressoParcial {
+  conversationId: string | null;
+  contactId: string | null;
+  dealId: string | null;
+  chatIdUsado: string;
+  aliasResolvido: boolean;
+  reusouConversa: boolean;
+  identidadeNaoConfirmada: boolean;
+}
+
+/**
  * Resolve identidade, garante conversa/contato/card e devolve o que aconteceu.
  *
- * **Nunca lança.**
+ * **Nunca lança** — e, quando algo quebra no meio, devolve o que **já** existe no
+ * banco em vez de zerar o resultado.
  */
 export async function garantirIdentidadeDaConversa(
   ports: ConversationPorts,
   event: IdentityEvent
 ): Promise<IdentityOutcome> {
+  const progresso: ProgressoParcial = {
+    conversationId: null,
+    contactId: null,
+    dealId: null,
+    chatIdUsado: event.chatId,
+    aliasResolvido: false,
+    reusouConversa: false,
+    identidadeNaoConfirmada: false,
+  };
+
   try {
-    return await decidir(ports, event);
+    return await decidir(ports, event, progresso);
   } catch (e) {
-    // Segunda camada. Se chegou aqui, alguma porta quebrou o contrato — o certo
-    // é o chamador seguir sem conversa, não o webhook morrer.
+    // Segunda camada. Alguma porta quebrou o contrato de não lançar.
     ports.log(
-      `[GPTMaker] identidade — erro inesperado (o evento segue): ${
-        e instanceof Error ? e.message : String(e)
-      }`
+      `[GPTMaker] identidade — erro inesperado após ${
+        progresso.conversationId ? `criar/achar a conversa ${progresso.conversationId}` : "nenhum passo"
+      } (o evento segue): ${e instanceof Error ? e.message : String(e)}`
     );
-    return {
-      conversationId: null,
-      contactId: null,
-      dealId: null,
-      chatIdUsado: event.chatId,
-      aliasResolvido: false,
-      reusouConversa: false,
-      identidadeNaoConfirmada: false,
-    };
+    // 🔴 Devolve o PROGRESSO, não um resultado zerado. Se a conversa já existe,
+    // a mensagem tem onde entrar — e é isso que impede engolir mensagem.
+    return { ...progresso };
   }
 }
 
 async function decidir(
   ports: ConversationPorts,
-  event: IdentityEvent
+  event: IdentityEvent,
+  progresso: ProgressoParcial
 ): Promise<IdentityOutcome> {
   // ---------------------------------------------------------------------------
   // 1. `@lid` → telefone, ANTES de procurar conversa e contato (AC2)
@@ -189,21 +219,24 @@ async function decidir(
   const precisaMarcar = !!event.lid && !aliasResolvido;
   const eventoEfetivo: IdentityEvent = { ...event, chatId, contactPhone: phone };
 
+  // Progresso: a chave efetiva já está decidida.
+  progresso.chatIdUsado = chatId;
+  progresso.aliasResolvido = aliasResolvido;
+
   // ---------------------------------------------------------------------------
   // 2. A conversa já existe?
   // ---------------------------------------------------------------------------
   const existente = await ports.acharConversa(chatId);
   if (existente) {
+    // 🔴 Registra ANTES de chamar a porta acessória: se `marcarSucessao` explodir,
+    // o `catch` ainda devolve a conversa que já existe.
+    progresso.conversationId = existente.conversationId;
+    progresso.contactId = existente.contactId;
+    progresso.reusouConversa = true;
+
     // Mesmo reusando, a conversa antiga do lid precisa do ponteiro (MÉDIA-2).
     await apontarConversaAntiga(ports, event, aliasResolvido, existente.conversationId);
-    return {
-      ...existente,
-      dealId: null,
-      chatIdUsado: chatId,
-      aliasResolvido,
-      reusouConversa: true,
-      identidadeNaoConfirmada: false,
-    };
+    return { ...progresso };
   }
 
   // ---------------------------------------------------------------------------
@@ -213,6 +246,7 @@ async function decidir(
     phone: eventoEfetivo.contactPhone,
     nome: eventoEfetivo.contactName,
   });
+  progresso.contactId = contactId;
 
   const criada = await ports.criarConversa({
     chatId,
@@ -229,42 +263,26 @@ async function decidir(
     const relida = await ports.acharConversa(chatId);
     if (relida) {
       ports.log(`[GPTMaker] Conversa criada em paralelo, reusando: ${relida.conversationId}`);
+      progresso.conversationId = relida.conversationId;
+      progresso.contactId = relida.contactId;
+      progresso.reusouConversa = true;
       await apontarConversaAntiga(ports, event, aliasResolvido, relida.conversationId);
-      return {
-        ...relida,
-        dealId: null,
-        chatIdUsado: chatId,
-        aliasResolvido,
-        reusouConversa: true,
-        identidadeNaoConfirmada: false,
-      };
+      return { ...progresso };
     }
     ports.log("[GPTMaker] Corrida na criação da conversa, mas a releitura não achou nada");
-    return {
-      conversationId: null,
-      contactId,
-      dealId: null,
-      chatIdUsado: chatId,
-      aliasResolvido,
-      reusouConversa: false,
-      identidadeNaoConfirmada: false,
-    };
+    return { ...progresso };
   }
 
   if ("erro" in criada) {
     ports.log(`[GPTMaker] Falha ao criar conversa: ${criada.erro}`);
-    return {
-      conversationId: null,
-      contactId,
-      dealId: null,
-      chatIdUsado: chatId,
-      aliasResolvido,
-      reusouConversa: false,
-      identidadeNaoConfirmada: false,
-    };
+    return { ...progresso };
   }
 
   const conversationId = criada.conversationId;
+  // 🔴 A conversa EXISTE no banco a partir daqui. Qualquer explosão adiante não
+  // pode mais fazer o chamador achar que não há conversa.
+  progresso.conversationId = conversationId;
+  progresso.identidadeNaoConfirmada = precisaMarcar;
 
   // ---------------------------------------------------------------------------
   // 4. Card — passa pela guarda de card aberto do AC3
@@ -280,6 +298,7 @@ async function decidir(
         conversationId,
         titulo: titulo(eventoEfetivo, chatId),
       });
+      progresso.dealId = dealId;
     }
   }
 
@@ -297,15 +316,7 @@ async function decidir(
 
   await apontarConversaAntiga(ports, event, aliasResolvido, conversationId);
 
-  return {
-    conversationId,
-    contactId,
-    dealId,
-    chatIdUsado: chatId,
-    aliasResolvido,
-    reusouConversa: false,
-    identidadeNaoConfirmada: precisaMarcar,
-  };
+  return { ...progresso };
 }
 
 /**

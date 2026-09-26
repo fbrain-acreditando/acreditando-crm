@@ -333,6 +333,78 @@ describe('AC5 — a decisão NUNCA lança', () => {
     });
   }
 
+  /**
+   * 🔴 ACHADO ALTA-1b do @qa (26/09) — este é o teste que faltava.
+   *
+   * `resolves.toBeDefined()` acima **não prova o que importa**: o objeto sempre
+   * volta definido. O desfecho proibido é mais sutil — a conversa **já existe no
+   * banco** e o resultado vem com `conversationId: null`, porque o `catch` de
+   * segunda camada montava o retorno do zero. E `ensureConversation` **lança**
+   * quando isso acontece ⇒ handler responde 200 ⇒ **mensagem nunca inserida**.
+   *
+   * O @qa provou o furo com um teste temporário: `regraDeEntrada`, `garantirCard`
+   * e `marcarIdentidade` explodindo devolviam `null` no lugar de `'conv-nova-1'`.
+   * Estes testes são a versão permanente dele — um por porta ACESSÓRIA, isto é,
+   * as que rodam **depois** de a conversa existir.
+   */
+  const portasAcessorias: Array<keyof ConversationPorts> = [
+    'regraDeEntrada',
+    'garantirCard',
+    'marcarIdentidade',
+    'marcarSucessao',
+  ];
+
+  for (const porta of portasAcessorias) {
+    it(`porta acessória "${porta}" explodindo PRESERVA a conversa já criada`, async () => {
+      const { ports } = montar({ explode: porta });
+
+      const r = await garantirIdentidadeDaConversa(ports, EVENTO_LID);
+
+      // A conversa foi criada ANTES da explosão. Devolver `null` aqui faz o
+      // chamador lançar e a mensagem nunca ser inserida.
+      expect(r.conversationId).toBe('conv-nova-1');
+      expect(r.contactId).toBe('contato-1');
+      expect(r.chatIdUsado).toBe(CHAT_LID);
+    });
+  }
+
+  it('`marcarSucessao` explodindo preserva a conversa REUSADA por telefone', async () => {
+    const { ports } = montar({
+      explode: 'marcarSucessao',
+      alias: { phone: TELEFONE, status: 'resolved' },
+      conversas: {
+        [CHAT_LID]: { conversationId: 'conv-antiga', contactId: 'contato-1' },
+        [CHAT_TEL]: { conversationId: 'conv-telefone', contactId: 'contato-1' },
+      },
+    });
+
+    const r = await garantirIdentidadeDaConversa(ports, EVENTO_LID);
+
+    expect(r.conversationId).toBe('conv-telefone');
+    expect(r.reusouConversa).toBe(true);
+  });
+
+  it('`garantirCard` explodindo preserva também a marcação de identidade', async () => {
+    const { ports } = montar({ explode: 'garantirCard' });
+
+    const r = await garantirIdentidadeDaConversa(ports, EVENTO_LID);
+
+    expect(r.conversationId).toBe('conv-nova-1');
+    // A conversa nasceu com a etiqueta no metadata; o resultado tem de dizer isso.
+    expect(r.identidadeNaoConfirmada).toBe(true);
+    // O card não saiu — e isso é aceitável: card a menos, mensagem nenhuma perdida.
+    expect(r.dealId).toBeNull();
+  });
+
+  it('porta que explode ANTES da conversa existir devolve null — e aí é correto', async () => {
+    // `resolverContato` roda antes da criação: não há conversa para preservar.
+    const { ports } = montar({ explode: 'resolverContato' });
+
+    const r = await garantirIdentidadeDaConversa(ports, EVENTO_LID);
+
+    expect(r.conversationId).toBeNull();
+  });
+
   it('corrida na criação: relê e segue com a conversa da vencedora', async () => {
     const cen = montar({ criarFalha: 'corrida' });
     // A vencedora gravou a conversa enquanto perdíamos a corrida.
