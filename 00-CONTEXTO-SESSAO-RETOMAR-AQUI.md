@@ -247,6 +247,38 @@ tem "create" dentro, `pg_advisory_xact_lock` tem "lock", e ate um alias `convers
 '%advisory%'`). Errar para o lado de bloquear e o lado certo.
 
 
+### 11. 🕳️ 26/09 — ACHADO NOVO: o quadro so carrega 1.000 cards, e 289 ficam fora da tela
+
+**Como apareceu:** o Filipe mandou o "oi" de teste e foi procurar o card — **nao achou**. O card
+EXISTE (`7e7ec350`, "Filipe Costa - WhatsApp", coluna Profissional, criado 03/08), mas esta na
+**posicao 1.210** da ordenacao. E a tela pede so os 1.000 primeiros.
+
+`lib/supabase/deals.ts:289-302`: `.is('deleted_at', null).order('created_at', {ascending:false}).limit(1000)`.
+Hoje ha **1.288 cards ativos** ⇒ **289 nunca chegam ao navegador**. Nao e dado perdido: e a tela que
+nunca os pede. **Corte por data de CRIACAO**, entao some sempre o mais antigo.
+
+| Medida (26/09) | Valor |
+|---|---|
+| Cards que a tela nao carrega | **289** (subiu 1 durante a propria sessao) |
+| Em colunas vivas (fora de Perdido/Ganho/Clientes) | **68** |
+| **Com conversa nos ultimos 30 dias** | **84** |
+| Corte | tudo criado **antes de 10/08** |
+
+Por coluna: Perdido 205 · Aguardando retorno 34 · Apresentacao enviada 18 · Profissional 14 ·
+Ganho 8 · Clientes 7 · Projeto Social 2.
+
+🔑 **84 pessoas falaram no ultimo mes e o card delas nao aparece no quadro** — inclusive gente em
+"Perdido" que VOLTOU a falar, que e exatamente o lead que se quer ver.
+
+📌 **Licao de metodo:** o defeito e **invisivel em qualquer metrica agregada** — total de cards certo,
+nenhum dado perdido, zero erro em log. So aparece quando alguem procura UM card e nao acha. Foi o
+teste do deploy que o revelou, por acidente.
+
+⏭️ **Nao corrigido.** Candidata a story propria (paginar ou carregar por coluna, em vez de corte
+global). **Nao mexer na consulta do quadro sem story e sem gate.** Piora sozinho: cada card novo
+empurra um antigo para fora.
+
+
 ### 7. ⏭️ Pendencias — estado em 23/09
 
 - [x] ✅ **Cards do Bruno juntados** (ver secao 5). ⚠️ **Avisar a Fernanda:** o card que ficou e o
@@ -262,6 +294,8 @@ tem "create" dentro, `pg_advisory_xact_lock` tem "lock", e ate um alias `convers
 - [ ] 🧭 **Story nova (candidata):** `echo-match.ts` sem try/catch roda antes do insert — mesmo
       200-sem-mensagem, mas e defeito da 2.53. Na duvida, INSERIR.
 - [ ] 🔀 **Push e PR sao do @devops** — nada foi pushado.
+- [ ] 🔴 **289 cards fora da tela do quadro** (limite de 1.000) — **84 com conversa nos ultimos 30
+      dias**. Medido, NAO corrigido. Ver secao 11. Candidata a prioridade da proxima sessao.
 - [ ] 📋 **2.57** — interface da fila de revisao (fatiada da 2.56). Ainda nao escrita.
 - [ ] 📋 **2.58** — card com mensagem nao lida sobe na coluna. Escrita, **Draft**, com **4 decisoes
       abertas** (o que marca como lida · lido por usuario ou por org · todas as colunas ou so as ativas ·
