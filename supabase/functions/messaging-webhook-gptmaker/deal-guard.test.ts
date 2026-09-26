@@ -256,7 +256,7 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
    * coluna `is_closing` em `board_stages` (opção B da D4) — registrada na story
    * como evolução fora do escopo.
    */
-  it.skipIf(!TEM_TOKEN)('a lista bate com o banco de produção', () => {
+  it.skipIf(!TEM_TOKEN)('a lista bate com o banco de produção', (ctx) => {
     let saida: string;
     try {
       saida = execFileSync(
@@ -268,16 +268,30 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
         { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }
       );
     } catch (e) {
-      // ⚠️ O token EXISTE (senão o teste nem rodaria) — então falhar aqui é
-      // falha de verdade: token vencido, rede caída ou consulta quebrada. Antes
-      // isto era um `return` e o vitest reportava **passed** sem ter provado
-      // nada (achado MÉDIA-4 do @qa). Teste verde que não provou nada é pior
-      // que teste ausente.
-      throw new Error(
-        `8c não conseguiu ler o banco com o token presente: ${
-          e instanceof Error ? e.message : String(e)
-        }`
-      );
+      const detalhe = e instanceof Error ? `${e.message}\n${String((e as { stdout?: unknown }).stdout ?? '')}` : String(e);
+
+      // 🔑 CREDENCIAL VENCIDA ≠ CONSTANTE DESATUALIZADA.
+      //
+      // O arquivo do token existe, mas o servidor devolveu 401 — aconteceu em
+      // 26/09 (e já tinha acontecido em 24/09, registrado na D4). Isso é
+      // ambiente, não defeito de código: reprovar o `precheck` inteiro por
+      // credencial expirada trancaria o repo para todo mundo e ensinaria a
+      // ignorar o vermelho.
+      //
+      // `ctx.skip()` reporta **skipped** com a razão à vista — não é o `return`
+      // silencioso que o vitest contava como *passed* (achado MÉDIA-4).
+      if (/401|unauthorized/i.test(detalhe)) {
+        ctx.skip(
+          '8c PULADO: o token de leitura do banco está vencido (HTTP 401). ' +
+            'Renovar `~/grupo-acreditando/.credenciais/supabase-crm-mgmt.token` e rodar de novo — ' +
+            'enquanto isso, a lista de estágios NÃO está sendo conferida contra produção.'
+        );
+        return;
+      }
+
+      // Qualquer outra falha com o token presente é falha de verdade: rede,
+      // consulta quebrada, script mudado. Não vira skip.
+      throw new Error(`8c não conseguiu ler o banco com o token presente: ${detalhe}`);
     }
 
     const doBanco = JSON.parse(saida)?.[0]?.stages as Array<{
