@@ -132,15 +132,83 @@ precisa ser refeito por quem valida.**
   (a `crm-api-key` nao expira) — caminho alternativo util quando o management token cai.
 
 
+### 9. 🔨 25-26/09 — 2.56 implementada, 2 rodadas de gate e o furo que o @qa provou com codigo
+
+Branch **`feat/2.56-conversa-partida-em-dois-cards`** (saiu da `feat/2.53`, porque a 2.53 esta EM
+PRODUCAO e ainda nao foi mergeada). **12 commits locais, nada pushado, nada deployado, zero escrita
+em producao.** 20 arquivos, +4.800 linhas.
+
+| Rodada | @dev | @qa |
+|---|---|---|
+| 1 | 8 ACs implementados, 48 testes | 🟠 **CONCERNS** — 1 ALTA + 4 MEDIAS |
+| 2 | modulo puro `conversation-identity.ts`, 24 testes de fiacao | 🟠 **CONCERNS** — ALTA-1b |
+| 3 | `ProgressoParcial` fecha o ALTA-1b | ⏳ **rodada 3 do gate PENDENTE** |
+
+**Precheck conferido por mim (Orion), nao so pelos agentes:** `npm run precheck:fast` → **exit 0** ·
+**1.102 testes passaram, 6 pulados**.
+
+#### 🔑 O achado que justifica o gate inteiro
+
+O @qa **escreveu um teste temporario** e provou: quando uma porta acessoria (`regraDeEntrada`,
+`garantirCard`, `marcarIdentidade`, `marcarSucessao`) explodia **depois** da conversa ja criada, o
+`catch` externo **descartava o `conversationId`** e devolvia null ⇒ `ensureConversation` lanca ⇒
+handler responde **200 sem inserir a mensagem**. Era latente (nenhum adaptador lanca hoje), mas o
+modulo tinha sido escrito prometendo "impossivel por construcao". Corrigido com `ProgressoParcial`
+declarado **fora do try**, registrando cada conquista no momento em que vira fato no banco; o `catch`
+devolve o progresso. Os testes do @qa viraram permanentes, **um por porta**, com o controle negativo
+(explodir ANTES da criacao **deve** devolver null).
+
+🪤 Na refatoracao apareceu outro: `findConversation` **lancava** — o mesmo caminho de 200-sem-mensagem,
+agora absorvido. 📌 **Licao:** `expect(...).toBeDefined()` nao prova desfecho; afirmar o VALOR esperado
+(`toBe('conv-CRIADA')`) foi o que revelou o furo.
+
+#### Outros achados fechados
+
+`acharConversa` absorve erro (limite novo: falha transitoria de leitura pode **criar conversa
+duplicada** em vez de estourar — lado certo do erro) · rota publica: **e-mail vence telefone** (antes,
+2 contatos davam 500; virou escolha silenciosa do mais velho) · `briefing.service.ts` lia conversa com
+`.limit(1)` **sem `order`** — com o reuso, "varias conversas por card" vira rotina · corrida na
+marcacao nao sobrescreve mais os ids da vencedora · `sucedida_por`/`sucedida_em` na conversa antiga.
+
+🪤 **Teste que mentia de verde:** o 8c usava `return` dentro do `it()` sem token ⇒ vitest reportava
+**passed**. Virou `skipIf`, e a distincao que nasceu daí vale para o repo: **credencial vencida ≠
+constante desatualizada** — 401 pula com a razao a vista; qualquer outra falha com token presente
+quebra. ⚠️ Enquanto o token nao for renovado, **a guarda do 8c esta inativa** (ultima conferencia
+valida contra producao: 25/09).
+
+#### D5 reescrita — e virou story propria (2.58)
+
+O `updated_at` do card reusado **nao produz sinal no kanban**: `lib/supabase/deals.ts:301` ordena por
+`created_at desc`; so o cockpit (`DealCockpitClient.tsx:689`) ordena por `updatedAt`. O Filipe pediu
+outra coisa, maior: **card com mensagem nao lida sobe no topo da coluna, com icone vermelho, a nao
+lida mais antiga primeiro, e volta ao normal quando ela responde ou marca como lida.**
+⇒ `docs/stories/2.58.o-card-que-espera-resposta-sobe-na-coluna.story.md` (Draft, 4 decisoes abertas).
+
+🔑 **O que o levantamento da 2.58 revelou:** `messaging_conversations.unread_count` existe e e somado
+por trigger a cada inbound (`20260205100000:599-601`), **mas nada zera em outbound** — responder nao
+limpa. E `messaging_messages.read_at` **nao e "a atendente leu"**: e recibo do lead sobre mensagem
+NOSSA. Nao existe campo com o **instante da nao lida mais antiga**, que e o que a regra do Filipe
+exige. O quadro tambem nao assina mensagens no Realtime (`useRealtimeSync.ts:722-724`) ⇒ nao sobe
+sozinho. ⚠️ A 2.58 esta **sem numeros de volume**: o token venceu no meio e o @sm marcou como T0 em
+vez de inventar.
+
+
 ### 7. ⏭️ Pendencias — estado em 23/09
 
 - [x] ✅ **Cards do Bruno juntados** (ver secao 5). ⚠️ **Avisar a Fernanda:** o card que ficou e o
       **"T - Bruno Nascimento Motta"** (Avaliacao agendada), agora COM o telefone; o card vazio sumiu
       do quadro. A sessao dele esta marcada para **29/10**.
 - [x] ✅ **Story 2.56 escrita, validada (@po GO 8/10) e com as 4 decisoes fechadas** — ver secao 8.
-- [ ] 🟠 **2.56 pro @dev** — status **Ready**, sem bloqueio. Depois @qa, e o deploy da edge function
-      e **manual** (o CI nao publica). ⚠️ Vai precisar de **token novo do Supabase**.
+- [x] ✅ **2.56 implementada** — 12 commits locais, precheck exit 0 (1.102 testes). Ver secao 9.
+- [ ] 🟠 **Rodada 3 do gate (@qa)** — confirmar que o ALTA-1b fechou de verdade.
+- [ ] 🔴 **AC6 continua NAO PROVADO** — exige deploy. Sequencia: token novo → aplicar as 2 migrations →
+      `supabase functions deploy messaging-webhook-gptmaker --project-ref jmjhtprnxjffaqhdzfmc --no-verify-jwt`
+      → rodar as **6 consultas de read-back** que ja estao escritas na story. **O CI nao publica edge function.**
+- [ ] 🔀 **Push e PR sao do @devops** — nada foi pushado.
 - [ ] 📋 **2.57** — interface da fila de revisao (fatiada da 2.56). Ainda nao escrita.
+- [ ] 📋 **2.58** — card com mensagem nao lida sobe na coluna. Escrita, **Draft**, com **4 decisoes
+      abertas** (o que marca como lida · lido por usuario ou por org · todas as colunas ou so as ativas ·
+      onde mora o instante da nao lida mais antiga) + T0 de medicao que ficou sem token.
 - [x] 🗑️ **Os outros 41 cards-espelho:** decisao D3 = **nao mexer no passado**. Passivo aceito, nada apagado.
 - [x] 🔑 Token `supabase-crm-mgmt` **JA VENCEU** no meio da sessao (era de 1 dia). Alternativa que
       salvou a sessao: a **API publica do CRM** com a `crm-api-key`, que nao expira.
