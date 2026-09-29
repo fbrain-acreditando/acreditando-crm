@@ -1,0 +1,4 @@
+# Scripts Node (.mjs) sempre em LF, inclusive no checkout do Windows
+# (core.autocrlf=true). Em CRLF o Node falha ao importar o script de
+# backfill da 2.59 nos testes locais; no git e no CI eles já estão em LF.
+*.mjs text eol=lf
