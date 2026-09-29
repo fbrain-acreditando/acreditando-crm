@@ -126,7 +126,8 @@ export const TABELAS: Record<Exclude<ChaveResposta, 'ondeReside'>, Tabela> = {
     ['r_500_a', 'R$ 500 a R$ 1.000'],
     ['r_1_000_a', 'R$ 1.000 a R$ 2.000'],
     ['r_2_000_a', 'R$ 2.000 a R$ 3.000'],
-    ['acima', 'Acima de R$ 3.000'],
+    // L3 do QA: `acima` sozinho casaria "acima de R$ 1.000" e inventaria a faixa.
+    ['acima_de_r_3_000', 'Acima de R$ 3.000'],
   ],
 };
 

@@ -66,6 +66,13 @@ export const TITULO_DA_NOTA = 'Respostas do Formulário Meta';
 
 const ROTA = 'POST /api/public/v1/meta-form-leads';
 
+/**
+ * Onde fica a lista de TODOS os leadgens aplicados a um card (L2 do QA).
+ * Fora de `custom_fields` de propósito: não é campo que a Fernanda lê, e não
+ * exige campo novo (o AC1 fixa exatamente 6 chaves).
+ */
+export const CHAVE_LEADGENS = 'metaFormLeadgenIds';
+
 /** Folga para decidir se o contato devolvido pela função acabou de nascer. */
 const JANELA_CONTATO_NOVO_MS = 2 * 60 * 1000;
 
@@ -157,6 +164,24 @@ export function idDaNota(organizationId: string, leadgenId: string): string {
   return uuidDeterministico(`meta-form-nota:${organizationId}:${leadgenId}`);
 }
 
+/**
+ * Rótulo de cada campo como a Fernanda vê na tela (L4 do QA). Os 5 antigos são
+ * os rótulos lidos do banco em 28/09; os 6 novos, os da migration da 2.59.
+ */
+export const ROTULOS_DOS_CAMPOS: Record<string, string> = {
+  paraQuemE: 'Para quem é',
+  tipoDeLesao: 'Tipo de Lesão',
+  haQuantoTempo: 'Há quanto tempo',
+  jaFezReabilitacao: 'Já fez reabilitação',
+  ondeReside: 'Onde reside',
+  quandoPretendeIniciar: 'Quando pretende iniciar',
+  faixaDeInvestimentoMensal: 'Faixa de investimento mensal',
+  origemDoLead: 'Origem do lead',
+  metaLeadgenId: 'Meta · ID do envio',
+  metaCampanha: 'Meta · Campanha',
+  metaAnuncio: 'Meta · Anúncio',
+};
+
 /** Data/hora em pt-BR, fuso de São Paulo, para a nota. */
 function dataHoraBR(iso: string): string {
   try {
@@ -184,12 +209,15 @@ export function montarDescricaoDaNota(opts: {
   linhas.push(`Enviado em ${dataHoraBR(opts.enviadoEm)} pelo formulário instantâneo da Meta.`);
   linhas.push('');
   for (const r of opts.traduzido.respostasParaNota) {
-    linhas.push(`• ${r.pergunta} ${r.resposta}`);
+    const separador = r.pergunta.endsWith('?') ? ' ' : ': ';
+    linhas.push(`• ${r.pergunta}${separador}${r.resposta}`);
   }
   if (opts.camposJaPreenchidos.length > 0) {
     linhas.push('');
     linhas.push(
-      `Já estavam preenchidos no card e não foram alterados: ${opts.camposJaPreenchidos.join(', ')}.`
+      `Já estavam preenchidos no card e não foram alterados: ${opts.camposJaPreenchidos
+        .map((k) => ROTULOS_DOS_CAMPOS[k] ?? k)
+        .join(', ')}.`
     );
   }
   return linhas.join('\n');
@@ -276,7 +304,27 @@ async function buscarCardDoLeadgen(ctx: Contexto): Promise<{ id: string; contact
     .limit(1);
   if (error) throw new ErroDeEtapa('buscar_ja_processado', error);
   const linha = (data as Array<{ id: string; contact_id: string | null }> | null)?.[0];
-  return linha ?? null;
+  if (linha) return linha;
+
+  // L2 do QA: o 2º formulário do mesmo contato não cabe em `metaLeadgenId`
+  // (campo preenchido não é sobrescrito). Todo leadgen aplicado a um card fica
+  // na lista `ai_extracted.metaFormLeadgenIds` — é por ela que o reenvio do
+  // 2º envio também é reconhecido como "já processado".
+  const { data: d2, error: e2 } = await ctx.sb
+    .from('deals')
+    .select('id,contact_id')
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .filter(`ai_extracted->${CHAVE_LEADGENS}`, 'cs', JSON.stringify([ctx.leadgenId]))
+    .limit(1);
+  if (e2) throw new ErroDeEtapa('buscar_ja_processado', e2);
+  return (d2 as Array<{ id: string; contact_id: string | null }> | null)?.[0] ?? null;
+}
+
+/** Lista (sem repetição) dos leadgens já aplicados ao card, com o atual no fim. */
+function comLeadgen(ctx: Contexto, extraido: Record<string, unknown>): string[] {
+  const atuais = Array.isArray(extraido[CHAVE_LEADGENS]) ? (extraido[CHAVE_LEADGENS] as unknown[]).map(String) : [];
+  return atuais.includes(ctx.leadgenId) ? atuais : [...atuais, ctx.leadgenId];
 }
 
 /**
@@ -488,11 +536,17 @@ async function completarCard(ctx: Contexto, dealId: string) {
       gravados.push(chave);
     }
 
-    const patch: Record<string, unknown> = { updated_at: ctx.agoraIso };
-    if (gravados.length > 0) {
-      patch.custom_fields = proxFields;
-      patch.ai_extracted = { ...extraido, customFields: proxProv, customFieldsLastExtractedAt: ctx.agoraIso };
-    }
+    const patch: Record<string, unknown> = {
+      updated_at: ctx.agoraIso,
+      // Sempre: o leadgen deste envio fica rastreável no card mesmo que nenhum
+      // campo tenha entrado (L2 do QA).
+      ai_extracted: {
+        ...extraido,
+        ...(gravados.length > 0 ? { customFields: proxProv, customFieldsLastExtractedAt: ctx.agoraIso } : {}),
+        [CHAVE_LEADGENS]: comLeadgen(ctx, extraido),
+      },
+    };
+    if (gravados.length > 0) patch.custom_fields = proxFields;
 
     let q = ctx.sb
       .from('deals')
@@ -538,7 +592,11 @@ async function criarCard(ctx: Contexto, contactId: string, nomeDoContato: string
     is_won: false,
     is_lost: false,
     custom_fields: valores,
-    ai_extracted: { customFields: provs, customFieldsLastExtractedAt: ctx.agoraIso },
+    ai_extracted: {
+      customFields: provs,
+      customFieldsLastExtractedAt: ctx.agoraIso,
+      [CHAVE_LEADGENS]: [ctx.leadgenId],
+    },
     created_at: ctx.agoraIso,
     updated_at: ctx.agoraIso,
   };
@@ -802,7 +860,10 @@ export async function processarLeadDoFormulario(opts: OpcoesDoProcessamento): Pr
           code: 'CONFLICT',
           request_id: requestId,
         },
-        chave: 'finalizar',
+        // M1 do QA: LIBERAR. Guardar este 409 condenaria todo reenvio com a mesma
+        // chave a receber o replay do 409 — e o card do WhatsApp que apareceu na
+        // corrida nunca seria completado. O reenvio acha o card aberto e completa.
+        chave: 'liberar',
       };
     }
     await gravarNota(ctx, criado.dealId!, contato.id, []);

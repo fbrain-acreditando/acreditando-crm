@@ -141,3 +141,23 @@ describe('2.59 AC5 — variantes do telefone com e sem o 9º dígito', () => {
     expect(paraE164('5535998205552')).toBe('+5535998205552');
   });
 });
+
+describe('2.59 QA L3 — as 6 faixas de investimento, e nada além delas', () => {
+  it.each([
+    ['até_r$_500', 'Até R$ 500'],
+    ['r$_500_a_r$_1.000', 'R$ 500 a R$ 1.000'],
+    ['r$_1.000_a_r$_2.000', 'R$ 1.000 a R$ 2.000'],
+    ['r$_2.000_a_r$_3.000', 'R$ 2.000 a R$ 3.000'],
+    ['acima_de_r$_3.000', 'Acima de R$ 3.000'],
+    ['ainda_não_sei_/_gostaria_de_entender_as_opções', 'Ainda não sei'],
+  ])('"%s" ⇒ "%s"', (valor, esperado) => {
+    expect(casar(valor, TABELAS.faixaDeInvestimentoMensal)).toBe(esperado);
+  });
+
+  it.each(['acima_de_r$_1.000', 'acima_de_r$_5.000', 'acima_de_r$_30.000'])(
+    '"%s" NÃO vira "Acima de R$ 3.000" (não inventa faixa)',
+    (valor) => {
+      expect(casar(valor, TABELAS.faixaDeInvestimentoMensal)).toBeUndefined();
+    }
+  );
+});

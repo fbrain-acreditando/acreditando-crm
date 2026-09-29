@@ -26,6 +26,11 @@ export interface ErroFake {
 }
 
 function valorDe(l: Linha, col: string): any {
+  const j = col.match(/^([a-z_]+)->([A-Za-z0-9_]+)$/);
+  if (j) {
+    const obj = l[j[1]];
+    return obj && typeof obj === 'object' ? (obj[j[2]] ?? null) : null;
+  }
   const m = col.match(/^([a-z_]+)->>([A-Za-z0-9_]+)$/);
   if (m) {
     const obj = l[m[1]];
@@ -71,6 +76,16 @@ export class FakeSupabase {
   /** Chamadas de escrita, para o teste afirmar o que foi (e o que NÃO foi) escrito. */
   escritas: Array<{ tabela: string; op: string; payload: any }> = [];
   rpcChamadas: Array<{ fn: string; args: any }> = [];
+
+  /** Roda `fn` imediatamente ANTES da próxima operação `op` em `tabela` (ex.: edição simultânea). */
+  private intercept: Record<string, Array<() => void>> = {};
+  antesDaProxima(tabela: string, op: string, fn: () => void) {
+    (this.intercept[`${tabela}:${op}`] ??= []).push(fn);
+  }
+  rodarIntercept(tabela: string, op: string) {
+    const fila = this.intercept[`${tabela}:${op}`];
+    if (fila && fila.length) fila.shift()!();
+  }
 
   falharProxima(tabela: string, op: string, erro: ErroFake) {
     (this.erros[`${tabela}:${op}`] ??= []).push(erro);
@@ -169,6 +184,7 @@ export class FakeSupabase {
     const tabela = q.tabela;
     const linhas = this.tabelas[tabela];
     const op = q.op!;
+    this.rodarIntercept(tabela, op);
     const erro = this.tirarErro(tabela, op);
     if (erro) return { data: null, error: erro };
 
@@ -287,6 +303,15 @@ export class FakeQuery {
   }
   in(col: string, vals: any[]) {
     this.filtros.push((l) => vals.map(String).includes(String(valorDe(l, col))));
+    return this;
+  }
+  filter(col: string, op: string, val: string) {
+    if (op !== 'cs') throw new Error(`fakeSupabase: filter ${op} não suportado`);
+    const alvo = JSON.parse(val) as unknown[];
+    this.filtros.push((l) => {
+      const v = valorDe(l, col);
+      return Array.isArray(v) && alvo.every((x) => v.map(String).includes(String(x)));
+    });
     return this;
   }
   lt(col: string, val: any) {

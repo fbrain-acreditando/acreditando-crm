@@ -145,7 +145,8 @@ function ensaioBanco(linhas) {
 achados as (
   select l.lid,
     exists(select 1 from deals d where d.organization_id = '${ORG}' and d.deleted_at is null
-           and d.custom_fields->>'metaLeadgenId' = l.lid) as ja,
+           and (d.custom_fields->>'metaLeadgenId' = l.lid
+                or (d.ai_extracted->'metaFormLeadgenIds') @> jsonb_build_array(l.lid))) as ja,
     coalesce(
       (select c.id from contacts c where c.organization_id = '${ORG}' and c.deleted_at is null
          and c.merged_into_id is null and c.phone in (l.v1, l.v2) order by c.created_at limit 1),

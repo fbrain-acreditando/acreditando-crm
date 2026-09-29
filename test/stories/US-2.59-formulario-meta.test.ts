@@ -318,8 +318,10 @@ describe('2.59 AC4 — as respostas ficam anotadas no histórico', () => {
     expect(n.title).toBe('Respostas do Formulário Meta'); // título neutro, sem diagnóstico
     expect(n.description).toContain('Qual é a sua principal condição ou diagnóstico? Lesão medular');
     expect(n.description).toContain('Para quem é o acompanhamento? Para um familiar ou pessoa próxima');
-    expect(n.description).toContain('Faixa de investimento mensal R$ 500 a R$ 1.000');
-    expect(n.description).toContain('Já estavam preenchidos no card e não foram alterados: paraQuemE');
+    expect(n.description).toContain('Faixa de investimento mensal: R$ 500 a R$ 1.000'); // L4: com dois-pontos
+    expect(n.description).toContain('Endereço: Rua Teste, 100');
+    expect(n.description).toContain('Já estavam preenchidos no card e não foram alterados: Para quem é.'); // L4: rótulo, não chave
+    expect(n.description).not.toContain('paraQuemE');
     // Sem nome, telefone nem e-mail na nota
     expect(n.description).not.toContain('Joana');
     expect(n.description).not.toContain('98205552');
@@ -548,5 +550,100 @@ describe('2.59 AC9 — corpo do backfill pelo CSV', () => {
     } finally {
       fs.unlinkSync(arquivo);
     }
+  });
+});
+
+// --------------------------------------------------------------------------
+// Correções do QA gate (06-qa-gate.md): M1, L1, L2
+// --------------------------------------------------------------------------
+
+describe('2.59 QA M1 — 409 do trigger LIBERA a chave', () => {
+  it('reenvio com a MESMA chave depois do 409 completa o card do WhatsApp que surgiu na corrida', async () => {
+    const chave = 'meta-lead:1234567890123456';
+    const c = contato();
+    card(c.id, { stage_id: PERDIDO });
+    // Corrida: o card do WhatsApp nasce em "Lead novo" entre a busca e o upsert,
+    // e o trigger check_deal_duplicate recusa o card da rota com 23505.
+    db.antesDaProxima('deals', 'upsert', () => {
+      card(c.id, { id: 'wpp-card', stage_id: LEAD_NOVO, title: 'Joana - WhatsApp' } as any);
+    });
+    db.falharProxima('deals', 'upsert', { code: '23505', message: 'Já existe um negócio para este contato' });
+
+    const r1 = await enviar(lead(), { chave });
+    expect(r1.status).toBe(409);
+    expect(db.tabelas.public_api_idempotency).toHaveLength(0); // chave liberada, não guardada
+
+    const r2 = await enviar(lead(), { chave });
+    expect(r2.body.idempotent_replay).toBeUndefined();
+    expect(r2.status).toBe(200);
+    expect(r2.body.acao).toBe('completou');
+    expect(r2.body.deal_id).toBe('wpp-card');
+    const relido = db.tabelas.deals.find((d) => d.id === 'wpp-card')!;
+    expect(relido.custom_fields.tipoDeLesao).toBe('Lesão medular');
+    expect(relido.custom_fields.metaLeadgenId).toBe('1234567890123456');
+  });
+});
+
+describe('2.59 QA L1 — lacunas do AC3', () => {
+  it('(a) origem e rastreio já preenchidos NÃO são sobrescritos', async () => {
+    const c = contato();
+    const d = card(c.id, {
+      custom_fields: { origemDoLead: 'WhatsApp', metaCampanha: 'campanha anotada à mão', metaAnuncio: 'anúncio anotado' },
+    });
+    const r = await enviar(lead());
+    expect(r.body.acao).toBe('completou');
+    const relido = db.tabelas.deals.find((x) => x.id === d.id)!;
+    expect(relido.custom_fields.origemDoLead).toBe('WhatsApp');
+    expect(relido.custom_fields.metaCampanha).toBe('campanha anotada à mão');
+    expect(relido.custom_fields.metaAnuncio).toBe('anúncio anotado');
+    expect(relido.custom_fields.metaLeadgenId).toBe('1234567890123456'); // estava vazio: grava
+    for (const campo of ['origemDoLead', 'metaCampanha', 'metaAnuncio']) {
+      expect(r.body.campos_pulados).toContainEqual({ campo, motivo: 'campo_ja_preenchido' });
+    }
+  });
+
+  it('(b) CAS: a Fernanda salva o card entre a leitura e a escrita ⇒ o que ela digitou fica', async () => {
+    const c = contato();
+    const d = card(c.id);
+    db.antesDaProxima('deals', 'update', () => {
+      const alvo = db.tabelas.deals.find((x) => x.id === d.id)!;
+      alvo.custom_fields = { tipoDeLesao: 'Digitado pela Fernanda agora' };
+      alvo.updated_at = '2026-09-28T13:29:59.000Z';
+    });
+    const r = await enviar(lead());
+    expect(r.body.acao).toBe('completou');
+    const relido = db.tabelas.deals.find((x) => x.id === d.id)!;
+    expect(relido.custom_fields.tipoDeLesao).toBe('Digitado pela Fernanda agora');
+    expect(relido.custom_fields.haQuantoTempo).toBe('De 1 a 3 anos');
+    expect(r.body.campos_pulados).toContainEqual({ campo: 'tipoDeLesao', motivo: 'campo_ja_preenchido' });
+  });
+});
+
+describe('2.59 QA L2 — segundo formulário do mesmo contato fica rastreável', () => {
+  it('o 2º leadgen entra na lista do card, tem nota própria, e o reenvio dele é "já processado" sem mexer no card', async () => {
+    const c = contato();
+    const d = card(c.id);
+    await enviar(lead());
+    const r2 = await enviar(lead({ leadgen_id: 'l:9999999999999999', created_time: '2026-09-28T13:10:00.000Z' }));
+    expect(r2.body.acao).toBe('completou');
+
+    const relido = db.tabelas.deals.find((x) => x.id === d.id)!;
+    expect(relido.custom_fields.metaLeadgenId).toBe('1234567890123456'); // o 1º, intacto
+    expect(relido.ai_extracted.metaFormLeadgenIds).toEqual(['1234567890123456', '9999999999999999']);
+    expect(notas()).toHaveLength(2);
+
+    const antes = relido.updated_at;
+    vi.setSystemTime(new Date('2026-09-28T14:00:00.000Z'));
+    const r3 = await enviar(lead({ leadgen_id: 'l:9999999999999999', created_time: '2026-09-28T13:10:00.000Z' }));
+    expect(r3.body.acao).toBe('ja_processado');
+    expect(r3.body.deal_id).toBe(d.id);
+    expect(db.tabelas.deals.find((x) => x.id === d.id)!.updated_at).toBe(antes);
+    expect(notas()).toHaveLength(2);
+  });
+
+  it('card criado pela rota já nasce com o leadgen na lista', async () => {
+    const r = await enviar(lead());
+    const d = db.tabelas.deals.find((x) => x.id === r.body.deal_id)!;
+    expect(d.ai_extracted.metaFormLeadgenIds).toEqual(['1234567890123456']);
   });
 });

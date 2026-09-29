@@ -15,20 +15,32 @@
       "Trocar https://CRM_HOST pelo domínio do CRM em produção.",
       "Trocar PREENCHER_ID_DO_MISSION_CONTROL pelo Error Workflow da instância.",
       "Decidir no gate de LGPD a retenção de execuções (saveDataSuccessExecution): o payload tem dado de saúde.",
-      "Alarme de ausência: copiar o padrão do workflow da Livre (BgtkmVi0hQZxa8WN) no nó 'Aviso de ausência' — canal de envio ainda não configurado aqui."
+      "Os dois alarmes (CRM recusou lead; lead da Meta sem card no CRM) FALHAM a execução e dependem do Error Workflow configurado em settings.errorWorkflow para chegar a alguém."
     ],
-    "determinismo": "O corpo enviado ao CRM usa só campos estáveis do lead e field_data ORDENADO por nome — o mesmo formato do script scripts/db/backfill-formulario-meta.mjs. Mesma Idempotency-Key com corpo diferente dá 409."
+    "determinismo": "O corpo enviado ao CRM usa só campos estáveis do lead e field_data ORDENADO por nome — o mesmo formato do script scripts/db/backfill-formulario-meta.mjs. Mesma Idempotency-Key com corpo diferente dá 409.",
+    "graph_api": "v26.0 — a mais recente (lançada em 29/07/2026, expiração ainda não anunciada). A v21.0 expira em 21/01/2027. Fonte: https://developers.facebook.com/docs/graph-api/changelog/versions (lida em 29/09/2026).",
+    "alarmes": "M2 do QA: (1) resposta >= 400 do CRM (exceto IDEMPOTENCY_IN_PROGRESS) derruba a execução; (2) de hora em hora, os leads da Meta de 6 h a 20 min atrás passam pelo CRM com ?ensaio=1 — qualquer um que não volte 'ja_processado' derruba a execução com a contagem. Os dois vão para o Error Workflow."
   },
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
       },
       "id": "a1f0c001-0000-4000-8000-000000000001",
       "name": "A cada 5 min",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -38,11 +50,14 @@
       "name": "Janela das últimas 2 h",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 0]
+      "position": [
+        220,
+        0
+      ]
     },
     {
       "parameters": {
-        "url": "https://graph.facebook.com/v21.0/1635930144720093/leads",
+        "url": "https://graph.facebook.com/v26.0/1635930144720093/leads",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpQueryAuth",
         "sendQuery": true,
@@ -56,21 +71,32 @@
               "name": "filtering",
               "value": "={{ JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: $json.desde }]) }}"
             },
-            { "name": "limit", "value": "100" }
+            {
+              "name": "limit",
+              "value": "100"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "a1f0c001-0000-4000-8000-000000000003",
       "name": "Meta — leads do formulário",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [440, 0],
+      "position": [
+        440,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
       "credentials": {
-        "httpQueryAuth": { "id": "PREENCHER", "name": "Meta — token da Página Acreditando" }
+        "httpQueryAuth": {
+          "id": "PREENCHER",
+          "name": "Meta — token da Página Acreditando"
+        }
       }
     },
     {
@@ -81,7 +107,10 @@
       "name": "Montar corpo determinístico",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 0]
+      "position": [
+        660,
+        0
+      ]
     },
     {
       "parameters": {
@@ -91,117 +120,374 @@
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [{ "name": "Idempotency-Key", "value": "=meta-lead:{{ $json.leadgen_id }}" }]
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "=meta-lead:{{ $json.leadgen_id }}"
+            }
+          ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
           "timeout": 30000,
-          "response": { "response": { "fullResponse": true, "neverError": true } }
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
         }
       },
       "id": "a1f0c001-0000-4000-8000-000000000005",
       "name": "CRM — POST meta-form-leads",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [880, 0],
+      "position": [
+        880,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
       "credentials": {
-        "httpHeaderAuth": { "id": "PREENCHER", "name": "CRM Acreditando — API pública" }
+        "httpHeaderAuth": {
+          "id": "PREENCHER",
+          "name": "CRM Acreditando — API pública"
+        }
       }
     },
     {
       "parameters": {
-        "jsCode": "// Resumo SEM dado pessoal: só contagem por status e ação (AC12).\n// 202 = aguardando a carência (será reenviado na próxima execução).\n// 5xx = o CRM liberou a chave; a próxima execução reenvia.\nconst contagem = {};\nfor (const item of $input.all()) {\n  const r = item.json;\n  const acao = (r.body && (r.body.acao || r.body.code)) || 'sem_acao';\n  const k = `${r.statusCode} ${acao}`;\n  contagem[k] = (contagem[k] || 0) + 1;\n}\nreturn [{ json: { processados: $input.all().length, contagem } }];"
+        "jsCode": "// M2 do QA: resposta >= 400 do CRM FALHA a execução (vai para o Error Workflow).\n// Só 'IDEMPOTENCY_IN_PROGRESS' (a mesma chave ainda em curso) é esperado.\n// 202 = aguardando a carência (reenviado na próxima execução). Só contagens: sem dado pessoal.\nconst contagem = {};\nlet recusados = 0;\nfor (const item of $input.all()) {\n  const r = item.json;\n  const code = r.body && r.body.code;\n  const acao = (r.body && (r.body.acao || code)) || 'sem_acao';\n  const k = String(r.statusCode) + ' ' + acao;\n  contagem[k] = (contagem[k] || 0) + 1;\n  if (r.statusCode >= 400 && code !== 'IDEMPOTENCY_IN_PROGRESS') recusados += 1;\n}\nif (recusados > 0) {\n  throw new Error('Formulário Meta → CRM: ' + recusados + ' lead(s) recusados. Contagem: ' + JSON.stringify(contagem));\n}\nreturn [{ json: { processados: $input.all().length, contagem } }];"
       },
       "id": "a1f0c001-0000-4000-8000-000000000006",
-      "name": "Resumo (sem dado pessoal)",
+      "name": "Checar respostas do CRM (falha se recusar)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 0]
+      "position": [
+        1100,
+        0
+      ]
     },
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
       },
-      "id": "a1f0c001-0000-4000-8000-000000000007",
-      "name": "A cada 1 h (alarme)",
+      "id": "a1f0c001-0000-4000-8000-000000000101",
+      "name": "A cada 1 h (conferência Meta × CRM)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 300]
+      "position": [
+        0,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "https://graph.facebook.com/v21.0/1635930144720093/leads",
+        "jsCode": "// Leads de 6 h atrás até 20 min atrás: já passaram da carência (10 min) + 1 ciclo de 5 min.\nconst agora = Math.floor(Date.now() / 1000);\nreturn [{ json: { desde: agora - 6 * 60 * 60, ate: agora - 20 * 60 } }];"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000102",
+      "name": "Janela da conferência",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v26.0/1635930144720093/leads",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpQueryAuth",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "fields", "value": "id" },
+            {
+              "name": "fields",
+              "value": "id,created_time,field_data,form_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,platform,is_organic"
+            },
             {
               "name": "filtering",
-              "value": "={{ JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: Math.floor(Date.now() / 1000) - 6 * 60 * 60 }]) }}"
+              "value": "={{ JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: $json.desde }, { field: 'time_created', operator: 'LESS_THAN', value: $json.ate }]) }}"
             },
-            { "name": "limit", "value": "1" }
+            {
+              "name": "limit",
+              "value": "100"
+            }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
-      "id": "a1f0c001-0000-4000-8000-000000000008",
-      "name": "Meta — algum lead nas últimas 6 h?",
+      "id": "a1f0c001-0000-4000-8000-000000000103",
+      "name": "Meta — leads da janela",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [220, 300],
+      "position": [
+        440,
+        300
+      ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
       "credentials": {
-        "httpQueryAuth": { "id": "PREENCHER", "name": "Meta — token da Página Acreditando" }
+        "httpQueryAuth": {
+          "id": "PREENCHER",
+          "name": "Meta — token da Página Acreditando"
+        }
       }
     },
     {
       "parameters": {
+        "jsCode": "// Um item por lead. Corpo DETERMINÍSTICO (AC10): só campos estáveis,\n// field_data ordenado por nome, nenhum carimbo de hora desta execução.\nconst leads = $input.first().json.data || [];\nconst semPrefixo = (v) => String(v ?? '').trim().replace(/^[a-z]{1,3}:/i, '');\nreturn leads.map((l) => {\n  const corpo = {\n    leadgen_id: semPrefixo(l.id),\n    created_time: l.created_time,\n    field_data: [...(l.field_data || [])]\n      .map((f) => ({ name: f.name, values: (f.values || []).map((v) => f.name === 'phone_number' ? semPrefixo(v) : v) }))\n      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),\n  };\n  for (const k of ['form_id', 'campaign_id', 'campaign_name', 'ad_id', 'ad_name']) {\n    const v = k.endsWith('_id') ? semPrefixo(l[k]) : String(l[k] ?? '').trim();\n    if (v) corpo[k] = v;\n  }\n  return { json: corpo };\n});"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000104",
+      "name": "Montar corpo (conferência)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://CRM_HOST/api/public/v1/meta-form-leads?ensaio=1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000105",
+      "name": "CRM — ensaio (não grava)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PREENCHER",
+          "name": "CRM Acreditando — API pública"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Meta × CRM: todo lead da janela já deveria ser 'ja_processado' no CRM.\n// Qualquer outra resposta (inclusive 401/5xx do próprio CRM) conta como faltando. Só contagens.\nconst contagem = {};\nlet faltando = 0;\nfor (const item of $input.all()) {\n  const r = item.json;\n  const acao = (r.body && (r.body.acao || r.body.code)) || 'sem_acao';\n  const k = String(r.statusCode) + ' ' + acao;\n  contagem[k] = (contagem[k] || 0) + 1;\n  if (!(r.statusCode === 200 && acao === 'ja_processado')) faltando += 1;\n}\nreturn [{ json: { total: $input.all().length, faltando, contagem: JSON.stringify(contagem) } }];"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000106",
+      "name": "Comparar Meta × CRM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
           "conditions": [
             {
-              "leftValue": "={{ ($json.data || []).length }}",
+              "leftValue": "={{ $json.faltando }}",
               "rightValue": 0,
-              "operator": { "type": "number", "operation": "equals" }
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
             }
           ],
           "combinator": "and"
         },
         "options": {}
       },
-      "id": "a1f0c001-0000-4000-8000-000000000009",
-      "name": "Zero lead em 6 h?",
+      "id": "a1f0c001-0000-4000-8000-000000000107",
+      "name": "Algum lead sem card?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        1320,
+        300
+      ]
     },
     {
-      "parameters": {},
-      "id": "a1f0c001-0000-4000-8000-000000000010",
-      "name": "Aviso de ausência (configurar canal)",
-      "type": "n8n-nodes-base.noOp",
+      "parameters": {
+        "errorMessage": "=Formulário Meta do Acreditando: {{ $json.faltando }} de {{ $json.total }} lead(s) da Meta (entre 6 h e 20 min atrás) sem card no CRM. Contagem: {{ $json.contagem }}. Conferir token da Página, chave da API do CRM e o workflow."
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000108",
+      "name": "Alarme — falha a execução (Error Workflow)",
+      "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
-      "position": [660, 300],
-      "notes": "Copiar o padrão do alarme da Livre (BgtkmVi0hQZxa8WN): só avisar se houver campanha de lead ATIVA com este formulário. Mensagem sugerida: 'Formulário Meta do Acreditando: nenhum lead nas últimas 6 h com campanha ativa — conferir token da Página e o workflow.'"
+      "position": [
+        1540,
+        300
+      ]
     }
   ],
   "connections": {
-    "A cada 5 min": { "main": [[{ "node": "Janela das últimas 2 h", "type": "main", "index": 0 }]] },
-    "Janela das últimas 2 h": { "main": [[{ "node": "Meta — leads do formulário", "type": "main", "index": 0 }]] },
-    "Meta — leads do formulário": { "main": [[{ "node": "Montar corpo determinístico", "type": "main", "index": 0 }]] },
-    "Montar corpo determinístico": { "main": [[{ "node": "CRM — POST meta-form-leads", "type": "main", "index": 0 }]] },
-    "CRM — POST meta-form-leads": { "main": [[{ "node": "Resumo (sem dado pessoal)", "type": "main", "index": 0 }]] },
-    "A cada 1 h (alarme)": { "main": [[{ "node": "Meta — algum lead nas últimas 6 h?", "type": "main", "index": 0 }]] },
-    "Meta — algum lead nas últimas 6 h?": { "main": [[{ "node": "Zero lead em 6 h?", "type": "main", "index": 0 }]] },
-    "Zero lead em 6 h?": { "main": [[{ "node": "Aviso de ausência (configurar canal)", "type": "main", "index": 0 }], []] }
+    "A cada 5 min": {
+      "main": [
+        [
+          {
+            "node": "Janela das últimas 2 h",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Janela das últimas 2 h": {
+      "main": [
+        [
+          {
+            "node": "Meta — leads do formulário",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meta — leads do formulário": {
+      "main": [
+        [
+          {
+            "node": "Montar corpo determinístico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar corpo determinístico": {
+      "main": [
+        [
+          {
+            "node": "CRM — POST meta-form-leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM — POST meta-form-leads": {
+      "main": [
+        [
+          {
+            "node": "Checar respostas do CRM (falha se recusar)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "A cada 1 h (conferência Meta × CRM)": {
+      "main": [
+        [
+          {
+            "node": "Janela da conferência",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Janela da conferência": {
+      "main": [
+        [
+          {
+            "node": "Meta — leads da janela",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meta — leads da janela": {
+      "main": [
+        [
+          {
+            "node": "Montar corpo (conferência)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar corpo (conferência)": {
+      "main": [
+        [
+          {
+            "node": "CRM — ensaio (não grava)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM — ensaio (não grava)": {
+      "main": [
+        [
+          {
+            "node": "Comparar Meta × CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comparar Meta × CRM": {
+      "main": [
+        [
+          {
+            "node": "Algum lead sem card?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Algum lead sem card?": {
+      "main": [
+        [
+          {
+            "node": "Alarme — falha a execução (Error Workflow)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
   }
 }
