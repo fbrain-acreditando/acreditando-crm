@@ -686,6 +686,57 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
           },
         },
       },
+      '/meta-form-leads': {
+        post: {
+          tags: ['Deals'],
+          summary: 'Receber um lead do formulário instantâneo da Meta (story 2.59)',
+          description: 'Acha o contato pelo telefone (com e sem o 9º dígito; e-mail por último). Com card aberto no quadro Acreditando, preenche só os campos vazios; sem card aberto, cria card em "Lead novo"; sem contato, espera 10 min do envio (202) e depois cria contato + card. Grava uma nota "Respostas do Formulário Meta" por leadgen id. Não mexe na nota (estrelas). Use `Idempotency-Key: meta-lead:{leadgen_id}`; o 202 libera a chave. `?ensaio=1` responde a ação prevista sem gravar.',
+          security: [{ ApiKeyAuth: [] }],
+          parameters: [
+            { name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string' }, description: 'Recomendado: meta-lead:{leadgen_id}. Corpo deve ser determinístico.' },
+            { name: 'ensaio', in: 'query', required: false, schema: { type: 'string', enum: ['1'] }, description: 'Decide sem gravar nada.' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['leadgen_id', 'created_time', 'field_data'],
+                  properties: {
+                    leadgen_id: { type: 'string', description: 'Id do lead na Meta (aceita o prefixo l: do CSV).' },
+                    created_time: { type: 'string', description: 'created_time da Meta (ISO 8601).' },
+                    form_id: { type: 'string' },
+                    campaign_id: { type: 'string' },
+                    campaign_name: { type: 'string' },
+                    ad_id: { type: 'string' },
+                    ad_name: { type: 'string' },
+                    field_data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['name', 'values'],
+                        properties: { name: { type: 'string' }, values: { type: 'array', items: { type: 'string' } } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Card completado, ou lead já processado — { acao, contact_id, deal_id, campos_gravados, campos_pulados }' },
+            201: { description: 'Card criado (com ou sem contato novo)' },
+            202: { description: 'Aguardando a carência de 10 min (nada gravado; a chave de idempotência é liberada)' },
+            401: { $ref: '#/components/responses/Unauthorized' },
+            409: { description: 'Idempotency-Key com corpo diferente, requisição igual em curso, ou contato já com card aberto no estágio de destino' },
+            422: { description: 'Payload inválido' },
+            500: { description: 'Erro de banco (a chave é liberada; reenviar é seguro)' },
+          },
+        },
+      },
       '/deals/{dealId}/move-stage': {
         post: {
           tags: ['Deals'],
