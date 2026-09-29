@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { DealDetailModal } from './DealDetailModal';
@@ -9,16 +9,17 @@ import { DealDetailModal } from './DealDetailModal';
 // nos testes; `vi.hoisted` porque os mocks sobem para o topo do módulo.
 const { mutateUpdateDeal } = vi.hoisted(() => ({ mutateUpdateDeal: vi.fn(async () => undefined) }));
 
-// A seção de campos personalizados só renderiza quando há definição. Estes são
-// dois dos cinco que a Fernanda preenche de verdade.
+// A seção de campos personalizados só renderiza quando há definição. O padrão
+// são dois dos cinco que a Fernanda preenche de verdade; a story 2.60 troca a
+// lista por teste (`definicoes.atual`), e o `beforeEach` devolve o padrão.
+type DefinicaoDeTeste = { id: string; key: string; label: string; type: string; options?: string[] };
+const DEFINICOES_PADRAO: DefinicaoDeTeste[] = [
+  { id: 'cf-1', key: 'ondeReside', label: 'Onde reside', type: 'text' },
+  { id: 'cf-2', key: 'tipoDeLesao', label: 'Tipo de Lesão', type: 'text' },
+];
+const { definicoes } = vi.hoisted(() => ({ definicoes: { atual: [] as DefinicaoDeTeste[] } }));
 vi.mock('@/lib/query/hooks/useCustomFieldsQuery', () => ({
-  useCustomFields: () => ({
-    data: [
-      { id: 'cf-1', key: 'ondeReside', label: 'Onde reside', type: 'text' },
-      { id: 'cf-2', key: 'tipoDeLesao', label: 'Tipo de Lesão', type: 'text' },
-    ],
-    isLoading: false,
-  }),
+  useCustomFields: () => ({ data: definicoes.atual, isLoading: false }),
 }));
 
 // Keep this test focused: we only want to ensure opening/closing the modal
@@ -247,6 +248,7 @@ vi.mock('@/context/CRMContext', () => ({
 
 beforeEach(() => {
   mutateUpdateDeal.mockClear();
+  definicoes.atual = DEFINICOES_PADRAO;
 });
 
 describe('DealDetailModal', () => {
@@ -418,5 +420,155 @@ describe('DealDetailModal — o trap cede ao diálogo por cima (story 2.28)', ()
     expect(await screen.findByText(/você não salvou/i)).toBeInTheDocument();
 
     expect(ultimoActive()).toBe(false);
+  });
+});
+
+/**
+ * Story 2.60 — título "Preenchido pelo lead (Formulário Meta)".
+ *
+ * Pedido do Filipe (29/09): antes dos campos que só o formulário da Meta
+ * preenche, um título dizendo que foi o lead quem preencheu. Só 2 campos vão
+ * para a seção; os demais continuam em "Campos Personalizados" (decisão D3).
+ * A separação é pela `key` — o rótulo pode ser renomeado.
+ */
+describe('DealDetailModal — seção do formulário da Meta (story 2.60)', () => {
+  const TITULO = '📋 Preenchido pelo lead (Formulário Meta)';
+
+  const QUANDO: DefinicaoDeTeste = {
+    id: 'cf-q',
+    key: 'quandoPretendeIniciar',
+    label: 'Quando pretende iniciar',
+    type: 'select',
+    options: ['Imediatamente', 'Nos próximos 30 dias', 'Ainda estou só pesquisando'],
+  };
+  const FAIXA: DefinicaoDeTeste = {
+    id: 'cf-f',
+    key: 'faixaDeInvestimentoMensal',
+    label: 'Faixa de investimento mensal',
+    type: 'select',
+    options: ['Até R$ 500', 'R$ 500 a R$ 1.000', 'Ainda não sei'],
+  };
+  const ORIGEM: DefinicaoDeTeste = {
+    id: 'cf-o',
+    key: 'origemDoLead',
+    label: 'Origem do lead',
+    type: 'select',
+    options: ['Formulário Meta', 'WhatsApp'],
+  };
+  const ONDE: DefinicaoDeTeste = { id: 'cf-1', key: 'ondeReside', label: 'Onde reside', type: 'text' };
+
+  /** Rótulos dos campos dentro de uma seção, na ordem do DOM. */
+  const rotulosDaSecao = (secao: HTMLElement) =>
+    Array.from(secao.querySelectorAll('select, input')).map(el => el.getAttribute('aria-label'));
+
+  it('🎯 o título aparece, com o texto exato, acima dos 2 campos e na ordem da constante', () => {
+    // Definições do banco chegando em ordem "errada" (faixa antes de quando),
+    // misturadas com os outros — a tela tem de reordenar pela constante.
+    definicoes.atual = [ONDE, FAIXA, ORIGEM, QUANDO];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    const secao = screen.getByRole('region', { name: TITULO });
+    expect(within(secao).getByRole('heading').textContent).toBe(TITULO);
+    expect(rotulosDaSecao(secao)).toEqual(['Quando pretende iniciar', 'Faixa de investimento mensal']);
+
+    // Os outros ficam em "Campos Personalizados", na ordem original.
+    const personalizados = screen.getByRole('region', { name: 'Campos Personalizados' });
+    expect(rotulosDaSecao(personalizados)).toEqual(['Onde reside', 'Origem do lead']);
+
+    // A seção do formulário vem ANTES de "Campos Personalizados".
+    expect(secao.compareDocumentPosition(personalizados) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('🎯 sem duplicata: cada um dos 2 campos aparece uma vez só, e fora de "Campos Personalizados"', () => {
+    definicoes.atual = [ONDE, QUANDO, FAIXA, ORIGEM];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(screen.getAllByLabelText('Quando pretende iniciar')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Faixa de investimento mensal')).toHaveLength(1);
+    const personalizados = screen.getByRole('region', { name: 'Campos Personalizados' });
+    expect(within(personalizados).queryByLabelText('Quando pretende iniciar')).toBeNull();
+    expect(within(personalizados).queryByLabelText('Faixa de investimento mensal')).toBeNull();
+  });
+
+  it('a separação é pela key: rótulo renomeado continua na seção certa', () => {
+    const faixaRenomeada = { ...FAIXA, label: 'Quanto pode investir' };
+    // E um campo qualquer com o rótulo antigo, mas outra key, NÃO entra na seção.
+    const impostor = { id: 'cf-x', key: 'outroCampo', label: 'Faixa de investimento mensal', type: 'text' };
+    definicoes.atual = [impostor, faixaRenomeada, QUANDO];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    const secao = screen.getByRole('region', { name: TITULO });
+    expect(rotulosDaSecao(secao)).toEqual(['Quando pretende iniciar', 'Quanto pode investir']);
+    const personalizados = screen.getByRole('region', { name: 'Campos Personalizados' });
+    expect(rotulosDaSecao(personalizados)).toEqual(['Faixa de investimento mensal']);
+  });
+
+  it('🎯 salvar um campo da seção nova grava, na mesma barra e no mesmo UPDATE dos demais', async () => {
+    const user = userEvent.setup();
+    definicoes.atual = [ONDE, QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    await user.selectOptions(screen.getByLabelText('Faixa de investimento mensal'), 'R$ 500 a R$ 1.000');
+    await user.type(screen.getByLabelText('Onde reside'), 'Osasco');
+
+    // Uma barra só, somando os dois.
+    expect(screen.getAllByRole('button', { name: 'Salvar' })).toHaveLength(1);
+    expect(screen.getByText('2 campos alterados, ainda não salvos')).toBeInTheDocument();
+    expect(mutateUpdateDeal).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Salvar' }));
+
+    expect(mutateUpdateDeal).toHaveBeenCalledTimes(1);
+    expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({
+      id: 'deal-1',
+      updates: { customFields: { faixaDeInvestimentoMensal: 'R$ 500 a R$ 1.000', ondeReside: 'Osasco' } },
+    });
+  });
+
+  it('pendência só na seção nova também dispara o aviso ao fechar', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    definicoes.atual = [ONDE, QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={onClose} />);
+
+    await user.selectOptions(screen.getByLabelText('Quando pretende iniciar'), 'Imediatamente');
+    await user.click(screen.getByRole('button', { name: 'Fechar modal' }));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText(/você não salvou/i)).toBeInTheDocument();
+  });
+
+  it('organização sem os 2 campos: o título não aparece e "Campos Personalizados" segue igual', () => {
+    definicoes.atual = [ONDE, ORIGEM];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(screen.queryByText(TITULO)).toBeNull();
+    const personalizados = screen.getByRole('region', { name: 'Campos Personalizados' });
+    expect(rotulosDaSecao(personalizados)).toEqual(['Onde reside', 'Origem do lead']);
+  });
+
+  it('só um dos 2 definido: o título aparece com esse um', () => {
+    definicoes.atual = [ONDE, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(rotulosDaSecao(screen.getByRole('region', { name: TITULO }))).toEqual(['Faixa de investimento mensal']);
+  });
+
+  it('🎯 só os 2 definidos: "Campos Personalizados" não aparece vazio, e salvar grava', async () => {
+    const user = userEvent.setup();
+    definicoes.atual = [QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(screen.getByRole('heading', { name: TITULO })).toBeInTheDocument();
+    expect(screen.queryByText('Campos Personalizados')).toBeNull();
+
+    await user.selectOptions(screen.getByLabelText('Quando pretende iniciar'), 'Nos próximos 30 dias');
+    await user.click(screen.getByRole('button', { name: 'Salvar' }));
+
+    expect(mutateUpdateDeal).toHaveBeenCalledTimes(1);
+    expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({
+      id: 'deal-1',
+      updates: { customFields: { quandoPretendeIniciar: 'Nos próximos 30 dias' } },
+    });
   });
 });
