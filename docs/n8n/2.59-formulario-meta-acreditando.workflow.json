@@ -1,0 +1,207 @@
+{
+  "name": "CRM — Formulário Meta Acreditando → card (2.59) [INATIVO]",
+  "active": false,
+  "settings": {
+    "timezone": "America/Sao_Paulo",
+    "executionOrder": "v1",
+    "errorWorkflow": "PREENCHER_ID_DO_MISSION_CONTROL"
+  },
+  "meta": {
+    "story": "2.59 — O formulário que a Fernanda não vê (AC8, T5)",
+    "status": "RASCUNHO EM ARQUIVO. Não foi criado na instância. Depende do acesso ao BM 232820513975150 (T0.1), do parecer de LGPD (AC11) e da autorização do Filipe.",
+    "antes_de_importar": [
+      "Credencial 'Meta — token da Página Acreditando' (httpQueryAuth, parâmetro access_token) com o token da PÁGINA 149383325081928 derivado do System User — o /leads recusa o token do System User (erro 190).",
+      "Credencial 'CRM Acreditando — API pública' (httpHeaderAuth, header X-Api-Key) — a mesma chave que o n8n já usa.",
+      "Trocar https://CRM_HOST pelo domínio do CRM em produção.",
+      "Trocar PREENCHER_ID_DO_MISSION_CONTROL pelo Error Workflow da instância.",
+      "Decidir no gate de LGPD a retenção de execuções (saveDataSuccessExecution): o payload tem dado de saúde.",
+      "Alarme de ausência: copiar o padrão do workflow da Livre (BgtkmVi0hQZxa8WN) no nó 'Aviso de ausência' — canal de envio ainda não configurado aqui."
+    ],
+    "determinismo": "O corpo enviado ao CRM usa só campos estáveis do lead e field_data ORDENADO por nome — o mesmo formato do script scripts/db/backfill-formulario-meta.mjs. Mesma Idempotency-Key com corpo diferente dá 409."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000001",
+      "name": "A cada 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Janela de 2 h que se SOBREPÕE entre execuções: sem estado no n8n (sem staticData).\n// A idempotência fica no CRM (Idempotency-Key + índice do leadgen id).\nconst desde = Math.floor(Date.now() / 1000) - 2 * 60 * 60;\nreturn [{ json: { desde } }];"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000002",
+      "name": "Janela das últimas 2 h",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v21.0/1635930144720093/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,created_time,field_data,form_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,platform,is_organic"
+            },
+            {
+              "name": "filtering",
+              "value": "={{ JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: $json.desde }]) }}"
+            },
+            { "name": "limit", "value": "100" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000003",
+      "name": "Meta — leads do formulário",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpQueryAuth": { "id": "PREENCHER", "name": "Meta — token da Página Acreditando" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Um item por lead. Corpo DETERMINÍSTICO (AC10): só campos estáveis,\n// field_data ordenado por nome, nenhum carimbo de hora desta execução.\nconst leads = $input.first().json.data || [];\nconst semPrefixo = (v) => String(v ?? '').trim().replace(/^[a-z]{1,3}:/i, '');\nreturn leads.map((l) => {\n  const corpo = {\n    leadgen_id: semPrefixo(l.id),\n    created_time: l.created_time,\n    field_data: [...(l.field_data || [])]\n      .map((f) => ({ name: f.name, values: (f.values || []).map((v) => f.name === 'phone_number' ? semPrefixo(v) : v) }))\n      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),\n  };\n  for (const k of ['form_id', 'campaign_id', 'campaign_name', 'ad_id', 'ad_name']) {\n    const v = k.endsWith('_id') ? semPrefixo(l[k]) : String(l[k] ?? '').trim();\n    if (v) corpo[k] = v;\n  }\n  return { json: corpo };\n});"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000004",
+      "name": "Montar corpo determinístico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://CRM_HOST/api/public/v1/meta-form-leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Idempotency-Key", "value": "=meta-lead:{{ $json.leadgen_id }}" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000,
+          "response": { "response": { "fullResponse": true, "neverError": true } }
+        }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000005",
+      "name": "CRM — POST meta-form-leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": { "id": "PREENCHER", "name": "CRM Acreditando — API pública" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resumo SEM dado pessoal: só contagem por status e ação (AC12).\n// 202 = aguardando a carência (será reenviado na próxima execução).\n// 5xx = o CRM liberou a chave; a próxima execução reenvia.\nconst contagem = {};\nfor (const item of $input.all()) {\n  const r = item.json;\n  const acao = (r.body && (r.body.acao || r.body.code)) || 'sem_acao';\n  const k = `${r.statusCode} ${acao}`;\n  contagem[k] = (contagem[k] || 0) + 1;\n}\nreturn [{ json: { processados: $input.all().length, contagem } }];"
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000006",
+      "name": "Resumo (sem dado pessoal)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000007",
+      "name": "A cada 1 h (alarme)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v21.0/1635930144720093/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "id" },
+            {
+              "name": "filtering",
+              "value": "={{ JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: Math.floor(Date.now() / 1000) - 6 * 60 * 60 }]) }}"
+            },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000008",
+      "name": "Meta — algum lead nas últimas 6 h?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpQueryAuth": { "id": "PREENCHER", "name": "Meta — token da Página Acreditando" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ ($json.data || []).length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1f0c001-0000-4000-8000-000000000009",
+      "name": "Zero lead em 6 h?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {},
+      "id": "a1f0c001-0000-4000-8000-000000000010",
+      "name": "Aviso de ausência (configurar canal)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [660, 300],
+      "notes": "Copiar o padrão do alarme da Livre (BgtkmVi0hQZxa8WN): só avisar se houver campanha de lead ATIVA com este formulário. Mensagem sugerida: 'Formulário Meta do Acreditando: nenhum lead nas últimas 6 h com campanha ativa — conferir token da Página e o workflow.'"
+    }
+  ],
+  "connections": {
+    "A cada 5 min": { "main": [[{ "node": "Janela das últimas 2 h", "type": "main", "index": 0 }]] },
+    "Janela das últimas 2 h": { "main": [[{ "node": "Meta — leads do formulário", "type": "main", "index": 0 }]] },
+    "Meta — leads do formulário": { "main": [[{ "node": "Montar corpo determinístico", "type": "main", "index": 0 }]] },
+    "Montar corpo determinístico": { "main": [[{ "node": "CRM — POST meta-form-leads", "type": "main", "index": 0 }]] },
+    "CRM — POST meta-form-leads": { "main": [[{ "node": "Resumo (sem dado pessoal)", "type": "main", "index": 0 }]] },
+    "A cada 1 h (alarme)": { "main": [[{ "node": "Meta — algum lead nas últimas 6 h?", "type": "main", "index": 0 }]] },
+    "Meta — algum lead nas últimas 6 h?": { "main": [[{ "node": "Zero lead em 6 h?", "type": "main", "index": 0 }]] },
+    "Zero lead em 6 h?": { "main": [[{ "node": "Aviso de ausência (configurar canal)", "type": "main", "index": 0 }], []] }
+  }
+}

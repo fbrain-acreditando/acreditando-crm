@@ -525,7 +525,7 @@ describe('2.59 AC9 — ensaio decide sem gravar', () => {
 
 describe('2.59 AC9 — corpo do backfill pelo CSV', () => {
   it('CSV UTF-16LE com prefixos da Meta (l:, ag:, c:, p:) vira corpo válido, estável e sem prefixo', async () => {
-    const { lerCsv, corpoDoLead } = await import('@/scripts/meta-form/backfill-formulario-meta.mjs');
+    const { lerCsv, corpoDoLead } = await import('@/scripts/db/backfill-formulario-meta.mjs');
     const { MetaFormLeadSchema } = await import('@/lib/meta-form/processarLead');
     const os = await import('node:os');
     const cab = ['id', 'created_time', 'ad_id', 'ad_name', 'campaign_id', 'campaign_name', 'form_id', 'platform',
