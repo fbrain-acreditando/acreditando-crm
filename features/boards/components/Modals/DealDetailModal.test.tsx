@@ -17,7 +17,11 @@ const DEFINICOES_PADRAO: DefinicaoDeTeste[] = [
   { id: 'cf-1', key: 'ondeReside', label: 'Onde reside', type: 'text' },
   { id: 'cf-2', key: 'tipoDeLesao', label: 'Tipo de Lesão', type: 'text' },
 ];
-const { definicoes } = vi.hoisted(() => ({ definicoes: { atual: [] as DefinicaoDeTeste[] } }));
+const { definicoes, valoresDoCard } = vi.hoisted(() => ({
+  definicoes: { atual: [] as DefinicaoDeTeste[] },
+  // Story 2.60 (QA Q1) — o que já está gravado no card; o padrão é vazio.
+  valoresDoCard: { atual: {} as Record<string, string> },
+}));
 vi.mock('@/lib/query/hooks/useCustomFieldsQuery', () => ({
   useCustomFields: () => ({ data: definicoes.atual, isLoading: false }),
 }));
@@ -76,7 +80,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
             owner: { name: 'Eu', avatar: '' },
             tags: [],
             items: [],
-            customFields: {},
+            customFields: valoresDoCard.atual,
             isWon: false,
             isLost: false,
           }],
@@ -219,7 +223,7 @@ vi.mock('@/context/CRMContext', () => ({
       probability: 50,
       tags: [],
       items: [],
-      customFields: {},
+      customFields: valoresDoCard.atual,
       isWon: false,
       isLost: false,
       closedAt: undefined,
@@ -249,6 +253,7 @@ vi.mock('@/context/CRMContext', () => ({
 beforeEach(() => {
   mutateUpdateDeal.mockClear();
   definicoes.atual = DEFINICOES_PADRAO;
+  valoresDoCard.atual = {};
 });
 
 describe('DealDetailModal', () => {
@@ -523,6 +528,51 @@ describe('DealDetailModal — seção do formulário da Meta (story 2.60)', () =
       id: 'deal-1',
       updates: { customFields: { faixaDeInvestimentoMensal: 'R$ 500 a R$ 1.000', ondeReside: 'Osasco' } },
     });
+  });
+
+  it('🎯 o valor gravado no card aparece na seção nova (QA Q1)', () => {
+    valoresDoCard.atual = { quandoPretendeIniciar: 'Nos próximos 30 dias', faixaDeInvestimentoMensal: 'Até R$ 500' };
+    definicoes.atual = [ONDE, QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    const secao = screen.getByRole('region', { name: TITULO });
+    expect(within(secao).getByLabelText('Quando pretende iniciar')).toHaveValue('Nos próximos 30 dias');
+    expect(within(secao).getByLabelText('Faixa de investimento mensal')).toHaveValue('Até R$ 500');
+  });
+
+  it('🎯 o campo alterado na seção nova ganha o destaque de pendente, e só ele (QA Q2)', async () => {
+    const user = userEvent.setup();
+    valoresDoCard.atual = { quandoPretendeIniciar: 'Nos próximos 30 dias' };
+    definicoes.atual = [ONDE, QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    const faixa = screen.getByLabelText('Faixa de investimento mensal');
+    const quando = screen.getByLabelText('Quando pretende iniciar');
+    expect(faixa).not.toHaveClass('border-amber-400');
+
+    await user.selectOptions(faixa, 'Ainda não sei');
+
+    expect(faixa).toHaveClass('border-amber-400');
+    expect(quando).not.toHaveClass('border-amber-400');
+  });
+
+  it('🎯 Descartar na seção nova volta ao valor gravado e não grava (QA Q4)', async () => {
+    const user = userEvent.setup();
+    valoresDoCard.atual = { quandoPretendeIniciar: 'Nos próximos 30 dias' };
+    definicoes.atual = [ONDE, QUANDO, FAIXA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    const quando = screen.getByLabelText('Quando pretende iniciar');
+    await user.selectOptions(quando, 'Imediatamente');
+    expect(quando).toHaveValue('Imediatamente');
+    expect(screen.getByText('1 campo alterado, ainda não salvo')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Descartar' }));
+
+    expect(quando).toHaveValue('Nos próximos 30 dias');
+    expect(quando).not.toHaveClass('border-amber-400');
+    expect(screen.queryByRole('button', { name: 'Salvar' })).toBeNull();
+    expect(mutateUpdateDeal).not.toHaveBeenCalled();
   });
 
   it('pendência só na seção nova também dispara o aviso ao fechar', async () => {

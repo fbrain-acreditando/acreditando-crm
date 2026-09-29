@@ -51,6 +51,19 @@ describe('separarCamposDoFormularioMeta (story 2.60)', () => {
     expect(demais.map(d => d.label)).toEqual(['Quando pretende iniciar']);
   });
 
+  it('🎯 rótulo repetido: "demais" também é decidido pela key, não pelo rótulo (QA Q5)', () => {
+    // Um campo de outra chave com o MESMO rótulo de um dos 2 não pode sumir.
+    const entrada = [
+      def('quandoPretendeIniciar', 'Quando pretende iniciar'),
+      def('origemDoLead', 'Quando pretende iniciar'),
+      def('faixaDeInvestimentoMensal', 'Faixa de investimento mensal'),
+    ];
+    const { doFormulario, demais } = separarCamposDoFormularioMeta(entrada);
+
+    expect(doFormulario.map(d => d.key)).toEqual(['quandoPretendeIniciar', 'faixaDeInvestimentoMensal']);
+    expect(demais.map(d => d.key)).toEqual(['origemDoLead']);
+  });
+
   it('sem as 2 chaves: grupo do formulário vazio e demais intactos', () => {
     const entrada = [def('ondeReside'), def('tipoDeLesao')];
     const { doFormulario, demais } = separarCamposDoFormularioMeta(entrada);
