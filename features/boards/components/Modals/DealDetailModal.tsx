@@ -22,6 +22,7 @@ import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
 import { LeadNameEditor } from '@/components/LeadNameEditor';
 import { CustomFieldInput } from './CustomFieldInput';
+import { separarCamposDoFormularioMeta, TITULO_SECAO_FORMULARIO_META } from './secaoFormularioMeta';
 import { FecharComPendenciasDialog } from './FecharComPendenciasDialog';
 import { useMoveDealSimple } from '@/lib/query/hooks';
 import { DEALS_VIEW_KEY } from '@/lib/query';
@@ -114,6 +115,14 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   const deleteActivity = (id: string) => deleteActivityMutation.mutateAsync(id);
   const { data: products = [] } = useActiveProducts();
   const { data: customFieldDefinitions = [] } = useCustomFields('deal');
+  // Story 2.60 — os campos que só o formulário da Meta preenche ganham seção
+  // própria, com título; os demais continuam em "Campos Personalizados".
+  const camposSeparados = useMemo(
+    () => separarCamposDoFormularioMeta(customFieldDefinitions),
+    [customFieldDefinitions]
+  );
+  const tituloFormularioMetaId = useId();
+  const tituloCamposPersonalizadosId = useId();
   const { profile } = useAuth();
   const { addToast } = useToast();
   const router = useRouter();
@@ -951,27 +960,66 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                 {/* DYNAMIC CUSTOM FIELDS INPUTS */}
                 {customFieldDefinitions.length > 0 && (
                   <div className="pt-4 border-t border-slate-100 dark:border-white/5">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase mb-3">
-                      Campos Personalizados
-                    </h3>
-                    <div className="space-y-4">
-                      {customFieldDefinitions.map(field => (
-                        <div key={field.id}>
-                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                            {field.label}
-                          </label>
-                          {/* Story 2.27: digitar não grava — fica pendente até o
-                              botão Salvar. O pendente também é o que impede o
-                              piscar da 2.26: o refetch não chega ao input. */}
-                          <CustomFieldInput
-                            field={field}
-                            valor={valorDoCampo(field.key)}
-                            alterado={campoAlterado(field.key)}
-                            onMudar={anotarCampo}
-                          />
+                    {/* Story 2.60 — o que o próprio lead marcou no formulário da
+                        Meta. Mesma barra Salvar e mesmo pendente da 2.27: a seção
+                        só muda ONDE o campo aparece, não como ele grava. */}
+                    {camposSeparados.doFormulario.length > 0 && (
+                      <section aria-labelledby={tituloFormularioMetaId}>
+                        <h3
+                          id={tituloFormularioMetaId}
+                          className="text-xs font-bold text-slate-500 dark:text-slate-300 mb-3"
+                        >
+                          {TITULO_SECAO_FORMULARIO_META}
+                        </h3>
+                        <div className="space-y-4">
+                          {camposSeparados.doFormulario.map(field => (
+                            <div key={field.id}>
+                              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                                {field.label}
+                              </label>
+                              <CustomFieldInput
+                                field={field}
+                                valor={valorDoCampo(field.key)}
+                                alterado={campoAlterado(field.key)}
+                                onMudar={anotarCampo}
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </section>
+                    )}
+
+                    {camposSeparados.demais.length > 0 && (
+                      <section
+                        aria-labelledby={tituloCamposPersonalizadosId}
+                        className={camposSeparados.doFormulario.length > 0 ? 'mt-6' : undefined}
+                      >
+                        <h3
+                          id={tituloCamposPersonalizadosId}
+                          className="text-xs font-bold text-slate-400 uppercase mb-3"
+                        >
+                          Campos Personalizados
+                        </h3>
+                        <div className="space-y-4">
+                          {camposSeparados.demais.map(field => (
+                            <div key={field.id}>
+                              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                                {field.label}
+                              </label>
+                              {/* Story 2.27: digitar não grava — fica pendente até o
+                                  botão Salvar. O pendente também é o que impede o
+                                  piscar da 2.26: o refetch não chega ao input. */}
+                              <CustomFieldInput
+                                field={field}
+                                valor={valorDoCampo(field.key)}
+                                alterado={campoAlterado(field.key)}
+                                onMudar={anotarCampo}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
 
                     {/* Barra de Salvar — story 2.27.
                         Aparece SÓ quando há alteração pendente. Visível e com
