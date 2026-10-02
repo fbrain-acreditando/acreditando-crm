@@ -8,6 +8,66 @@
 
 ---
 
+## Sessao 2026-10-02 (29) — 🪞 a tela que mostrava a leitura de ontem (story 2.61, EM PRODUCAO)
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — a 2.61
+> esta em producao e provada no Chrome do Filipe; falta o relato da Fernanda e as 3 stories que sairam
+> do diagnostico (cards duplicados, falha silenciosa do useUpdateDeal, quadro com corte de 1.000)."*
+
+### 0. A queixa (Fernanda, 02/10)
+
+*"todas as alteracoes que eu faco, quando eu atualizo ele volta no que tava antes (...) e ta dando
+duplicidade de algumas conversas (...) o WhatsApp tambem ta super lento."* Ela **nao consegue** fazer
+teste manual (DevTools) ⇒ a correcao teve de se curar sozinha no navegador dela.
+
+### 1. Diagnostico (3 agentes so-leitura: @data-engineer, @architect+@dev, @analyst)
+
+| Sintoma | O que a medicao mostrou |
+|---|---|
+| "Volta ao que estava" | **O banco grava tudo:** 71 de 71 movimentos desde 30/09 batem com o stage atual; nenhum robo desfez. **Quem voltava era a TELA:** `public/sw.js` fazia *stale-while-revalidate* em **todo GET**, inclusive as leituras REST do Supabase ⇒ cada recarga mostrava a leitura ANTERIOR. No codigo desde 2025 |
+| "Duplicidade de conversas" | **Conversas duplicadas: 0** (1.850). Eco da 2.53 **nao voltou** (0–3/dia desde 22/09, ids distintos). **O que duplica e o CARD:** 6 pessoas com 2 cards abertos (todos apos 26/09) — a rota publica da LP **sempre insere deal novo** e casa telefone exato (9º digito ⇒ contato novo; ~22% dos leads da LP) + 3 cards orfaos do `@lid` (2.56) em Lead novo |
+| "WhatsApp lento" | **Entrada de mensagens normal** (mediana ~1 s, igual a 23/09; 0 erro, 0 fila). Suspeito na tela: realtime assinado **3x** na tela de conversas, cada evento recarrega a lista e cancela a anterior (hipotese, pelo codigo). **Sem deploy desde 29/09** |
+
+Agravantes provados no codigo: `useUpdateDeal` desfaz **em silencio** (`useDealsQuery.ts:403-407`) ·
+quadro carrega **1.000 de 1.418** cards (`deals.ts:300-302`) — 418 invisiveis, eram 289 em 26/09.
+
+### 2. Story 2.61 — EM PRODUCAO
+
+`docs/stories/2.61.a-tela-que-mostra-a-leitura-de-ontem.story.md` · PR **#21** · squash **`0720096`** ·
+deploy `dpl_6u2fGzZ8ggogYusYZKDfPv5QnAS5`.
+
+**Decisao do Filipe (02/10): REMOVER o SW**, nao consertar (o CRM nao precisa ser app instalado/offline).
+- `public/sw.js` = **desligador**: install so `skipWaiting`; activate → `clients.claim` → apaga todos os
+  caches → `unregister`. **Sem handler de fetch.** ⚠️ **NUNCA apagar este arquivo** — navegador que
+  voltar daqui a semanas so se cura buscando-o (aviso no topo dele e no `CLAUDE.md`).
+- `components/pwa/LimpezaServiceWorker.tsx` (substitui `ServiceWorkerRegister`): `update()` → espera
+  ativacao (max 3 s) → `unregister()` → limpa caches; tudo em try/catch.
+- `proxy.ts`: `/sw.js` fora do login (antes dava `307 → /login` — o SW velho ficaria para sempre).
+
+**SDC completo:** @po **NO-GO 6,5** (a story prometia curar a aba aberta — falso) → v0.3 **GO 8,5** ·
+@dev 1082 testes + 8 mutacoes pegas · @qa **CONCERNS** (Q1: leitura de `navigator.serviceWorker`
+fora de try derrubaria a pagina no Firefox com armazenamento bloqueado) → corrigido `86e035b` ·
+build 117/117 · CI verde.
+
+**Read-back:** `curl` sem login → `/sw.js` 200, `no-cache`, sem fetch; `/boards` → 307 (nada aberto).
+**Chrome do Filipe, logado, que tinha o SW antigo:** 2ª carga → `{"sw":0,"controlado":null,"caches":[]}`,
+**17 leituras do Supabase, 0 via SW**. Promessa honesta: **cura a partir do proximo recarregamento.**
+
+### 3. Pendencias
+
+- [ ] 📩 **Relato da Fernanda** (o Filipe pergunta): recarregar o CRM 2x e ver se ainda "volta"
+- [ ] 🟠 Story: **rota publica reusar o card aberto** + casar telefone sem o 9º digito + limpar os 6 pares
+      e os 3 orfaos do `@lid` (limpeza so com autorizacao)
+- [ ] 🟠 Story: `useUpdateDeal` avisar a falha · pedir a linha de volta (0 linhas = erro)
+- [ ] 🟡 Story: quadro sem o corte de 1.000 cards · realtime da tela de conversas assinado 1x so
+- [ ] 🗑️ Branch remota `feat/2.61-...` (apagar so com autorizacao)
+- [ ] 💡 Velocidade: hospedar o site em servidor proprio **nao ajuda** (a tela fala direto com o banco);
+      o ganho real seria levar o Supabase de **East US para Sao Paulo** — avaliar depois de remedir
+
+---
+
 ## Sessao 2026-09-18/19 (27) — 🕳️ o lead que sumia em 500, e o botao que nao existe pra quem nunca conversou
 
 ### Como retomar
