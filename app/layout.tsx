@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
-import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister'
+import { LimpezaServiceWorker } from '@/components/pwa/LimpezaServiceWorker'
 import { InstallBanner } from '@/components/pwa/InstallBanner'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' })
@@ -30,7 +30,7 @@ export default function RootLayout({
     // suppressHydrationWarning: necessário porque a classe "dark" é aplicada no servidor mas pode ser sobrescrita por tema do sistema no cliente
     <html lang="pt-BR" className="dark" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased bg-[var(--color-bg)] text-[var(--color-text-primary)]`}>
-        <ServiceWorkerRegister />
+        <LimpezaServiceWorker />
         <InstallBanner />
         {children}
       </body>

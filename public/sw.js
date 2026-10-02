@@ -1,63 +1,37 @@
 /* eslint-disable no-restricted-globals */
-// Minimal Service Worker (MVP): cache app shell assets for faster launch.
-// Note: This does NOT provide offline data sync.
+// =============================================================================
+// DESLIGADOR (kill switch) do service worker — story 2.61.
+//
+// ⚠️ NUNCA APAGUE ESTE ARQUIVO, e não volte a registrar SW sem uma story.
+//
+// Por que ele existe: o SW antigo (cache `nossocrm-shell-v2`) respondia as
+// leituras do Supabase com a resposta da leitura ANTERIOR ("stale-while-
+// revalidate"). A tela mostrava sempre "uma leitura atrás" e o card "voltava".
+//
+// Navegadores que ainda têm o v2 instalado só se curam quando buscam este
+// endereço (/sw.js) de novo e recebem bytes novos. Se o arquivo sumir (404),
+// o navegador MANTÉM o SW velho para sempre. Por isso este arquivo fica
+// publicado por tempo indeterminado.
+//
+// O que ele faz:
+// - install: skipWaiting(), sem pré-cache (a instalação nunca falha).
+// - activate: clients.claim() ⇒ apaga TODOS os caches ⇒ unregister().
+// - NÃO tem listener de `fetch`: tudo vai direto para a rede.
+// - NÃO recarrega abas (não apaga formulário em edição).
+// =============================================================================
 
-const CACHE_NAME = 'nossocrm-shell-v2';
-const SHELL_URLS = [
-  '/',
-  '/login',
-  '/boards',
-  '/inbox',
-  '/contacts',
-  '/activities',
-  '/icons/icon.svg',
-  '/icons/maskable.svg',
-];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)).then(() => self.skipWaiting())
-  );
+self.addEventListener('install', () => {
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((k) => (k === CACHE_NAME ? Promise.resolve() : caches.delete(k))))
-    ).then(() => self.clients.claim())
+    (async () => {
+      // Falha no claim não pode impedir a limpeza.
+      await self.clients.claim().catch(() => {});
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+      await self.registration.unregister();
+    })()
   );
 });
-
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  if (req.method !== 'GET') return;
-
-  // Network-first for navigations, fallback to cache if offline.
-  if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => caches.match(req).then((r) => r || caches.match('/')))
-    );
-    return;
-  }
-
-  // Stale-while-revalidate for static assets.
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      const fetchPromise = fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => cached);
-      return cached || fetchPromise;
-    })
-  );
-});
-

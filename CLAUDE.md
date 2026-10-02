@@ -88,6 +88,8 @@ SUPABASE_SECRET_KEY                   → fallback: SUPABASE_SERVICE_ROLE_KEY
 
 ### Padrões Críticos
 
+**Service worker**: `public/sw.js` é um desligador (story 2.61). Não apagar e não voltar a registrar SW sem story. (Sem o arquivo, navegadores com o SW antigo o mantêm para sempre; `/sw.js` fica fora do matcher do `proxy.ts` para responder 200 sem sessão.)
+
 **cn utility**: importar de `@/lib/utils` (não `@/lib/utils/cn`)
 
 **Auth**: `useAuth()` de `@/context/AuthContext` retorna `{ user, profile, organizationId, signOut }`
