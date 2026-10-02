@@ -136,6 +136,38 @@ describe('LimpezaServiceWorker (story 2.61)', () => {
     expect(resolvido).toBe(true);
   });
 
+  it('(e2) getter de navigator.serviceWorker lança SecurityError: não lança, renderiza null e ainda limpa caches', async () => {
+    const c = cenario();
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    Object.defineProperty(window, 'caches', { value: c.cacheStorage, configurable: true });
+
+    let container!: HTMLElement;
+    expect(() => ({ container } = render(<LimpezaServiceWorker />))).not.toThrow();
+    expect(container.innerHTML).toBe('');
+    await waitFor(async () => expect(await c.cacheStorage.keys()).toEqual([]));
+  });
+
+  it('(e3) getter de window.caches lança SecurityError: não lança, renderiza null e ainda desregistra', async () => {
+    const c = cenario();
+    Object.defineProperty(navigator, 'serviceWorker', { value: c.sw, configurable: true });
+    Object.defineProperty(window, 'caches', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+
+    let container!: HTMLElement;
+    expect(() => ({ container } = render(<LimpezaServiceWorker />))).not.toThrow();
+    expect(container.innerHTML).toBe('');
+    await waitFor(() => expect(c.r2.unregister).toHaveBeenCalledTimes(1));
+  });
+
   it('(e) sem serviceWorker e sem caches: monta sem erro', () => {
     expect('serviceWorker' in navigator).toBe(false);
     expect('caches' in window).toBe(false);

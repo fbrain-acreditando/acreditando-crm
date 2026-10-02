@@ -85,9 +85,22 @@ export async function limparServiceWorker(
 export function LimpezaServiceWorker() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const sw = 'serviceWorker' in navigator ? navigator.serviceWorker : undefined;
-    const cacheStorage = 'caches' in window ? window.caches : undefined;
-    void limparServiceWorker(sw, cacheStorage);
+    // Ler `navigator.serviceWorker` / `window.caches` pode lançar SecurityError
+    // (ex.: Firefox com armazenamento bloqueado). Está no layout raiz: nunca
+    // pode derrubar a página. Cada leitura isolada, para uma não impedir a outra.
+    let sw: ServiceWorkerContainer | undefined;
+    let cacheStorage: CacheStorage | undefined;
+    try {
+      sw = 'serviceWorker' in navigator ? navigator.serviceWorker : undefined;
+    } catch {
+      sw = undefined;
+    }
+    try {
+      cacheStorage = 'caches' in window ? window.caches : undefined;
+    } catch {
+      cacheStorage = undefined;
+    }
+    limparServiceWorker(sw, cacheStorage).catch(() => {});
   }, []);
 
   return null;
