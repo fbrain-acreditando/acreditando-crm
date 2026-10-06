@@ -8,6 +8,35 @@
 
 ---
 
+## Sessao 2026-10-05/06 (31) — ✂️ "Leads por etapa do funil" saiu da Visao Geral (EM PRODUCAO)
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 31) e continue — a
+> Visao Geral esta sendo enxugada; a lista por etapa saiu, proximas mudancas a definir com o Filipe."*
+
+- **Pedido do Filipe (05/10):** tirar a lista "Leads por etapa do funil" (AC7 da 2.19) do bloco "Como foi o periodo".
+- **Como:** mesmo padrao dos outros blocos escondidos — `MOSTRAR_LEADS_POR_ETAPA = false` em
+  `features/dashboard/components/BlocoBSection.tsx`. **Nada apagado**; a RPC segue devolvendo `data.funil`.
+  Voltar = trocar para `true`.
+- **Gate:** `precheck:fast` local 1084 testes, 0 falha · PR **#22** · squash **`bd48fc6`** · deploy Vercel `success` 06/10 15:57 UTC.
+- ⚠️ **CI travado por queda do GitHub Actions** (incidente "major outage" 05/10 21:22 UTC): o job de
+  testes foi **cancelado 2x sem nunca pegar maquina** (`runner_name` vazio, 0 passos) — o CI aparece como
+  `fail`, mas nao rodou. Diagnostico: `githubstatus.com/api/v2/summary.json`. Filipe escolheu **esperar**,
+  nao juntar sem gate; rerodado 06/10 → verde em 2 min.
+- **Read-back no Chrome logado (fbraintech), producao:** Visao Geral com **91 leads no mes** (logo a lista
+  apareceria se existisse) → `Leads por etapa do funil` **ausente**; o bloco termina em "Mensagens enviadas";
+  0 service worker.
+- 🧹 Branch remota `feat/visao-geral-sem-leads-por-etapa` ainda existe (apagar so com autorizacao).
+
+## Sessao 2026-10-05 (30) — 🔐 login da Izadira com o mesmo acesso da Fernanda (operacao, sem codigo)
+
+- Acesso no CRM = `profiles.role` + `business_unit_members` (nao ha outra tabela de permissao — medido).
+- Convite `a93f8681…` inserido em `organization_invites` com os mesmos campos da tela Usuarios: `vendedor` · unidade Acreditando `413d2e97…` · email `mkt@acreditando.com.br` · 7 dias · `created_by` = admin `fbraintech`.
+- Izadira aceitou 05/10 16:11 UTC → perfil `e8d0f266…` ("Marketing Acreditando").
+- QA: simulando cada usuario com `set local role authenticated` + `request.jwt.claims`, Fernanda e Izadira veem **1.891 conversas · 35.011 mensagens · 1.465 deals · 2.009 contatos**; controle (uuid inexistente) = 0. **Esse metodo de simulacao de RLS serve para qualquer conferencia de acesso futura.**
+- Token de management de 1 dia gerado em 05/10 (vence 06/10).
+
 ## Sessao 2026-10-02 (29) — 🪞 a tela que mostrava a leitura de ontem (story 2.61, EM PRODUCAO)
 
 ### Como retomar
