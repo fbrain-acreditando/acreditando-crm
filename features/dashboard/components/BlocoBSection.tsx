@@ -26,6 +26,16 @@ import { percentualSemResposta, avisoDeCobertura, avisoDeCoberturaDeDeals } from
 import type { PeriodFilter } from '../hooks/useDashboardMetrics';
 import { SkeletonStatCard } from '@/components/ui/Skeleton';
 
+/**
+ * AC7 da story 2.19 — a lista "Leads por etapa do funil" — fora da tela desde
+ * 05/10/2026, a pedido do Filipe (decisão de produto, não defeito).
+ *
+ * Mesmo padrão de `MOSTRAR_BLOCO_A_FILA` e `MOSTRAR_METRICAS_DE_CARTEIRA` em
+ * `DashboardPage.tsx`: nada foi apagado. A RPC segue devolvendo `data.funil` e
+ * o JSX abaixo segue no arquivo. Ligar de volta é trocar para `true`.
+ */
+const MOSTRAR_LEADS_POR_ETAPA = false;
+
 // =============================================================================
 // Card
 // =============================================================================
@@ -202,8 +212,11 @@ export function BlocoBSection({ period }: { period: PeriodFilter }) {
                 </div>
             </div>
 
-            {/* AC7 — leads por estágio, no mesmo período dos cards acima. */}
-            {data.funil.length > 0 && (
+            {/*
+              AC7 — leads por estágio, no mesmo período dos cards acima.
+              ⚠️ FORA DA TELA desde 05/10/2026 — ver `MOSTRAR_LEADS_POR_ETAPA`.
+            */}
+            {MOSTRAR_LEADS_POR_ETAPA && data.funil.length > 0 && (
                 <div className="space-y-2">
                     <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
                         Leads por etapa do funil
