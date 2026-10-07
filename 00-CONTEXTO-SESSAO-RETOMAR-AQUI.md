@@ -27,7 +27,37 @@
 - **Read-back no Chrome logado (fbraintech), producao:** Visao Geral com **91 leads no mes** (logo a lista
   apareceria se existisse) → `Leads por etapa do funil` **ausente**; o bloco termina em "Mensagens enviadas";
   0 service worker.
-- 🧹 Branch remota `feat/visao-geral-sem-leads-por-etapa` ainda existe (apagar so com autorizacao).
+- 🧹 Ramo `feat/visao-geral-sem-leads-por-etapa` apagado (07/10, autorizado).
+
+### 07/10 — pendencias reavaliadas (@devops + @qa), sessao encerrada pelo Filipe
+
+**Feito (@devops):** docs enviados a `main` (`917a6d7`, historico linear — `be8e105` ja estava no GitHub) ·
+apagados os ramos ja juntados `2.51`, `2.59`, `2.60` (x2, #19 fechado) e `2.61`. Restam so `main`, `2.53`, `2.56`.
+
+**🔴 Achado: 2.53 e 2.56 em producao SEM estar na `main`.** A Edge Function foi publicada a mao (v14/v15)
+a partir dos ramos; o PR #17 (2.53) estava aberto desde 20/09 e a 2.56 nem tinha PR. Republicar a Edge
+Function da `main` **desfaria** as correcoes. E a metade Vercel da 2.56 (`route.ts`) **nunca foi ao ar**.
+⇒ aberto o **PR #23** (2.56, contem a 2.53 inteira; substitui o #17). CI verde.
+
+**QA (Quinn) do PR #23: 🟡 CONCERNS** — comentario no PR (#issuecomment-6043560381):
+- Sem conflito com a `main`; precheck na MESCLA: **1.210 testes, 0 falha**, exit 0 (o 8c pulou: token vencido).
+- `route.ts` muda a busca de contato da LP: e-mail → telefone em 2 passos, ignora mesclado, pega o mais
+  antigo, nao da mais erro com 2 contatos. **NAO resolve os cards duplicados** (telefone ainda exato, sem 9º
+  digito; deal sempre novo).
+- Migrations `20260925120000/121000` idempotentes e ja aplicadas (sessao 29 §10).
+- v15 × ramo: provavel identico (deploy ~19:46 de 26/09, depois so docs), **nao provado** (token vencido).
+
+### ⚠️ Pendencias — a decidir pelo Filipe (NADA disso foi feito sem ele)
+
+1. 🔴 **Repositorio `fbrain-acreditando/acreditando-crm` e PUBLICO** (conferido: `visibility: PUBLIC`).
+   Nome e telefone de lead real aparecem em docs, stories, testes e numa migration (padrao ja existia na 2.52).
+   Risco LGPD. Decidir: tornar privado (configuracao da conta — so com OK) e/ou anonimizar.
+2. 🟠 **Juntar o PR #23** — exige OK explicito (muda a busca de contato da LP em producao) + conferir 1 lead
+   real da LP depois do deploy. Fechar o #17 quando o #23 entrar.
+3. 🟠 **Story nova (@sm):** LP com variante do 9º digito + guarda de card aberto, reusando
+   `lib/deals/cardAberto.ts` e `lib/meta-form/telefone.ts` (a rota do formulario Meta ja faz isso).
+4. 🟡 Renovar `.credenciais/supabase-crm-mgmt.token` → rodar o teste 8c e comparar Edge Function v15 × ramo.
+5. Seguem da sessao 29: relato da Fernanda · `useUpdateDeal` avisar falha · quadro com corte de 1.000 cards.
 
 ## Sessao 2026-10-05 (30) — 🔐 login da Izadira com o mesmo acesso da Fernanda (operacao, sem codigo)
 
