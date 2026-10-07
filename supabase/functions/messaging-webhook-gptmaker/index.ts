@@ -40,6 +40,7 @@ import {
   generateStableEventId,
   getSecretFromRequest,
   timingSafeEqual,
+  telefoneConfiavelDoPayload,
   type GptMakerPayload,
   type NormalizedEvent,
 } from "./parser.ts";
@@ -51,11 +52,52 @@ import { fetchAudioTranscription } from "./transcription.ts";
 // Mover o card na transferência tem casos de borda que precisam de teste e não
 // precisam de banco (não regredir, empate de ordem, board diferente).
 import { decideStageMove, decideReplyStageMove } from "./stage-move.ts";
-import { resolveContactId, type ContactResolverClient } from "./contact.ts";
+import {
+  resolveContactId,
+  nomeParaContato,
+  preencherNomeVazio,
+  type ContactResolverClient,
+  type ContactNameClient,
+} from "./contact.ts";
 import {
   updateConversationPreview,
   type ConversationPreviewClient,
 } from "./conversation-preview.ts";
+
+// O eco da mensagem que o CRM acabou de enviar volta por este webhook com o id
+// REAL do provedor e virava uma SEGUNDA linha (100% dos 346 envios medidos).
+// O critério de casamento vive em módulo próprio — é delicado e testável sem
+// banco. Story 2.53.
+import {
+  casarEcoComMensagemEnviada,
+  type EchoMatchClient,
+} from "./echo-match.ts";
+
+// O `@lid` (número oculto do WhatsApp) fazia o mesmo lead nascer como contato
+// novo, sem telefone, num card à parte — 43 "cards espelho" medidos no banco.
+// O mapa de apelidos e a guarda de card aberto vivem em módulos próprios porque
+// são decisões delicadas e testáveis sem banco. Story 2.56.
+import {
+  registrarAlias,
+  resolverAlias,
+  marcarIdentidadeNaoConfirmada,
+  type AliasMapClient,
+} from "./alias-map.ts";
+import {
+  encontrarCardAberto,
+  marcarCardComoAtualizado,
+  type DealGuardClient,
+} from "./deal-guard.ts";
+
+// 🔴 A DECISÃO de qual conversa/contato/card o evento pertence NÃO mora mais
+// aqui. Ela vive em `conversation-identity.ts`, puro e testável — porque este
+// arquivo está no `exclude` do `tsconfig.json` e um `throw` na fiação faria o
+// handler responder 200 sem inserir a mensagem (achado ALTA-1 do @qa, 25/09).
+// O que sobrou aqui embaixo são os ADAPTADORES: cada porta ligada ao Supabase.
+import {
+  garantirIdentidadeDaConversa,
+  type ConversationPorts,
+} from "./conversation-identity.ts";
 
 // =============================================================================
 // TYPES
@@ -204,6 +246,35 @@ Deno.serve(async (req) => {
   // PROCESSAMENTO
   // ---------------------------------------------------------------------------
   try {
+    // -------------------------------------------------------------------------
+    // MAPA DE APELIDOS — grava o par `@lid → telefone` (story 2.56, AC1)
+    // -------------------------------------------------------------------------
+    // Antes de qualquer processamento: se este evento trouxer o lid E um
+    // `contactPhone` que passe em `^[0-9]{10,15}$`, o par é gravado. Medido em
+    // 23/09: 95 dos 196 lids têm ao menos um evento assim, e os 95 resolvem para
+    // telefone único — zero ambiguidade.
+    //
+    // ⚠️ Vem ANTES do processamento de propósito: no mesmo evento em que o
+    // telefone aparece, a conversa já pode ser reconciliada.
+    if (normalized.lid) {
+      const telefoneDoPayload = telefoneConfiavelDoPayload(payload.contactPhone, normalized.lid);
+      if (telefoneDoPayload) {
+        await registrarAlias(
+          supabase as unknown as AliasMapClient,
+          {
+            organizationId: typedChannel.organization_id,
+            channelId: typedChannel.id,
+            alias: normalized.lid,
+            phone: telefoneDoPayload,
+          },
+          (msg) => console.log(msg)
+        );
+      }
+      // `onFirstInteraction` / `onTransfer` chegam com `contactPhone` vazio, e o
+      // eco do lid em `role:"assistant"` é reprovado pelo filtro numérico. Nos
+      // dois casos: nada gravado, nenhum erro — o evento segue normalmente.
+    }
+
     if (!normalized.chatId) {
       console.warn(
         `[GPTMaker] Payload sem contextId (event: "${rawEvent}") — gravado para inspeção, nada processado`
@@ -272,6 +343,42 @@ async function handleMessage(
 
   const externalMessageId =
     event.externalMessageId ?? `gptmaker:${chatId}:${event.timestamp.getTime()}`;
+
+  // ---------------------------------------------------------------------------
+  // Eco de um envio do próprio CRM? (story 2.53)
+  // ---------------------------------------------------------------------------
+  // O GPT Maker não devolve id no envio: o CRM grava a linha com um id sintético
+  // (`gptmaker:...`) e o mesmo envio volta aqui com o id REAL — como `outbound`,
+  // indistinguível de uma resposta da IA ou do painel. Quando o casamento acha a
+  // linha que o CRM já gravou, o eco **carimba** o id real nela em vez de criar
+  // outra.
+  //
+  // ⚠️ O caminho comum continua sendo o INSERT logo abaixo: ~92% das outbound
+  // NÃO vêm do CRM. Na dúvida o casamento não casa e a mensagem é inserida —
+  // duplicar um balão incomoda, engolir mensagem apaga histórico.
+  if (event.direction === "outbound" && event.externalMessageId) {
+    const casamento = await casarEcoComMensagemEnviada(
+      supabase as unknown as EchoMatchClient,
+      {
+        conversationId,
+        contentType: event.contentType,
+        content: event.content,
+        ecoTimestamp: event.timestamp,
+        externalMessageId: event.externalMessageId,
+        chatId,
+      },
+      (msg) => console.error(msg, { conversationId })
+    );
+
+    if (casamento.casou) {
+      // A prévia e os contadores da conversa já foram atualizados pelo trigger
+      // quando o CRM inseriu a linha. Tocar de novo só reescreveria o mesmo.
+      console.log(
+        `[GPTMaker] Eco carimbado na mensagem do CRM: ${casamento.messageId} <- ${event.externalMessageId}`
+      );
+      return;
+    }
+  }
 
   // O webhook NÃO traz a transcrição do áudio (auditados 358 eventos: `audios` é
   // array de URLs e `message` vem vazio em 100% deles). O texto existe do lado do
@@ -798,6 +905,12 @@ async function findConversation(
 /**
  * Garante conversa + contato (+ deal, se houver routing rule).
  *
+ * 📌 **Aqui só moram os ADAPTADORES.** A decisão — resolver o `@lid`, achar ou
+ * criar a conversa, marcar identidade não confirmada, apontar a conversa antiga
+ * — vive em `conversation-identity.ts` e tem teste (`conversation-identity.test.ts`).
+ * Foi para lá justamente porque ESTE arquivo não é checado pelo `tsc` e não era
+ * coberto por teste nenhum (achado ALTA-1 do @qa).
+ *
  * ⚠️ **Precisa aguentar corrida.** O GPT Maker dispara `onNewMessage` e
  * `onFirstInteraction` quase juntos (observado: 137 ms de diferença) para o
  * mesmo contato novo. As duas entregas chegam concorrentes, as duas não acham
@@ -811,66 +924,176 @@ async function ensureConversation(
   channel: ChannelRow,
   event: NormalizedEvent
 ): Promise<{ conversationId: string; contactId: string | null }> {
-  const chatId = event.chatId!;
+  const chatIdOriginal = event.chatId!;
 
-  const existing = await findConversation(supabase, channel.id, chatId);
-  if (existing) return existing;
+  const ports: ConversationPorts = {
+    log: (msg) => console.log(msg),
 
-  const contactId = await findOrCreateContact(supabase, channel, event);
+    resolverAlias: (alias) =>
+      resolverAlias(
+        supabase as unknown as AliasMapClient,
+        { channelId: channel.id, alias },
+        (msg) => console.warn(msg)
+      ).then((r) => ({ phone: r.phone, status: r.status })),
 
-  const { data: newConv, error: convCreateErr } = await supabase
-    .from("messaging_conversations")
-    .insert({
-      organization_id: channel.organization_id,
-      channel_id: channel.id,
-      business_unit_id: channel.business_unit_id,
-      external_contact_id: chatId,
-      external_contact_name: event.contactName ?? event.contactPhone ?? chatId,
-      contact_id: contactId,
-      status: "open",
-      priority: "normal",
-      metadata: {
-        gptmaker_chat_id: chatId,
-        gptmaker_phone: event.contactPhone,
-        source: "gptmaker",
-        // Defesa em profundidade: mesmo que alguém dispare o processamento da IA
-        // do CRM manualmente, ela pula esta conversa (agent.service.ts checa isto).
-        ai_paused: true,
-      },
-    })
-    .select("id")
-    .single();
-
-  if (convCreateErr) {
-    // Perdemos a corrida para outra entrega do mesmo contato: relê e segue.
-    if (isDuplicateError(convCreateErr)) {
-      const raced = await findConversation(supabase, channel.id, chatId);
-      if (raced) {
-        console.log(`[GPTMaker] Conversa criada em paralelo, reusando: ${raced.conversationId}`);
-        return raced;
+    // ⚠️ A porta ABSORVE o erro: `findConversation` lança, e um throw aqui
+    // derrubaria a decisão inteira — com o handler respondendo 200 e a mensagem
+    // nunca sendo inserida. Não achar a conversa faz criar outra (aborrecimento);
+    // estourar faz sumir mensagem (a lição da 2.53).
+    acharConversa: async (chatId) => {
+      try {
+        return await findConversation(supabase, channel.id, chatId);
+      } catch (e) {
+        console.error(
+          `[GPTMaker] Falha ao buscar conversa ${chatId} (seguindo sem ela):`,
+          e instanceof Error ? e.message : e
+        );
+        return null;
       }
-    }
-    throw toError("Falha ao criar conversa", convCreateErr);
-  }
+    },
 
-  const conversationId = newConv.id;
+    resolverContato: (input) =>
+      findOrCreateContact(supabase, channel, {
+        ...event,
+        contactPhone: input.phone,
+        contactName: input.nome,
+      }),
 
-  // Deal automático conforme a "Entrada de Leads" configurada no canal.
-  if (contactId) {
-    const routingRule = await getLeadRoutingRule(supabase, channel.id);
-    if (routingRule) {
-      await autoCreateDeal(supabase, {
+    criarConversa: async (input) => {
+      const { data: newConv, error } = await supabase
+        .from("messaging_conversations")
+        .insert({
+          organization_id: channel.organization_id,
+          channel_id: channel.id,
+          business_unit_id: channel.business_unit_id,
+          external_contact_id: input.chatId,
+          external_contact_name: input.nome ?? input.phone ?? input.chatId,
+          contact_id: input.contactId,
+          status: "open",
+          priority: "normal",
+          metadata: {
+            gptmaker_chat_id: input.chatId,
+            gptmaker_phone: input.phone,
+            // O lid fica gravado mesmo quando o alias resolveu: é o rastro de
+            // que esta conversa já foi identificada pelo número oculto.
+            ...(input.lid ? { gptmaker_lid: input.lid } : {}),
+            ...(input.identidadeNaoConfirmada ? { identidade_nao_confirmada: true } : {}),
+            source: "gptmaker",
+            // Defesa em profundidade: mesmo que alguém dispare o processamento
+            // da IA do CRM manualmente, ela pula esta conversa.
+            ai_paused: true,
+          },
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        // Perdemos a corrida para outra entrega do mesmo contato.
+        if (isDuplicateError(error)) return { corrida: true as const };
+        return { erro: toError("Falha ao criar conversa", error).message };
+      }
+
+      return { conversationId: newConv.id as string };
+    },
+
+    regraDeEntrada: () => getLeadRoutingRule(supabase, channel.id),
+
+    garantirCard: (input) =>
+      autoCreateDeal(supabase, {
         organizationId: channel.organization_id,
-        contactId,
-        boardId: routingRule.boardId,
-        stageId: routingRule.stageId,
-        conversationId,
-        contactName: event.contactName ?? event.contactPhone ?? chatId,
-      });
-    }
+        contactId: input.contactId,
+        boardId: input.boardId,
+        stageId: input.stageId,
+        conversationId: input.conversationId,
+        contactName: input.titulo,
+      }),
+
+    marcarIdentidade: async (input) => {
+      await marcarIdentidadeNaoConfirmada(
+        supabase as unknown as AliasMapClient,
+        {
+          organizationId: channel.organization_id,
+          channelId: channel.id,
+          alias: input.alias,
+          motivo: input.motivo,
+          conversationId: input.conversationId,
+          dealId: input.dealId,
+        },
+        (msg) => console.log(msg)
+      );
+    },
+
+    marcarSucessao: (antiga, nova) => marcarSucessaoDaConversa(supabase, antiga, nova),
+  };
+
+  const resultado = await garantirIdentidadeDaConversa(ports, {
+    chatId: chatIdOriginal,
+    lid: event.lid,
+    contactName: event.contactName,
+    contactPhone: event.contactPhone,
+  });
+
+  if (!resultado.conversationId) {
+    // A decisão nunca lança; quem lança é este chamador, de propósito. O handler
+    // grava o erro em `messaging_webhook_events` e o payload cru fica no banco
+    // para reprocessar — melhor que seguir e inserir mensagem sem conversa.
+    throw new Error(
+      `Não foi possível garantir a conversa do chat ${resultado.chatIdUsado}`
+    );
   }
 
-  return { conversationId, contactId };
+  return { conversationId: resultado.conversationId, contactId: resultado.contactId };
+}
+
+/**
+ * Deixa o ponteiro `sucedida_por` na conversa antiga do lid — achado MÉDIA-2.
+ *
+ * Quando o alias resolve, a conversa passa a ser a do telefone. Medido em 23/09:
+ * **93 dos 94 lids resolvidos não têm gêmea**, ou seja, o caso COMUM é nascer
+ * uma conversa nova e a `@lid` **emudecer** — sem nada, em lugar nenhum,
+ * apontando para onde a conversa continuou.
+ *
+ * Isto não move nem apaga nada (D3 = não mexer no passado): só acrescenta o
+ * ponteiro no metadata. Falhar aqui não desfaz nada.
+ */
+async function marcarSucessaoDaConversa(
+  supabase: ReturnType<typeof createClient>,
+  conversationIdAntiga: string,
+  conversationIdNova: string
+): Promise<void> {
+  try {
+    const { data: conv, error: readErr } = await supabase
+      .from("messaging_conversations")
+      .select("metadata")
+      .eq("id", conversationIdAntiga)
+      .maybeSingle();
+
+    if (readErr) {
+      console.error("[GPTMaker] Falha ao ler metadata da conversa antiga:", readErr);
+      return;
+    }
+
+    const metadata = (conv?.metadata as Record<string, unknown>) || {};
+    // Idempotente e sem reescrever histórico: o primeiro ponteiro fica.
+    if (metadata.sucedida_por === conversationIdNova) return;
+
+    const { error: updErr } = await supabase
+      .from("messaging_conversations")
+      .update({
+        metadata: {
+          ...metadata,
+          sucedida_por: conversationIdNova,
+          sucedida_em: new Date().toISOString(),
+        },
+      })
+      .eq("id", conversationIdAntiga);
+
+    if (updErr) {
+      console.error("[GPTMaker] Falha ao gravar `sucedida_por` (não fatal):", updErr);
+    }
+  } catch (e) {
+    console.error("[GPTMaker] Erro inesperado ao marcar sucessão (não fatal):", e);
+  }
 }
 
 /**
@@ -890,12 +1113,16 @@ async function findOrCreateContact(
   channel: ChannelRow,
   event: NormalizedEvent
 ): Promise<string | null> {
+  // AC8 — identificador do WhatsApp nunca vira nome. Sem nome e sem telefone,
+  // o contato nasce com o nome VAZIO; texto de apresentação é da tela.
+  const nome = nomeParaContato(event.contactName, event.contactPhone);
+
   const outcome = await resolveContactId(
     supabase as unknown as ContactResolverClient,
     {
       organizationId: channel.organization_id,
       phone: event.contactPhone,
-      name: event.contactName ?? event.contactPhone ?? "Contato do WhatsApp",
+      name: nome,
       source: "whatsapp",
     },
     (msg) => console.warn(msg)
@@ -903,6 +1130,15 @@ async function findOrCreateContact(
 
   if (outcome.contactId) {
     console.log(`[GPTMaker] Contato resolvido (${outcome.via}): ${outcome.contactId}`);
+    // Nome de verdade chegando depois preenche o campo vazio (AC8). Só vazio —
+    // nome já gravado não é tocado.
+    if (event.contactName) {
+      await preencherNomeVazio(
+        supabase as unknown as ContactNameClient,
+        { contactId: outcome.contactId, nome: event.contactName },
+        (msg) => console.log(msg)
+      );
+    }
   } else {
     console.error("[GPTMaker] Não foi possível resolver o contato — seguindo sem ele");
   }
@@ -940,8 +1176,47 @@ async function autoCreateDeal(
     conversationId: string;
     contactName: string;
   }
-) {
+): Promise<string | null> {
   try {
+    // -------------------------------------------------------------------------
+    // GUARDA DE CARD ABERTO — story 2.56, AC3 (D4)
+    // -------------------------------------------------------------------------
+    // Antes de inserir: o contato já tem card no MESMO quadro, vivo e em estágio
+    // NÃO terminal? Se tem, a conversa é vinculada a ele e nenhum card novo
+    // nasce. Estágio terminal (Ganho · Perdido · Clientes) NÃO conta como aberto
+    // — lead que volta é oportunidade nova.
+    const guarda = await encontrarCardAberto(
+      supabase as unknown as DealGuardClient,
+      {
+        organizationId: params.organizationId,
+        contactId: params.contactId,
+        boardId: params.boardId,
+      },
+      (msg) => console.warn(msg)
+    );
+
+    if (guarda.temCardAberto) {
+      console.log(
+        `[GPTMaker] Card já aberto para o contato ${params.contactId} no quadro ${params.boardId} — criação evitada, reusando deal ${guarda.dealId} (estágio ${guarda.stageId})`
+      );
+      await vincularConversaAoDeal(supabase, params.conversationId, guarda.dealId, false);
+      // D5 (Filipe, 25/09): card reusado precisa DAR SINAL. Carimba
+      // `updated_at` para ele subir nas listas ordenadas por atualização —
+      // sem mudar de coluna e sem criar atividade.
+      await marcarCardComoAtualizado(
+        supabase as unknown as DealGuardClient,
+        guarda.dealId,
+        (msg) => console.warn(msg)
+      );
+      return guarda.dealId;
+    }
+
+    if (guarda.motivo === "so-terminais") {
+      console.log(
+        `[GPTMaker] Contato ${params.contactId} só tem card em estágio terminal (${guarda.terminaisIgnorados}) — criando card novo (D4)`
+      );
+    }
+
     let stageId = params.stageId;
 
     if (!stageId) {
@@ -955,7 +1230,7 @@ async function autoCreateDeal(
 
       if (stageErr || !firstStage) {
         console.error("[GPTMaker] Could not find first stage:", stageErr);
-        return;
+        return null;
       }
       stageId = firstStage.id;
     }
@@ -975,38 +1250,58 @@ async function autoCreateDeal(
 
     if (dealErr) {
       console.error("[GPTMaker] Error auto-creating deal:", dealErr);
-      return;
+      return null;
     }
 
     console.log(`[GPTMaker] Auto-created deal: ${newDeal.id}`);
 
-    const { data: conv, error: convMetaErr } = await supabase
-      .from("messaging_conversations")
-      .select("metadata")
-      .eq("id", params.conversationId)
-      .maybeSingle();
-
-    if (convMetaErr) {
-      console.error("[GPTMaker] Failed to read conversation metadata:", convMetaErr);
-      return;
-    }
-
-    const { error: metaUpdateErr } = await supabase
-      .from("messaging_conversations")
-      .update({
-        metadata: {
-          ...((conv?.metadata as Record<string, unknown>) || {}),
-          deal_id: newDeal.id,
-          auto_created_deal: true,
-        },
-      })
-      .eq("id", params.conversationId);
-
-    if (metaUpdateErr) {
-      console.error("[GPTMaker] Failed to update conversation metadata:", metaUpdateErr);
-    }
+    await vincularConversaAoDeal(supabase, params.conversationId, newDeal.id as string, true);
+    return newDeal.id as string;
   } catch (error) {
     console.error("[GPTMaker] Unexpected error in autoCreateDeal:", error);
+    return null;
+  }
+}
+
+/**
+ * Aponta a conversa para o card — o mesmo caminho para card novo e para card
+ * reaproveitado (AC3).
+ *
+ * `auto_created_deal` diz a verdade sobre a origem: `true` quando este webhook
+ * criou o card, `false` quando ele apenas reusou um que já existia. Gravar
+ * `true` nos dois casos faria o histórico mentir sobre quem criou o quê.
+ */
+async function vincularConversaAoDeal(
+  supabase: ReturnType<typeof createClient>,
+  conversationId: string,
+  dealId: string,
+  criadoAqui: boolean
+): Promise<void> {
+  const { data: conv, error: convMetaErr } = await supabase
+    .from("messaging_conversations")
+    .select("metadata")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (convMetaErr) {
+    console.error("[GPTMaker] Failed to read conversation metadata:", convMetaErr);
+    return;
+  }
+
+  const { error: metaUpdateErr } = await supabase
+    .from("messaging_conversations")
+    .update({
+      metadata: {
+        ...((conv?.metadata as Record<string, unknown>) || {}),
+        deal_id: dealId,
+        auto_created_deal: criadoAqui,
+        ...(criadoAqui ? {} : { deal_reaproveitado: true }),
+      },
+    })
+    .eq("id", conversationId);
+
+  if (metaUpdateErr) {
+    console.error("[GPTMaker] Failed to update conversation metadata:", metaUpdateErr);
   }
 }
 

@@ -97,6 +97,32 @@ interface DealContext {
 }
 
 /**
+ * A conversa do card — sempre a MAIS RECENTE.
+ *
+ * ⚠️ Isto era `.limit(1)` **sem `.order()`**, ou seja, "uma linha qualquer". Ia
+ * bem enquanto um card tinha uma conversa só. Com a guarda de card aberto da
+ * story 2.56 (AC3), a conversa nova passa a **reusar** o card existente em vez
+ * de criar outro — então "várias conversas por card" virou rotina, e o briefing
+ * podia resumir a thread VELHA, de um atendimento já encerrado. Erraria calado:
+ * o texto sai bonito, só que sobre a conversa errada.
+ *
+ * Desempate: `last_message_at` (a que teve fala mais recente) e, para conversa
+ * que nunca recebeu mensagem, `created_at`. Achado BAIXA-8 do @qa na 2.56.
+ *
+ * Exportada só para poder ser testada — `buildDealContext` é interno e só roda
+ * com o modelo de IA no caminho.
+ */
+export function selecionarConversaDoDeal(supabase: SupabaseClient, dealId: string) {
+  return supabase
+    .from('messaging_conversations')
+    .select('id')
+    .contains('metadata', { deal_id: dealId })
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(1);
+}
+
+/**
  * Build context for a deal (different from conversation-based context).
  * Fetches deal, contact, messages from associated conversation.
  */
@@ -149,12 +175,8 @@ async function buildDealContext(
           .single()
       : Promise.resolve({ data: null }),
 
-    // 2c. Find conversation for this deal
-    supabase
-      .from('messaging_conversations')
-      .select('id')
-      .contains('metadata', { deal_id: dealId })
-      .limit(1),
+    // 2c. Find conversation for this deal — a MAIS RECENTE (ver helper abaixo)
+    selecionarConversaDoDeal(supabase, dealId),
 
     // 2d. Fetch stage config
     supabase

@@ -117,6 +117,11 @@ const contactBuilder = {
   eq: () => contactBuilder,
   is: () => contactBuilder,
   or: () => contactBuilder,
+  // Story 2.56 (AC7, teste 10): a busca do contato passou a ordenar e limitar a
+  // 1 — `.maybeSingle()` sozinho ESTOURA quando há dois contatos com o mesmo
+  // telefone, que é estado possível neste CRM.
+  order: () => contactBuilder,
+  limit: () => contactBuilder,
   maybeSingle: async () => ({ data: null, error: null }),
   update: () => contactBuilder,
   insert: () => contactBuilder,

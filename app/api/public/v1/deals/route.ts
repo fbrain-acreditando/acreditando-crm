@@ -147,17 +147,42 @@ async function upsertContactForDeal(opts: {
     throw new Error('Provide contact.email or contact.phone');
   }
 
-  let lookup = sb
-    .from('contacts')
-    .select('id')
-    .eq('organization_id', opts.organizationId)
-    .is('deleted_at', null);
-  if (email && phone) lookup = lookup.or(`email.eq.${email},phone.eq.${phone}`);
-  else if (email) lookup = lookup.eq('email', email);
-  else lookup = lookup.eq('phone', phone);
+  // ⚠️ Era `.maybeSingle()` sobre um `.or(email, phone)` — duas coisas erradas
+  // ao mesmo tempo, e a story 2.56 mexeu nas duas:
+  //
+  // 1. `.maybeSingle()` ESTOURA (PGRST116) quando a busca acha mais de uma
+  //    linha. Dois contatos com o mesmo telefone são estado POSSÍVEL aqui (a
+  //    feature de dedup + merge existe exatamente por isso) ⇒ a rota devolvia
+  //    erro num cenário legítimo e o lead da landing page se perdia.
+  // 2. Com `.or(...)`, um contato que casa por E-MAIL e outro, mais velho, que
+  //    casa por TELEFONE disputam o mesmo `ORDER BY created_at` — e o telefone
+  //    ganhava **em silêncio** só por ser mais antigo. Telefone se repete
+  //    (família, empresa, número reciclado); e-mail é a chave mais forte.
+  //
+  // Agora: **e-mail primeiro, telefone só como segunda tentativa**. Story 2.56,
+  // achado MÉDIA-5 do @qa.
+  const buscarPor = async (coluna: 'email' | 'phone', valor: string) => {
+    const r = await sb
+      .from('contacts')
+      .select('id')
+      .eq('organization_id', opts.organizationId)
+      .is('deleted_at', null)
+      // Contato já mesclado é registro morto — escrever nele some com o lead da
+      // vista sem erro nenhum aparecer. Mesma correção em `find_or_create_contact`.
+      .is('merged_into_id', null)
+      .eq(coluna, valor)
+      // Desempate igual ao de `find_or_create_contact`: o mais antigo vivo.
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (r.error) throw r.error;
+    return r;
+  };
 
-  const existing = await lookup.maybeSingle();
-  if (existing.error) throw existing.error;
+  let existing = email
+    ? await buscarPor('email', email)
+    : { data: null as { id: string } | null, error: null };
+  if (!existing.data && phone) existing = await buscarPor('phone', phone);
 
   const now = new Date().toISOString();
   const base: any = {
