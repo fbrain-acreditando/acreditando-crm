@@ -7,6 +7,476 @@
 > Manual da arquitetura do repo: `CLAUDE.md` + `AGENTS.md` (na raiz).
 
 ---
+## Sessao 2026-09-22 (29) — 🪪 o lead virou DOIS cards: a mesma conversa do WhatsApp partida em duas (telefone x @lid)
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 29) e continue — o defeito
+> esta PROVADO, os cards do Bruno foram juntados (secao 5) e a **2.56 esta EM PRODUCAO desde 26/09**
+> (v15, secao 10). Falta: ver o primeiro `@lid` real passar pelo caminho novo, push/PR (@devops),
+> e as 4 decisoes da 2.58."*
+
+### 0. De onde veio
+
+A **Fernanda** relatou em 22/09: o lead **11 95134-2931** ja tinha card e apareceu **mais um**.
+
+### 1. 🔑 O que esta provado (banco de producao, 22/09)
+
+O lead e **Bruno Nascimento Motta** (nome lido do formulario medico que ele enviou no chat — o CRM nao
+tinha o nome em lugar nenhum). Ele tem **DOIS cards criados no mesmo dia, com 7 minutos de diferenca**,
+e a **mesma conversa do WhatsApp foi partida em duas**:
+
+| | Card 1 `bfe86a1a` | Card 2 `38a70768` |
+|---|---|---|
+| Titulo | **" - WhatsApp"** (sem nome) | **"T - Bruno Nascimento Motta - WhatsApp"** |
+| Contato | `c25d65f2` · phone **+5511951342931** · **nome vazio** | `a70742e1` · **phone NULL** · nome com prefixo T- |
+| Conversa | `621ff8aa` · contextId `<canal>-5511951342931` | `924515db` · contextId `<canal>-150439953756312@lid` |
+| Mensagens | **8, TODAS `inbound`** (so o cliente) | **5, TODAS `outbound`** (so as respostas da Fernanda) |
+| Criado | 21/09 **18:02 UTC** (15:02 BRT) | 21/09 **18:09 UTC** (15:09 BRT) |
+| Etapa hoje | **Lead novo** (parado) | **Avaliacao agendada** (mexido em 22/09) |
+
+⇒ **O card 1 tem as perguntas e o card 2 tem as respostas.** Nenhum dos dois mostra a conversa inteira.
+A sessao dele foi combinada para **29/10** — o combinado esta no card 2, o telefone esta no card 1.
+
+### 2. O mecanismo — FATO no codigo (@dev)
+
+1. O GPT Maker as vezes identifica o mesmo chat pelo **numero oculto do WhatsApp (`@lid`)** em vez do telefone.
+2. `normalizePhone` recusa qualquer valor com `@` e devolve null (`parser.ts:166`).
+3. Com phone null, `find_or_create_contact` **insere direto, sem procurar** (migration `20260804120000:59-64`)
+   ⇒ contato novo **sem telefone**.
+4. A conversa e achada por `(channel_id, external_contact_id = contextId)` (`index.ts:825-841`). Se o
+   contextId muda (telefone → lid), **e outra conversa**.
+5. `autoCreateDeal` (`index.ts:978-1056`) **nao checa se o contato ja tem card aberto** ⇒ card novo.
+6. **Nao existe reconciliacao lid → telefone** em lugar nenhum. `merge_contacts` so junta por phone/email,
+   e contato sem phone fica de fora.
+- Bug lateral: o filtro de nome em `parser.ts:287` e **no-op** — por isso existe contato chamado `...@lid`.
+
+### 3. 📏 Escala medida (banco inteiro, 24/07 a 22/09)
+
+| Medida | Valor |
+|---|---|
+| Conversas com contextId `@lid` | **143** |
+| Delas, que **criaram card** | **139** |
+| Cards "espelho" — conversa `@lid` **so com saida** (como o card 2 do Bruno) | **42** |
+| Cards vindos de `@lid` so em setembro | **32** |
+| Contatos sem telefone na base | **164** |
+
+### 5. ✅ 23/09 — os 2 cards do Bruno foram JUNTADOS (autorizado pelo Filipe)
+
+`merge_contacts(source=c25d65f2 → target=a70742e1)` + **soft delete** do card vazio. Executado como o
+profile admin `c8360088` (fbraintech), setando `request.jwt.claims` na transacao — **a funcao exige
+`auth.uid()`**, entao o token de management sozinho da `Unauthorized`.
+
+**Read-back no banco (nao a resposta da chamada):**
+
+| Depois | Estado real |
+|---|---|
+| Contato `a70742e1` "T - Bruno Nascimento Motta" | **ativo, com phone +5511951342931**, 2 conversas, 1 card |
+| Contato `c25d65f2` (sem nome) | `deleted_at` + `merged_into_id` = a70742e1 — **nao apagado** |
+| Card `38a70768` (Avaliacao agendada) | ativo, no contato certo |
+| Card `bfe86a1a` (" - WhatsApp", vazio) | `deleted_at` preenchido ⇒ **sai do quadro, e reversivel** |
+| `contact_merge_log` | 1 linha, `merged_by` = admin, `deals:1, conversations:1` |
+
+🪤 **A exclusao da TELA e destrutiva** (`lib/supabase/deals.ts:569-578` faz `.delete()` cru, com CASCADE
+em notes/files/items). Por isso usei `deleted_at` — as listagens ja filtram `deleted_at is null`
+(`deals.ts:298,349,379`). Script: `scratchpad/merge-bruno.mjs` (SQL registrado na sessao).
+
+### 6. 🔬 Spike do @analyst — da para ligar lid → telefone?
+
+| Via | Cobertura | Ambiguidade |
+|---|---|---|
+| **`contactPhone` no payload do webhook** (mesmo evento traz `contextId` @lid **e** o telefone) | **95 de 196 lids (48%)** | **ZERO** — os 95 resolvem para telefone unico |
+| `whatsappPhone` na listagem de chats da API do fornecedor | 276 de 473 chats @lid (58%) | baixa |
+| Janela de ±30 min entre conversas | 41 pares unicos (28,7%) | **79 ambiguos (55,2%)** ⇒ inviavel sozinha |
+
+🪤 **Armadilha:** em eventos `role:"assistant"` o `contactPhone` as vezes **ecoa o proprio lid** — filtrar
+por `^[0-9]{10,15}$`. `onFirstInteraction`/`onTransfer` vem com `contactPhone` vazio.
+🔴 **O caso Bruno nao e resolvivel por nenhuma das duas vias** (os 5 eventos do lid sao todos
+`assistant` com contactPhone = o lid). INFERENCIA do analista: o telefone so vaza quando ha mensagem
+**inbound** — e chat @lid puramente outbound e exatamente onde a duplicata nasce. ⇒ **fila de revisao
+humana e obrigatoria**; reconciliacao 100% automatica nao existe.
+🪤 `merge_contacts` **nao move `whatsapp_calls`** · `find_duplicate_contacts` so agrupa por phone/email
+iguais ⇒ **a Fernanda nunca ve esse par na tela de duplicados**.
+
+
+### 8. 📋 SDC rodado em 23/09 — story 2.56 escrita, validada e DESTRAVADA
+
+| Fase | Agente | Resultado |
+|---|---|---|
+| Spike | @analyst | mapa lid→telefone: `contactPhone` do webhook resolve **95 de 196 lids com ZERO ambiguidade** (secao 6) |
+| Story | @sm | `docs/stories/2.56.a-conversa-que-nasce-partida-em-dois-cards.story.md` (8 ACs, 466 linhas) |
+| Validacao | @po | 🟢 **GO 8/10** + 5 correcoes obrigatorias, todas aplicadas |
+
+🪤 **Numeracao:** o @sm ia gravar como 2.55 — **a 2.55 ja existe** na branch `docs/2.55-erro-de-envio-na-tela`
+(local, sem push). `ls docs/stories` na branch atual **nao ve** story de outra branch. Renumerada para 2.56.
+
+🔴 **O @po DERRUBOU um numero da story:** o "32 cards espelho em setembro" era falso — sao **5**
+(jul 21 · ago 17 · set 5). A frase *"o volume esta subindo"* caiu junto: **a tendencia e de QUEDA**.
+A urgencia passou a se apoiar no passivo e no dano por caso. (Os outros 5 numeros conferidos bateram,
+com drift de +1 por ser outro dia.) 📌 Vale a licao do projeto: **numero que vira justificativa
+precisa ser refeito por quem valida.**
+
+**Decisoes do Filipe (23/09):**
+
+| # | Pergunta | Decisao |
+|---|---|---|
+| D1 | Onde fica a identidade | **A — tabela de apelidos lid→telefone** (aditiva; nao mexe na chave atual) |
+| D2 | Quando o lid NAO resolve | **B — cria o card, porem MARCADO para revisao.** ⚠️ Contraria a recomendacao do @sm (era A, nao criar card): *nada pode ficar invisivel para a atendente*. Efeito colateral bom: a story deixou de depender da fila |
+| D3 | Os 41 cards-espelho antigos | **C — nao mexer no passado.** Passivo aceito; nenhuma story aberta |
+| D4 | Card em estagio final conta como "aberto"? | **Nao conta** — lead que volta ganha card novo. Terminais: **Ganho · Perdido · Clientes** (os outros 10 contam). Risco aceito: quem volta muitas vezes acumula cards |
+
+- Interface da fila de revisao fatiada para a **2.57** (so citada, nao aberta).
+- 🪤 Casar estagio **por id, nunca por nome**: existe `" Proposta enviada"` com espaco no comeco.
+- 🪤 A lista de terminais e **de um quadro so**; quadro novo precisa da lista dele (a coluna `is_closing`
+  resolveria — registrada como evolucao, fora de escopo).
+- 🔑 O token do banco **venceu no meio da sessao**; os ids dos estagios vieram da **API publica do CRM**
+  (a `crm-api-key` nao expira) — caminho alternativo util quando o management token cai.
+
+
+### 9. 🔨 25-26/09 — 2.56 implementada, 2 rodadas de gate e o furo que o @qa provou com codigo
+
+Branch **`feat/2.56-conversa-partida-em-dois-cards`** (saiu da `feat/2.53`, porque a 2.53 esta EM
+PRODUCAO e ainda nao foi mergeada). **12 commits locais, nada pushado, nada deployado, zero escrita
+em producao.** 20 arquivos, +4.800 linhas.
+
+| Rodada | @dev | @qa |
+|---|---|---|
+| 1 | 8 ACs implementados, 48 testes | 🟠 **CONCERNS** — 1 ALTA + 4 MEDIAS |
+| 2 | modulo puro `conversation-identity.ts`, 24 testes de fiacao | 🟠 **CONCERNS** — ALTA-1b |
+| 3 | `ProgressoParcial` fecha o ALTA-1b | ⏳ **rodada 3 do gate PENDENTE** |
+
+**Precheck conferido por mim (Orion), nao so pelos agentes:** `npm run precheck:fast` → **exit 0** ·
+**1.102 testes passaram, 6 pulados**.
+
+#### 🔑 O achado que justifica o gate inteiro
+
+O @qa **escreveu um teste temporario** e provou: quando uma porta acessoria (`regraDeEntrada`,
+`garantirCard`, `marcarIdentidade`, `marcarSucessao`) explodia **depois** da conversa ja criada, o
+`catch` externo **descartava o `conversationId`** e devolvia null ⇒ `ensureConversation` lanca ⇒
+handler responde **200 sem inserir a mensagem**. Era latente (nenhum adaptador lanca hoje), mas o
+modulo tinha sido escrito prometendo "impossivel por construcao". Corrigido com `ProgressoParcial`
+declarado **fora do try**, registrando cada conquista no momento em que vira fato no banco; o `catch`
+devolve o progresso. Os testes do @qa viraram permanentes, **um por porta**, com o controle negativo
+(explodir ANTES da criacao **deve** devolver null).
+
+🪤 Na refatoracao apareceu outro: `findConversation` **lancava** — o mesmo caminho de 200-sem-mensagem,
+agora absorvido. 📌 **Licao:** `expect(...).toBeDefined()` nao prova desfecho; afirmar o VALOR esperado
+(`toBe('conv-CRIADA')`) foi o que revelou o furo.
+
+#### Outros achados fechados
+
+`acharConversa` absorve erro (limite novo: falha transitoria de leitura pode **criar conversa
+duplicada** em vez de estourar — lado certo do erro) · rota publica: **e-mail vence telefone** (antes,
+2 contatos davam 500; virou escolha silenciosa do mais velho) · `briefing.service.ts` lia conversa com
+`.limit(1)` **sem `order`** — com o reuso, "varias conversas por card" vira rotina · corrida na
+marcacao nao sobrescreve mais os ids da vencedora · `sucedida_por`/`sucedida_em` na conversa antiga.
+
+🪤 **Teste que mentia de verde:** o 8c usava `return` dentro do `it()` sem token ⇒ vitest reportava
+**passed**. Virou `skipIf`, e a distincao que nasceu daí vale para o repo: **credencial vencida ≠
+constante desatualizada** — 401 pula com a razao a vista; qualquer outra falha com token presente
+quebra. ⚠️ Enquanto o token nao for renovado, **a guarda do 8c esta inativa** (ultima conferencia
+valida contra producao: 25/09).
+
+#### D5 reescrita — e virou story propria (2.58)
+
+O `updated_at` do card reusado **nao produz sinal no kanban**: `lib/supabase/deals.ts:301` ordena por
+`created_at desc`; so o cockpit (`DealCockpitClient.tsx:689`) ordena por `updatedAt`. O Filipe pediu
+outra coisa, maior: **card com mensagem nao lida sobe no topo da coluna, com icone vermelho, a nao
+lida mais antiga primeiro, e volta ao normal quando ela responde ou marca como lida.**
+⇒ `docs/stories/2.58.o-card-que-espera-resposta-sobe-na-coluna.story.md` (Draft, 4 decisoes abertas).
+
+🔑 **O que o levantamento da 2.58 revelou:** `messaging_conversations.unread_count` existe e e somado
+por trigger a cada inbound (`20260205100000:599-601`), **mas nada zera em outbound** — responder nao
+limpa. E `messaging_messages.read_at` **nao e "a atendente leu"**: e recibo do lead sobre mensagem
+NOSSA. Nao existe campo com o **instante da nao lida mais antiga**, que e o que a regra do Filipe
+exige. O quadro tambem nao assina mensagens no Realtime (`useRealtimeSync.ts:722-724`) ⇒ nao sobe
+sozinho. ⚠️ A 2.58 esta **sem numeros de volume**: o token venceu no meio e o @sm marcou como T0 em
+vez de inventar.
+
+
+### 10. 🚀 26/09 — 2.56 EM PRODUCAO (gate PASS, deploy autorizado pelo Filipe)
+
+**Gate rodada 3 = 🟢 PASS** (condicionado ao read-back). O @qa reescreveu o PROPRIO teste do furo:
+6 casos, todos passando — as 4 portas acessorias explodindo mantem o `conversationId`, a conversa
+reusada mantem `'conv-ANTIGA'`, e o **controle negativo** (explodir ANTES da criacao ⇒ `null`) tambem.
+Furou 3 testes por mutacao (8 · 2 · 2 quebras). `precheck:fast` **exit 0 · 1.103 testes** · **o 8c
+RODOU** (provado por mutacao: falhou contra o banco) e os 3 uuids terminais batem com producao.
+
+🪤 **Achado PRE-EXISTENTE que o @qa isolou (e NAO e desta story):** `echo-match.ts` (da 2.53) **nao tem
+try/catch** e roda ANTES do insert — rejeicao de rede do fetch do Deno propaga ⇒ 200 sem mensagem.
+Atinge so outbound com `externalMessageId` real. **Candidata a story propria:** envolver a chamada e,
+na duvida, **inserir** (o proprio comentario do arquivo ja diz que duplicar balao incomoda e engolir
+mensagem apaga historico).
+
+#### Sequencia do deploy (nesta ordem, com leitura de volta em cada passo)
+
+| Passo | Resultado REAL lido de volta |
+|---|---|
+| 1. Migration do mapa de apelidos | tabela `messaging_contact_aliases` criada · **4 indices · 1 policy** · 0 linhas |
+| 2. Migration do contato mesclado | `find_or_create_contact` com `merged_into_id IS NULL` · **1 unica versao** · advisory lock preservado |
+| 3. `functions deploy … --no-verify-jwt` | **v14 → v15 ACTIVE**, `verify_jwt: false` **preservado** |
+| 4. Read-back de trafego | ver abaixo |
+
+#### ✅ AC6 — parte provada (26/09 22:46 UTC)
+
+Teste com mensagem REAL do celular do Filipe (`+5512997534278`, texto "teste"):
+evento `onNewMessage` **sem erro** · **1 mensagem inserida** · contato **Filipe Costa** ja existente ·
+**conversa reusada** (1 unica conversa para o numero) · **nenhum** contato/conversa/card novo.
+
+**Controle negativo do volume — os totais nao se mexeram:**
+
+| | Antes | Depois |
+|---|---|---|
+| Contatos | 1.827 | **1.827** |
+| Conversas | 1.729 | **1.729** |
+| Cards | 1.288 | **1.288** |
+| Contatos com nome `@lid` | 35 | **35** |
+| Eventos com erro | 0 | **0** |
+
+⚠️ **O que AINDA nao foi exercitado:** o caminho do `@lid` — depende de um lead real chegar com numero
+oculto, e isso nao da para forcar. Ficou um monitor lendo o banco a cada 45 s (eventos, erros,
+mensagens novas e linhas no mapa de apelidos).
+
+📌 **Foto do problema no dia do deploy:** **155 conversas `@lid`** (eram 143 em 23/09) — o defeito
+seguiu produzindo durante a correcao. Daqui pra frente esta estancado; os 41 cards antigos ficam
+como estao (D3).
+
+🪤 **A trava do `sql-ro.mjs` barra consulta legitima por causa do NOME do objeto:** `find_or_create_contact`
+tem "create" dentro, `pg_advisory_xact_lock` tem "lock", e ate um alias `conversas_do_filipe` tem "do".
+**Nao contornar a trava** — reescrever a consulta (ex.: `proname like 'find_or_%contact'`, `prosrc like
+'%advisory%'`). Errar para o lado de bloquear e o lado certo.
+
+
+### 11. 🕳️ 26/09 — ACHADO NOVO: o quadro so carrega 1.000 cards, e 289 ficam fora da tela
+
+**Como apareceu:** o Filipe mandou o "oi" de teste e foi procurar o card — **nao achou**. O card
+EXISTE (`7e7ec350`, "Filipe Costa - WhatsApp", coluna Profissional, criado 03/08), mas esta na
+**posicao 1.210** da ordenacao. E a tela pede so os 1.000 primeiros.
+
+`lib/supabase/deals.ts:289-302`: `.is('deleted_at', null).order('created_at', {ascending:false}).limit(1000)`.
+Hoje ha **1.288 cards ativos** ⇒ **289 nunca chegam ao navegador**. Nao e dado perdido: e a tela que
+nunca os pede. **Corte por data de CRIACAO**, entao some sempre o mais antigo.
+
+| Medida (26/09) | Valor |
+|---|---|
+| Cards que a tela nao carrega | **289** (subiu 1 durante a propria sessao) |
+| Em colunas vivas (fora de Perdido/Ganho/Clientes) | **68** |
+| **Com conversa nos ultimos 30 dias** | **84** |
+| Corte | tudo criado **antes de 10/08** |
+
+Por coluna: Perdido 205 · Aguardando retorno 34 · Apresentacao enviada 18 · Profissional 14 ·
+Ganho 8 · Clientes 7 · Projeto Social 2.
+
+🔑 **84 pessoas falaram no ultimo mes e o card delas nao aparece no quadro** — inclusive gente em
+"Perdido" que VOLTOU a falar, que e exatamente o lead que se quer ver.
+
+📌 **Licao de metodo:** o defeito e **invisivel em qualquer metrica agregada** — total de cards certo,
+nenhum dado perdido, zero erro em log. So aparece quando alguem procura UM card e nao acha. Foi o
+teste do deploy que o revelou, por acidente.
+
+⏭️ **Nao corrigido.** Candidata a story propria (paginar ou carregar por coluna, em vez de corte
+global). **Nao mexer na consulta do quadro sem story e sem gate.** Piora sozinho: cada card novo
+empurra um antigo para fora.
+
+
+### 7. ⏭️ Pendencias — estado em 23/09
+
+- [x] ✅ **Cards do Bruno juntados** (ver secao 5). ⚠️ **Avisar a Fernanda:** o card que ficou e o
+      **"T - Bruno Nascimento Motta"** (Avaliacao agendada), agora COM o telefone; o card vazio sumiu
+      do quadro. A sessao dele esta marcada para **29/10**.
+- [x] ✅ **Story 2.56 escrita, validada (@po GO 8/10) e com as 4 decisoes fechadas** — ver secao 8.
+- [x] ✅ **2.56 implementada** — 12 commits locais, precheck exit 0 (1.102 testes). Ver secao 9.
+- [x] ✅ **Gate rodada 3 = PASS** e **DEPLOY FEITO em 26/09** — edge function **v15 ACTIVE**, as 2
+      migrations aplicadas, caminho normal provado com mensagem real. Ver secao 10.
+- [ ] 🟠 **AC6 so metade provado** — falta o caminho `@lid` (depende de lead real com numero oculto).
+      Conferir: conversa reusada · contato com telefone · 1 card · `sucedida_por` na conversa antiga ·
+      ou, sem telefone no payload, linha `unresolved` em `messaging_contact_aliases` com motivo.
+- [ ] 🧭 **Story nova (candidata):** `echo-match.ts` sem try/catch roda antes do insert — mesmo
+      200-sem-mensagem, mas e defeito da 2.53. Na duvida, INSERIR.
+- [ ] 🔀 **Push e PR sao do @devops** — nada foi pushado.
+- [ ] 🔴 **289 cards fora da tela do quadro** (limite de 1.000) — **84 com conversa nos ultimos 30
+      dias**. Medido, NAO corrigido. Ver secao 11. Candidata a prioridade da proxima sessao.
+- [ ] 📋 **2.57** — interface da fila de revisao (fatiada da 2.56). Ainda nao escrita.
+- [ ] 📋 **2.58** — card com mensagem nao lida sobe na coluna. Escrita, **Draft**, com **4 decisoes
+      abertas** (o que marca como lida · lido por usuario ou por org · todas as colunas ou so as ativas ·
+      onde mora o instante da nao lida mais antiga) + T0 de medicao que ficou sem token.
+- [x] 🗑️ **Os outros 41 cards-espelho:** decisao D3 = **nao mexer no passado**. Passivo aceito, nada apagado.
+- [x] 🔑 Token `supabase-crm-mgmt` **JA VENCEU** no meio da sessao (era de 1 dia). Alternativa que
+      salvou a sessao: a **API publica do CRM** com a `crm-api-key`, que nao expira.
+- [ ] 🐛 Divida pequena: `parser.ts:287` (filtro de nome no-op) · `find_or_create_contact` nao filtra
+      `merged_into_id` · `merge_contacts` nao move `whatsapp_calls`.
+
+---
+
+
+## Sessao 2026-09-20 (28) — 🪞 o eco que o CRM nao reconhecia: 100% do que ele envia entra duas vezes
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 28) e continue — a 2.53
+> esta EM PRODUCAO e provada (edge function v14); o PR #17 esta com CI verde esperando merge; a 2.55
+> (o erro cru na tela) esta escrita na branch `docs/2.55-erro-de-envio-na-tela`, esperando D1/D2/D3.
+> 🔴 Antes de tudo: a Fernanda parou de enviar pelo CRM em 18/09 — ver secao 7."*
+
+### 0. De onde veio
+
+A **Fernanda** reclamou em **15/09** que as mensagens enviadas pelo CRM aparecem **duplicadas**
+(print: dois baloes identicos as 14:40, contato "Vd transportes"). SDC rodado inteiro: investigacao
+medida → @sm → @po → @dev → @qa.
+
+### 1. 🔑 O diagnostico — e ele e determinstico, nao intermitente
+
+O GPT Maker **nao devolve id de mensagem no envio**. O provider fabrica um
+(`external_id = "gptmaker:{chatId}:{timestamp}"`, `gptmaker.provider.ts:345`). Segundos depois o
+**mesmo envio volta pelo webhook** com o id REAL, `role: "assistant"` ⇒ outbound ⇒ o webhook
+**insere uma segunda linha**. O indice unico `(conversation_id, external_id)` nao pega nada: um id
+e inventado, o outro e real.
+
+| Medida (banco de producao, 20/09) | Valor |
+|---|---|
+| Envios do CRM pelo canal GPT Maker | **346** |
+| Que viraram duas linhas | **346 — 100%** (283 texto + 63 audio) |
+| Conversas afetadas | **294** · periodo **07/08 a 18/09** |
+| Intervalo envio→eco | min 0,81 s · p50 1,89 s · p99 5,46 s · **max 16,30 s** · zero acima de 30 s |
+
+✅ **A cliente recebeu UMA mensagem.** O WhatsApp entregou uma vez; quem duplica e o registro.
+
+### 2. 🪤 As duas correcoes que mudaram a solucao no meio do caminho
+
+- **"82%" era 100%.** Os 63 envios "sem eco" eram **falso negativo do meu medidor**: sao audio, TEM
+  eco, e o hash nao casava porque **a URL da midia no eco e diferente da que o CRM gravou**.
+  ⇒ Isso matou a solucao ingenua: **casar por conteudo conserta 82% e deixa o defeito vivo na midia**,
+  com cara de resolvido. O criterio passou a ter **ramo por `content_type`**.
+- **A janela de 15 s do @po reprovaria um caso real.** Ele recomendou 15 s sobre a medicao antiga;
+  depois apareceu um eco de **16,30 s** (audio, 10/09). Fixada em **30 s**, e ele retirou os 15 s.
+
+### 3. 🔴 A armadilha central — o pior desfecho nao e duplicar, e APAGAR
+
+**~92% das outbound que chegam pelo webhook NAO vem do CRM** (IA do fornecedor respondendo, ou
+humano no painel). E **nao existe campo que as distinga**: os 4.438 eventos `role:"assistant"`
+auditados tem sempre os **mesmos 12 campos**, zero correlacao (`memberId`/`memberName`: nenhum).
+Filtrar por role — como o webhook da Meta faz com `is_echo` — **sumiria com quase todo o historico**.
+Por isso o modulo e conservador: **na duvida nao casa, e o chamador insere**.
+
+### 4. O furo que o @qa achou (D-1) — e que ninguem tinha visto
+
+Envio que **falha** grava `status='failed'` **sem** `external_id` (`route.ts:190`) ⇒ a linha ficava
+elegivel para sempre. Cenario: envio falha em t=0; em ≤30 s a IA manda um **audio**; como o ramo de
+midia nao olha conteudo, o eco legitimo **carimbaria a linha morta** — a mensagem real **nao seria
+inserida** e uma que nunca saiu viraria `sent`. Corrigido com
+`STATUS_ELEGIVEIS = ['pending','queued','sent']`, aplicado no SELECT **e dentro do UPDATE**.
+
+### 5. Entregue
+
+| Fase | Agente | Resultado |
+|---|---|---|
+| Story | @sm | `docs/stories/2.53.a-mensagem-que-o-crm-grava-duas-vezes.story.md` |
+| Validacao | @po | NO-GO 6/10 (numeros errados) → remedicao → ✅ **GO 9/10** |
+| Implementacao | @dev | `echo-match.ts` (novo) + `echo-match.test.ts` (14 testes) + `index.ts` |
+| Gate | @qa | CONCERNS (D-1 medio) → correcao → ✅ **PASS de codigo** |
+
+Commits na branch `feat/2.53-mensagem-gravada-duas-vezes`: `d7dfabf`, `40d0ca5`, `978ad30`.
+`precheck:fast` rodado pelo @dev **e** pelo @qa: **exit 0 · 996 testes, 991 passaram, 5 pulados**.
+
+**Decisoes do Filipe (20/09):** D1 = casamento no webhook com ramo por tipo (opcao A) · D2 = story
+propria para o `evolution` (**2.54 aberta**) · D3 = **nao apagar agora** — estancar primeiro.
+
+### 6. ⏭️ Pendencias
+
+- [x] ✅ **DEPLOY FEITO** — edge function `messaging-webhook-gptmaker` **v13 → v14**, ACTIVE,
+      `verify_jwt: false` preservado. ⚠️ **O CI NAO publica edge function** — o merge do PR **nao**
+      coloca nada no ar; o deploy e manual, sempre. 🪤 **Producao e o projeto `nossocrmv2`**
+      (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm` — conferir pelo `NEXT_PUBLIC_SUPABASE_URL`.
+- [x] ✅ **AC4.1 PROVADO — texto e audio.** Texto 17:59:03 ⇒ **1 linha**, id real
+      `3F974AE3...`, carimbada em **1 s**. Audio 18:04:45 ⇒ **1 linha**, id real `3F974BAF...`,
+      carimbada em **3 s** — prova o **ramo por `content_type`**, que e onde o criterio so de
+      conteudo quebrava. `sender_type='user'` preservado nos dois. 1 balao na tela.
+- [x] ✅ **AC4.2 PROVADO** — `start-conversation` disparado direto na API do GPT Maker (sem passar
+      pelo CRM): evento processado sem erro e **linha INSERIDA**; as respostas da IA aparecem
+      normalmente. **A correcao nao engole mensagem legitima.** Sem reversao.
+- [ ] 📤 **Push + PR** — exclusivo do @devops. Conferir o CI **antes** de pedir merge (a 2.48 ficou 6
+      dias parada, e o PR #16 reprovou por titulo de 103 caracteres).
+- [x] ✅ **AC5 feito** — query em producao bateu exata: **346 pares · 294 conversas · 283 texto +
+      63 audio**. Exportado (so ids e horarios). **Nada apagado.**
+- [ ] 🗑️ **D3 — decidir agora o que fazer com os 346 pares ja gravados.** A correcao esta provada;
+      a limpeza era pra ser decidida depois disso. Export pronto.
+- [ ] 🪤 **Chat antigo do GPT Maker morre:** envio numa conversa parada desde 03/08 deu
+      `400 {"error":"No value present"}`. **Nao e regressao** (falha no POST, antes do webhook);
+      destrava recriando a conversa via `start-conversation`.
+- [ ] 🟢 Limite conhecido: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje (o canal nao
+      expoe recibo de entrega) e o erro seria conservador. Revisar se o canal ganhar recibo.
+- [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 7. 🔴 Adendo de 22/09 — conferido com 2 dias de trafego real, e a usuaria parou antes da correcao
+
+Conferido em **22/09 08:31 BRT**, lendo o banco (nao a memoria da sessao):
+
+- ✅ **Zero duplicatas desde o deploy.** O medidor apontou 1 — conferi: era a resposta automatica da
+  IA ("Ola! Tudo bem? Sou a Assistente Virtual...") chegando 16 s depois, com **texto diferente**. Um
+  medidor de janela sem comparar conteudo conta resposta como eco. **0 linhas repetem o texto enviado.**
+- ✅ **Webhook saudavel:** segunda 21/09 = **730 eventos** (maior volume da semana), 309 inbound,
+  **0 eventos com erro**. O deploy nao quebrou a entrada.
+- 🔴 **So UMA pessoa envia pelo CRM — a Fernanda — e ela parou em 18/09 as 17:25 BRT**, dois dias
+  ANTES do deploy:
+
+  | | 10/09 | 11/09 | 15/09 | 16/09 | 17/09 | **18/09** | 19 a 22/09 |
+  |---|---|---|---|---|---|---|---|
+  | Fernanda | 41 | 55 | 52 | 75 | 36 | **6** | **0** |
+
+  Na segunda, com 309 leads falando, **nenhuma resposta saiu pelo CRM** — as conversas continuam, mas
+  por fora dele. ⚠️ **A causa NAO foi medida** (pode ser folga). A data bate com a reclamacao da
+  duplicata: se ela saiu do CRM achando que mandava tudo 2x ao cliente, **ela nao sabe que foi
+  corrigido**. ⇒ **A correcao nunca foi exercitada por quem reclamou**; a prova e so os 3 testes
+  de 20/09.
+
+### 8. Story 2.55 — o erro que a atendente le e nao entende (aberta em 20/09)
+
+Nasceu do erro que o Filipe **viu na tela** depois do teste: `GPT Maker API request failed: 400
+{"error":"No value present"}`. Era do teste (ele tinha excluido a conversa no fornecedor), mas a
+investigacao achou 3 defeitos no caminho de **SAIDA** — a 2.53 e no de entrada, nao e regressao:
+
+1. **Sem recuperacao quando o chat some do fornecedor.** O ramo `isPhone` do provider (`:310`) e
+   **inalcancavel**: MEDIDO, **1.601 conversas, 100% com hifen, ZERO usam `start-conversation`**. O
+   telefone esta no sufixo do `external_contact_id` e em `contacts.phone` — a recuperacao existe e
+   nao e usada. Importa porque **reativar lead antigo e caso real** (foi o que a Fernanda fazia).
+2. **O erro tecnico cru chega a atendente** (`MessageBubble.tsx:544-545`): em ingles, com o **nome do
+   fornecedor** (7 pontos) e ate **300 caracteres do corpo bruto da resposta HTTP** (`:606`). Correcao
+   por **lista branca** (licao da 2.51).
+3. **Reacao com emoji falha** (2 ocorrencias reais, 10/09 e 16/09).
+
+Frequencia: **3 falhas de envio em todo o historico** — a severidade vem do impacto, nao da frequencia.
+Arquivo: `docs/stories/2.55.o-erro-que-a-atendente-le-e-nao-entende.story.md` (commit `9e04f59`, branch
+`docs/2.55-erro-de-envio-na-tela`, **local, sem push**).
+
+### 9. ⏭️ Pendencias — estado final em 22/09
+
+- [ ] 📩 **Avisar a Fernanda que a duplicata foi corrigida** e perguntar por que parou em 18/09.
+      **Mensagem para terceiro — envio e do Filipe**, nao disparar sem ele.
+- [ ] 🔀 **Merge do PR #17** — CI verde (4/4), `MERGEABLE`. ⚠️ **O merge NAO muda producao**: a edge
+      function ja esta no ar (v14) por deploy manual.
+- [ ] 🗑️ **As 346 linhas duplicadas antigas** (294 conversas) — decisao do Filipe. Export pronto
+      (so ids e horarios). **Nada apagado.**
+- [ ] 🧭 **2.55 — D1** 🔴 gatilho do fallback (so existe 1 amostra do erro ⇒ spike antes de escolher) ·
+      **D2** 🟡 reacao: suportar ou explicar · **D3** 🟢 texto da mensagem generica (texto de produto).
+- [ ] 🔑 **Token `supabase-crm-mgmt` VENCEU em 21/09** (era de 1 dia) — o proximo deploy de edge function
+      precisa de token novo. Registrado em `.credenciais/VALIDADES.md`.
+- [ ] 🟢 Limite conhecido da 2.53: `delivered`/`read` fora de `STATUS_ELEGIVEIS` — inocuo hoje.
+- [ ] 🗑️ Continuam esperando exclusao os **7 negocios de teste** da sessao 27.
+
+### 10. 🪤 Licoes que valem para qualquer sessao futura deste repo
+
+- **O CI nao publica Edge Function.** Merge nao coloca nada no ar; o deploy e sempre manual:
+  `supabase functions deploy <nome> --project-ref jmjhtprnxjffaqhdzfmc --no-verify-jwt`.
+  **Ler o `verify_jwt` atual antes** — publicar sem a flag faria o fornecedor parar de entregar.
+- **Producao e o projeto `nossocrmv2` (`jmjhtprnxjffaqhdzfmc`), NAO o `nossocrm`** — o nome sem sufixo
+  parece o certo e e o antigo. Conferir pelo `NEXT_PUBLIC_SUPABASE_URL`, nunca pelo nome.
+- **O medidor errou duas vezes para lados opostos:** casando por conteudo, **nao via a midia** (a URL
+  muda no eco ⇒ falso negativo, "82%" era 100%); casando so por janela, **contou resposta da IA como
+  eco** (falso positivo). Conferir amostra antes de publicar a taxa.
+- **Chat antigo do fornecedor morre:** `400 {"error":"No value present"}` = o chat nao existe mais la.
+  Destrava com `POST /v2/channel/{channelId}/start-conversation` `{message, phone}`.
+
+---
 
 ## Sessao 2026-10-05/06 (31) — ✂️ "Leads por etapa do funil" saiu da Visao Geral (EM PRODUCAO)
 

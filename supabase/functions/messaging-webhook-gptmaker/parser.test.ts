@@ -17,6 +17,11 @@ import {
   timingSafeEqual,
   getSecretFromRequest,
   recipientFromContextId,
+  isLid,
+  extractLid,
+  telefoneConfiavelDoPayload,
+  chatIdPorTelefone,
+  sanitizeContactName,
   TRANSFER_DEDUPE_WINDOW_MS,
 } from './parser';
 
@@ -399,5 +404,133 @@ describe('getSecretFromRequest', () => {
   it('sem segredo devolve vazio — o handler nega por default', () => {
     const req = makeRequest();
     expect(getSecretFromRequest(req, new URL(req.url))).toBe('');
+  });
+});
+
+// =============================================================================
+// STORY 2.56 — o `@lid`, o telefone que ecoa o lid, e o nome que nunca é o lid
+// =============================================================================
+
+describe('2.56 — extração do @lid', () => {
+  it('reconhece o lid no contextId (caso Bruno, 21/09/2026)', () => {
+    const ev = normalizeEvent({
+      contextId: '3E14B107-150439953756312@lid',
+      role: 'assistant',
+      message: 'Oi Bruno, tudo bem?',
+      messageId: 'M1',
+    });
+    expect(ev.lid).toBe('150439953756312@lid');
+  });
+
+  it('reconhece o lid no recipient (onFirstInteraction)', () => {
+    expect(extractLid({ recipient: '27870562914352@lid', contextId: 'CH-27870562914352@lid' })).toBe(
+      '27870562914352@lid'
+    );
+  });
+
+  it('conversa por TELEFONE não tem lid — o caminho da maioria não muda', () => {
+    const ev = normalizeEvent({
+      contextId: '3E14B107-553598205552',
+      role: 'user',
+      message: 'quanto custa?',
+      contactPhone: '553598205552',
+      messageId: 'M2',
+    });
+    expect(ev.lid).toBeNull();
+    expect(ev.contactPhone).toBe('+553598205552');
+  });
+
+  it('isLid só aceita o sufixo @lid', () => {
+    expect(isLid('150439953756312@lid')).toBe(true);
+    expect(isLid('553598205552@s.whatsapp.net')).toBe(false);
+    expect(isLid('553598205552')).toBe(false);
+    expect(isLid(null)).toBe(false);
+  });
+});
+
+describe('2.56 — AC1: qual contactPhone é confiável', () => {
+  const LID = '150439953756312@lid';
+
+  it('teste 1: telefone numérico com lid junto ⇒ aceito e normalizado', () => {
+    expect(telefoneConfiavelDoPayload('5511951342931', LID)).toBe('+5511951342931');
+  });
+
+  it('teste 2: contactPhone ECOANDO o lid ⇒ recusado', () => {
+    expect(telefoneConfiavelDoPayload(LID, LID)).toBeNull();
+  });
+
+  it('teste 2b: lid ecoado SEM o sufixo @lid ⇒ também recusado', () => {
+    // 15 dígitos passariam no ^[0-9]{10,15}$ — o que reprova é ser o próprio lid.
+    expect(telefoneConfiavelDoPayload('150439953756312', LID)).toBeNull();
+  });
+
+  it('teste 3: contactPhone vazio (onFirstInteraction / onTransfer) ⇒ nada, sem erro', () => {
+    expect(telefoneConfiavelDoPayload('', LID)).toBeNull();
+    expect(telefoneConfiavelDoPayload(undefined, LID)).toBeNull();
+    expect(telefoneConfiavelDoPayload(null, LID)).toBeNull();
+  });
+
+  it('fora da faixa de 10 a 15 dígitos ⇒ recusado', () => {
+    expect(telefoneConfiavelDoPayload('123456789', LID)).toBeNull();
+    expect(telefoneConfiavelDoPayload('1234567890123456', LID)).toBeNull();
+  });
+
+  it('com "+" não passa: o payload do fornecedor manda dígitos puros', () => {
+    expect(telefoneConfiavelDoPayload('+5511951342931', LID)).toBeNull();
+  });
+});
+
+describe('2.56 — AC2: a chave da conversa derivada do telefone', () => {
+  it('troca o lid pelos dígitos do telefone, mantendo o prefixo do canal', () => {
+    expect(chatIdPorTelefone('3E14B107-150439953756312@lid', '+5511951342931')).toBe(
+      '3E14B107-5511951342931'
+    );
+  });
+
+  it('sem telefone ou sem hífen, não inventa chave', () => {
+    expect(chatIdPorTelefone('3E14B107-150439953756312@lid', null)).toBeNull();
+    expect(chatIdPorTelefone('semhifen', '+5511951342931')).toBeNull();
+    expect(chatIdPorTelefone(null, '+5511951342931')).toBeNull();
+  });
+});
+
+describe('2.56 — AC8: nenhum contato volta a se chamar …@lid', () => {
+  it('teste 11: nome vindo como …@lid ⇒ contato fica com nome VAZIO', () => {
+    const ev = normalizeEvent({
+      contextId: 'CH-27870562914352@lid',
+      role: 'user',
+      message: 'oi',
+      messageId: 'M3',
+      contactName: '27870562914352@lid',
+      contactPhone: '27870562914352@lid',
+    });
+    expect(ev.contactName).toBeNull();
+  });
+
+  it('o filtro antigo era no-op — este teste é o que o impede de voltar', () => {
+    expect(sanitizeContactName('27870562914352@lid')).toBeNull();
+    expect(sanitizeContactName('553598205552@s.whatsapp.net')).toBeNull();
+    expect(sanitizeContactName('120363@g.us')).toBeNull();
+    expect(sanitizeContactName('   ')).toBeNull();
+    expect(sanitizeContactName(undefined)).toBeNull();
+  });
+
+  it('nome de verdade passa — inclusive com acento e sobrenome', () => {
+    expect(sanitizeContactName('Bruno Nascimento Motta')).toBe('Bruno Nascimento Motta');
+    expect(sanitizeContactName('  Maria Aparecida  ')).toBe('Maria Aparecida');
+  });
+
+  it('nome legítimo com @ continua passando — o alvo é o identificador', () => {
+    expect(sanitizeContactName('Ana @anafisio')).toBe('Ana @anafisio');
+  });
+
+  it('cai para `name` quando `contactName` é identificador', () => {
+    const ev = normalizeEvent({
+      contextId: 'CH-27870562914352@lid',
+      interactionId: 'I1',
+      contactName: '27870562914352@lid',
+      name: 'Bruno Nascimento Motta',
+    });
+    expect(ev.contactName).toBe('Bruno Nascimento Motta');
   });
 });

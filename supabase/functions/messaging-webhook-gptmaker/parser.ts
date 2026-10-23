@@ -114,6 +114,14 @@ export interface NormalizedEvent {
   contactPhone: string | null;
   contactAvatar: string | null;
   timestamp: Date;
+  /**
+   * O número oculto do WhatsApp (`@lid`) quando o chat é identificado por ele —
+   * ex.: `"150439953756312@lid"`. `null` no caminho normal (telefone).
+   *
+   * É a chave do mapa de apelidos da story 2.56: com `lid` **e** `contactPhone`
+   * no mesmo evento, o par é gravado e passa a reconciliar as próximas entregas.
+   */
+  lid: string | null;
 }
 
 // =============================================================================
@@ -181,6 +189,121 @@ export function recipientFromContextId(contextId: string | null | undefined): st
   if (idx === -1) return null;
   const recipient = contextId.slice(idx + 1);
   return recipient || null;
+}
+
+/**
+ * O identificador é um `@lid` (número oculto do WhatsApp)?
+ *
+ * Story 2.56: é ele que faz o mesmo lead nascer como contato novo, sem telefone,
+ * num card à parte.
+ */
+export function isLid(raw: unknown): boolean {
+  return typeof raw === "string" && raw.toLowerCase().endsWith("@lid");
+}
+
+/**
+ * Extrai o `@lid` do evento, se houver — prioridade: `recipient` → `contextId`.
+ *
+ * ⚠️ `contactPhone` **não** entra aqui de propósito. Em eventos
+ * `role: "assistant"` ele às vezes **ecoa o próprio lid**; usá-lo como fonte
+ * faria o apelido depender de um campo que mente.
+ */
+export function extractLid(payload: GptMakerPayload): string | null {
+  const contextId = typeof payload.contextId === "string" ? payload.contextId : null;
+  const candidatos = [
+    typeof payload.recipient === "string" ? payload.recipient : null,
+    recipientFromContextId(contextId),
+  ];
+  for (const c of candidatos) {
+    if (isLid(c)) return (c as string).trim();
+  }
+  return null;
+}
+
+/**
+ * Telefone **cru** do payload, aceito só quando é de verdade — story 2.56, AC1.
+ *
+ * Duas armadilhas medidas no spike do @analyst (23/09):
+ *
+ * 1. Em eventos `role: "assistant"`, `contactPhone` às vezes **ecoa o próprio
+ *    lid**. O `@` já reprova, mas um lid sem sufixo passaria pelo filtro
+ *    numérico — por isso o valor também é comparado com a parte numérica do lid.
+ * 2. `onFirstInteraction` e `onTransfer` chegam com `contactPhone` **vazio** —
+ *    devolvem `null` e **nada é gravado**, sem erro.
+ *
+ * O critério `^[0-9]{10,15}$` é o do AC1, aplicado ao valor CRU (o do payload
+ * vem sem `+`). O retorno é normalizado para o formato do CRM (`+55…`).
+ */
+export function telefoneConfiavelDoPayload(
+  rawPhone: unknown,
+  lid: string | null
+): string | null {
+  if (typeof rawPhone !== "string") return null;
+  const trimmed = rawPhone.trim();
+  if (!/^[0-9]{10,15}$/.test(trimmed)) return null;
+
+  // Eco do lid sem o sufixo `@lid` — não é telefone.
+  if (lid) {
+    const digitosDoLid = lid.replace(/@.*$/, "").replace(/\D/g, "");
+    if (digitosDoLid && digitosDoLid === trimmed) return null;
+  }
+
+  return normalizePhone(trimmed);
+}
+
+/**
+ * Nome do contato — story 2.56, AC8.
+ *
+ * O filtro antigo desta linha era **no-op** (`rawName && !rawName.includes("@")
+ * ? rawName : rawName ?? null` devolvia o mesmo valor nos dois ramos), e por
+ * isso existem contatos no banco cujo nome é o próprio `…@lid`.
+ *
+ * Passa a valer: identificador do WhatsApp **nunca** vira nome. O fallback é
+ * **vazio** (`null`) — a tela já sabe mostrar contato sem nome. Não inventar
+ * apelido, não gravar o lid truncado, não gravar "Contato sem nome" no banco:
+ * texto de apresentação é da tela, não do dado.
+ *
+ * ⚠️ Rejeita só o que **parece identificador** (`…@lid`, `…@s.whatsapp.net`,
+ * `…@g.us`, ou `dígitos@qualquercoisa`). Um nome legítimo com `@` — apelido de
+ * rede social, por exemplo — continua passando: o alvo é o identificador, não o
+ * caractere.
+ */
+export function sanitizeContactName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith("@lid") || lower.endsWith("@s.whatsapp.net") || lower.endsWith("@g.us")) {
+    return null;
+  }
+  // `27870562914352@algo` — parte antes do `@` só com dígitos é identificador.
+  if (/^\+?\d[\d\s-]*@/.test(trimmed)) return null;
+
+  return trimmed;
+}
+
+/**
+ * Chave da conversa derivada do TELEFONE — story 2.56, AC2.
+ *
+ * O `contextId` é `<channelId>-<recipient>`. Quando o alias resolve o lid para
+ * um telefone, a conversa que queremos reusar é a que está chaveada por
+ * `<channelId>-<dígitos do telefone>` — exatamente o formato que o fornecedor
+ * usa no caminho normal.
+ *
+ * Devolve `null` quando não dá para derivar (sem hífen no contextId, telefone
+ * vazio). Na dúvida, o chamador segue pelo caminho de hoje — nunca inventa chave.
+ */
+export function chatIdPorTelefone(
+  contextId: string | null | undefined,
+  phone: string | null | undefined
+): string | null {
+  if (!contextId || !phone) return null;
+  const idx = contextId.indexOf("-");
+  if (idx <= 0) return null;
+  const digits = phone.replace(/\D/g, "");
+  if (!digits) return null;
+  return `${contextId.slice(0, idx)}-${digits}`;
 }
 
 function firstUrl(list: unknown): string | null {
@@ -280,11 +403,11 @@ export function normalizeEvent(payload: GptMakerPayload, eventHint = ""): Normal
   const contactPhone =
     normalizePhone(payload.contactPhone) ?? normalizePhone(recipient);
 
-  // Nome: evita usar o @lid como nome quando há alternativa.
-  const rawName =
-    (typeof payload.contactName === "string" ? payload.contactName : null) ??
-    (typeof payload.name === "string" ? payload.name : null);
-  const contactName = rawName && !rawName.includes("@") ? rawName : rawName ?? null;
+  // Nome: identificador do WhatsApp NUNCA vira nome (AC8 da story 2.56).
+  // Tenta `contactName`, depois `name`; se os dois forem identificador, fica
+  // vazio — e vazio é o dado correto, não uma falha.
+  const contactName =
+    sanitizeContactName(payload.contactName) ?? sanitizeContactName(payload.name);
 
   return {
     kind: classifyEvent(eventHint, payload),
@@ -303,6 +426,7 @@ export function normalizeEvent(payload: GptMakerPayload, eventHint = ""): Normal
     contactPhone,
     contactAvatar: null,
     timestamp,
+    lid: extractLid(payload),
   };
 }
 
