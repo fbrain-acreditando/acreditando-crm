@@ -9,12 +9,13 @@ import { DealDetailModal } from './DealDetailModal';
 // nos testes; `vi.hoisted` porque os mocks sobem para o topo do módulo.
 const { mutateUpdateDeal } = vi.hoisted(() => ({ mutateUpdateDeal: vi.fn(async (..._args: unknown[]) => undefined) }));
 
-// Story 2.66 (AC9) — espiões içados: o `moveDeal` (para afirmar o 6º argumento,
-// `lossLocation`), o toast, as props do `LossReasonModal` (para disparar o
+// Stories 2.66/2.67 — espiões içados: o `moveDeal` (para afirmar o 6º e o 7º
+// argumentos, `leadLocation` e `lossNote`), o toast, as props do `LossReasonModal` (para disparar o
 // `onConfirm` como o modal real faria), o board e o estado do card.
 type LossModalPropsDeTeste = {
-  onConfirm: (reason: string, extras?: { lossLocation?: string }) => void;
+  onConfirm: (reason: string, extras?: { leadLocation?: string; lossNote?: string }) => void;
   localSugerido?: string;
+  localAtual?: string;
 };
 const { moveDealSpy, addToastSpy, lossModal, boardsDoTeste, cardExtra } = vi.hoisted(() => ({
   moveDealSpy: vi.fn(),
@@ -649,13 +650,16 @@ describe('DealDetailModal — seção do formulário da Meta (story 2.60)', () =
 });
 
 /**
- * Story 2.66 — o local de quem perdemos por Distância no card aberto.
+ * Story 2.67 — "Onde mora" e a observação da perda no card aberto
+ * (sucede os testes do local da 2.66).
  *
- * AC4/AC5 (T5/T6): os três caminhos de perda do card repassam o local na MESMA
- * escrita, e o bloco "Motivo / Local" deixa ver e corrigir — salvando SÓ a
- * chave `lossLocation`, com aviso quando falha (o `useUpdateDeal` desfaz calado).
+ * AC3: "Onde mora" é o 1º item da coluna lateral esquerda, em qualquer etapa,
+ *      e o "Salvar" manda SÓ `{ leadLocation }`.
+ * AC4: todo card perdido mostra "Motivo da perda" e "Observação" (editável,
+ *      salvando SÓ `{ lossNote }`); o local não se repete no bloco.
+ * AC7: os três caminhos de perda repassam local e observação na MESMA escrita.
  */
-describe('DealDetailModal — local da perda por Distância (story 2.66)', () => {
+describe('DealDetailModal — onde mora e observação da perda (story 2.67)', () => {
   const BOARD_BASE = {
     id: 'board-1',
     name: 'Pipeline de Vendas',
@@ -669,164 +673,290 @@ describe('DealDetailModal — local da perda por Distância (story 2.66)', () =>
     lostStayInStage: false,
     defaultProductId: null,
   };
+  const ROTULO_LOCAL = 'Onde a pessoa mora?';
+  const ROTULO_OBSERVACAO = 'Observação da perda';
+  const BLOCO_PERDA = 'Motivo e observação da perda';
 
-  async function perderPorDistancia(extras: { lossLocation?: string }) {
+  async function perder(reason: string, extras: { leadLocation?: string; lossNote?: string }) {
     const user = userEvent.setup();
     render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
     await user.click(screen.getByRole('button', { name: /perdido/i }));
     expect(lossModal.props).not.toBeNull();
     await act(async () => {
-      lossModal.props!.onConfirm('Distância', extras);
+      lossModal.props!.onConfirm(reason, extras);
     });
   }
 
-  it('🎯 botão PERDIDO + Distância com local ⇒ moveDeal com o local no 6º argumento', async () => {
-    boardsDoTeste.atual = [BOARD_BASE];
-    await perderPorDistancia({ lossLocation: 'Manaus/AM' });
+  describe('AC7 — os 3 caminhos da perda', () => {
+    it('🎯 botão PERDIDO ⇒ moveDeal com o local no 6º e a observação no 7º argumento', async () => {
+      boardsDoTeste.atual = [BOARD_BASE];
+      await perder('Lead sem interação', { leadLocation: 'Santana', lossNote: 'depende do filho' });
 
-    expect(moveDealSpy).toHaveBeenCalledTimes(1);
-    const args = moveDealSpy.mock.calls[0];
-    expect(args[1]).toBe('stage-perdido');
-    expect(args[2]).toBe('Distância');
-    expect(args[5]).toBe('Manaus/AM');
-    // Nada de 2ª escrita pelo updateDeal.
-    expect(mutateUpdateDeal).not.toHaveBeenCalled();
-  });
-
-  it('"ficar na coluna" (lostStayInStage) também leva o local', async () => {
-    boardsDoTeste.atual = [{ ...BOARD_BASE, lostStayInStage: true }];
-    await perderPorDistancia({ lossLocation: 'Guarulhos' });
-
-    expect(moveDealSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'deal-1' }),
-      'stage-1',
-      'Distância',
-      false,
-      true,
-      'Guarulhos'
-    );
-  });
-
-  it('sem local, o 6º argumento é undefined (o local anterior não é apagado)', async () => {
-    boardsDoTeste.atual = [BOARD_BASE];
-    await perderPorDistancia({});
-
-    expect(moveDealSpy.mock.calls[0][5]).toBeUndefined();
-  });
-
-  it('fallback sem board: updateDeal leva o local junto da perda, sem customFields', async () => {
-    await perderPorDistancia({ lossLocation: 'Rondônia' });
-
-    expect(moveDealSpy).not.toHaveBeenCalled();
-    const { updates } = mutateUpdateDeal.mock.calls[0][0] as { updates: Record<string, unknown> };
-    expect(updates.lossReason).toBe('Distância');
-    expect(updates.lossLocation).toBe('Rondônia');
-    expect(updates.isLost).toBe(true);
-    expect(updates).not.toHaveProperty('customFields');
-  });
-
-  it('o modal de perda recebe o ondeReside como dica', () => {
-    valoresDoCard.atual = { ondeReside: 'Zona Leste, no Carrão' };
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    expect(lossModal.props?.localSugerido).toBe('Zona Leste, no Carrão');
-  });
-
-  it('🎯 card perdido por Distância mostra o motivo e o local', () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância', lossLocation: 'Manaus/AM' };
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    const bloco = screen.getByRole('region', { name: 'Motivo e local da perda' });
-    expect(bloco.textContent).toContain('Motivo da perda: Distância');
-    expect(bloco.textContent).toContain('Local: Manaus/AM');
-    expect(within(bloco).getByRole('button', { name: /editar local/i })).toBeInTheDocument();
-  });
-
-  it('sem local: "Local não informado"', () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância' };
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    expect(screen.getByText('Local não informado')).toBeInTheDocument();
-  });
-
-  it('card aberto (não perdido) sem local NÃO mostra o bloco', () => {
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    expect(screen.queryByRole('region', { name: 'Motivo e local da perda' })).toBeNull();
-  });
-
-  it('perdido por outro motivo, sem local, NÃO mostra o bloco', () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Preço muito alto' };
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    expect(screen.queryByRole('region', { name: 'Motivo e local da perda' })).toBeNull();
-  });
-
-  it('perdido por outro motivo, mas com local gravado antes, mostra o bloco', () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Lead sem interesse', lossLocation: 'Santos' };
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    const bloco = screen.getByRole('region', { name: 'Motivo e local da perda' });
-    expect(bloco.textContent).toContain('Local: Santos');
-  });
-
-  it('🎯 Salvar chama updateDeal com EXATAMENTE { lossLocation } — sem customFields, sem lossReason', async () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância' };
-    const user = userEvent.setup();
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    await user.click(screen.getByRole('button', { name: /editar local/i }));
-    await user.type(screen.getByLabelText('Onde a pessoa mora? (bairro, cidade ou estado)'), '  Zona Leste ');
-    await user.click(within(screen.getByRole('region', { name: 'Motivo e local da perda' })).getByRole('button', { name: 'Salvar' }));
-
-    expect(mutateUpdateDeal).toHaveBeenCalledTimes(1);
-    expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({ id: 'deal-1', updates: { lossLocation: 'Zona Leste' } });
-    expect(addToastSpy).toHaveBeenCalledWith('Local salvo.', 'success');
-  });
-
-  it('apagar o texto e salvar manda lossLocation vazio (vira null no banco)', async () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância', lossLocation: 'Manaus/AM' };
-    const user = userEvent.setup();
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
-
-    await user.click(screen.getByRole('button', { name: /editar local/i }));
-    const campo = screen.getByLabelText('Onde a pessoa mora? (bairro, cidade ou estado)');
-    expect(campo).toHaveValue('Manaus/AM');
-    await user.clear(campo);
-    await user.click(within(screen.getByRole('region', { name: 'Motivo e local da perda' })).getByRole('button', { name: 'Salvar' }));
-
-    expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({ id: 'deal-1', updates: { lossLocation: '' } });
-  });
-
-  it('🎯 falha ao salvar ⇒ toast de erro e o texto continua no campo', async () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância' };
-    mutateUpdateDeal.mockImplementation(async () => {
-      throw new Error('PGRST204: column loss_location does not exist');
+      expect(moveDealSpy).toHaveBeenCalledTimes(1);
+      const args = moveDealSpy.mock.calls[0];
+      expect(args[1]).toBe('stage-perdido');
+      expect(args[2]).toBe('Lead sem interação');
+      expect(args[5]).toBe('Santana');
+      expect(args[6]).toBe('depende do filho');
+      // Nada de 2ª escrita pelo updateDeal.
+      expect(mutateUpdateDeal).not.toHaveBeenCalled();
     });
-    const user = userEvent.setup();
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
 
-    await user.click(screen.getByRole('button', { name: /editar local/i }));
-    await user.type(screen.getByLabelText('Onde a pessoa mora? (bairro, cidade ou estado)'), 'Guarulhos');
-    await user.click(within(screen.getByRole('region', { name: 'Motivo e local da perda' })).getByRole('button', { name: 'Salvar' }));
+    it('"ficar na coluna" (lostStayInStage) também leva local e observação', async () => {
+      boardsDoTeste.atual = [{ ...BOARD_BASE, lostStayInStage: true }];
+      await perder('Distância', { leadLocation: 'Guarulhos', lossNote: 'mora longe' });
 
-    expect(addToastSpy).toHaveBeenCalledWith(
-      'Não deu para salvar o local. O que você digitou continua aí.',
-      'error'
-    );
-    expect(screen.getByLabelText('Onde a pessoa mora? (bairro, cidade ou estado)')).toHaveValue('Guarulhos');
+      expect(moveDealSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'deal-1' }),
+        'stage-1',
+        'Distância',
+        false,
+        true,
+        'Guarulhos',
+        'mora longe'
+      );
+    });
+
+    it('sem local, o 6º argumento é undefined (o local anterior não é apagado); a observação vai como ""', async () => {
+      boardsDoTeste.atual = [BOARD_BASE];
+      await perder('Preço muito alto', { lossNote: '' });
+
+      expect(moveDealSpy.mock.calls[0][5]).toBeUndefined();
+      expect(moveDealSpy.mock.calls[0][6]).toBe('');
+    });
+
+    it('fallback sem board: updateDeal leva local e observação junto da perda, sem customFields', async () => {
+      await perder('Distância', { leadLocation: 'Rondônia', lossNote: '' });
+
+      expect(moveDealSpy).not.toHaveBeenCalled();
+      const { updates } = mutateUpdateDeal.mock.calls[0][0] as { updates: Record<string, unknown> };
+      expect(updates.lossReason).toBe('Distância');
+      expect(updates.leadLocation).toBe('Rondônia');
+      expect(updates).toHaveProperty('lossNote', null);
+      expect(updates.isLost).toBe(true);
+      expect(updates).not.toHaveProperty('customFields');
+      expect(updates).not.toHaveProperty('lossLocation');
+    });
+
+    it('o modal de perda recebe o ondeReside como dica e o leadLocation como valor inicial', () => {
+      valoresDoCard.atual = { ondeReside: 'Zona Leste, no Carrão' };
+      cardExtra.atual = { leadLocation: 'Santana' };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      expect(lossModal.props?.localSugerido).toBe('Zona Leste, no Carrão');
+      expect(lossModal.props?.localAtual).toBe('Santana');
+    });
   });
 
-  it('Cancelar descarta sem gravar', async () => {
-    cardExtra.atual = { isLost: true, lossReason: 'Distância', lossLocation: 'Manaus/AM' };
-    const user = userEvent.setup();
-    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+  describe('AC3 — "Onde mora" no topo da coluna lateral, em qualquer etapa', () => {
+    it('🎯 card em "Novo" mostra "Onde mora" ANTES de "Empresa (Conta)" na ordem do DOM', () => {
+      cardExtra.atual = { leadLocation: 'Santana — depende de apoio' };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
 
-    await user.click(screen.getByRole('button', { name: /editar local/i }));
-    await user.type(screen.getByLabelText('Onde a pessoa mora? (bairro, cidade ou estado)'), ' errado');
-    await user.click(screen.getByRole('button', { name: 'Cancelar' }));
+      const ondeMora = screen.getByRole('region', { name: 'Onde mora' });
+      const empresa = screen.getByText(/Empresa \(Conta\)/);
+      expect(ondeMora.compareDocumentPosition(empresa) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(ondeMora.textContent).toContain('Santana — depende de apoio');
+      // É o 1º filho da lista da coluna lateral.
+      expect(ondeMora.parentElement?.firstElementChild).toBe(ondeMora);
+    });
 
-    expect(mutateUpdateDeal).not.toHaveBeenCalled();
-    expect(screen.getByRole('region', { name: 'Motivo e local da perda' }).textContent).toContain('Local: Manaus/AM');
+    it('sem local: "Não informado" e o botão Editar', () => {
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const ondeMora = screen.getByRole('region', { name: 'Onde mora' });
+      expect(within(ondeMora).getByText('Não informado')).toBeInTheDocument();
+      expect(within(ondeMora).getByRole('button', { name: /editar/i })).toBeInTheDocument();
+    });
+
+    it('editar abre o campo com foco, limite de 200, contador e a dica do ondeReside (nunca gravada)', async () => {
+      valoresDoCard.atual = { ondeReside: 'Zona Leste' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      await user.click(within(screen.getByRole('region', { name: 'Onde mora' })).getByRole('button', { name: /editar/i }));
+      const campo = screen.getByLabelText(ROTULO_LOCAL);
+      expect(campo).toHaveFocus();
+      expect(campo).toHaveAttribute('maxLength', '200');
+      expect(campo).toHaveAttribute('placeholder', 'Ex.: Zona Leste');
+      expect(campo).toHaveValue('');
+      expect(screen.getByText('0/200')).toBeInTheDocument();
+    });
+
+    it('🎯 Salvar chama updateDeal com EXATAMENTE { leadLocation } — sem customFields, sem lossReason', async () => {
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const regiao = screen.getByRole('region', { name: 'Onde mora' });
+      await user.click(within(regiao).getByRole('button', { name: /editar/i }));
+      await user.type(screen.getByLabelText(ROTULO_LOCAL), '  Santana — depende de apoio ');
+      await user.click(within(regiao).getByRole('button', { name: 'Salvar' }));
+
+      expect(mutateUpdateDeal).toHaveBeenCalledTimes(1);
+      expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({
+        id: 'deal-1',
+        updates: { leadLocation: 'Santana — depende de apoio' },
+      });
+      expect(addToastSpy).toHaveBeenCalledWith('Local salvo.', 'success');
+    });
+
+    it('apagar o texto e salvar manda leadLocation vazio (vira null no banco)', async () => {
+      cardExtra.atual = { leadLocation: 'Santana' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const regiao = screen.getByRole('region', { name: 'Onde mora' });
+      await user.click(within(regiao).getByRole('button', { name: /editar/i }));
+      const campo = screen.getByLabelText(ROTULO_LOCAL);
+      expect(campo).toHaveValue('Santana');
+      await user.clear(campo);
+      await user.click(within(regiao).getByRole('button', { name: 'Salvar' }));
+
+      expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({ id: 'deal-1', updates: { leadLocation: '' } });
+    });
+
+    it('🎯 falha ao salvar ⇒ toast de erro e o texto continua no campo', async () => {
+      mutateUpdateDeal.mockImplementation(async () => {
+        throw new Error('PGRST204: column lead_location does not exist');
+      });
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const regiao = screen.getByRole('region', { name: 'Onde mora' });
+      await user.click(within(regiao).getByRole('button', { name: /editar/i }));
+      await user.type(screen.getByLabelText(ROTULO_LOCAL), 'São Paulo');
+      await user.click(within(regiao).getByRole('button', { name: 'Salvar' }));
+
+      expect(addToastSpy).toHaveBeenCalledWith(
+        'Não deu para salvar o local. O que você digitou continua aí.',
+        'error'
+      );
+      expect(screen.getByLabelText(ROTULO_LOCAL)).toHaveValue('São Paulo');
+    });
+
+    it('Cancelar descarta sem gravar', async () => {
+      cardExtra.atual = { leadLocation: 'Santana' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const regiao = screen.getByRole('region', { name: 'Onde mora' });
+      await user.click(within(regiao).getByRole('button', { name: /editar/i }));
+      await user.type(screen.getByLabelText(ROTULO_LOCAL), ' errado');
+      await user.click(within(regiao).getByRole('button', { name: 'Cancelar' }));
+
+      expect(mutateUpdateDeal).not.toHaveBeenCalled();
+      expect(screen.getByRole('region', { name: 'Onde mora' }).textContent).toContain('Santana');
+    });
+  });
+
+  describe('AC4 — bloco do card perdido: motivo e observação', () => {
+    it('🎯 perdido por "Preço muito alto" com observação mostra as duas linhas, sem repetir o local', () => {
+      cardExtra.atual = {
+        isLost: true,
+        lossReason: 'Preço muito alto',
+        lossNote: 'achou caro, pediu parcelado',
+        leadLocation: 'Santana',
+      };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      expect(bloco.textContent).toContain('Motivo da perda: Preço muito alto');
+      expect(bloco.textContent).toContain('Observação: achou caro, pediu parcelado');
+      expect(bloco.textContent).not.toContain('Santana');
+      expect(within(bloco).queryByRole('button', { name: /editar local/i })).toBeNull();
+    });
+
+    it('perdido sem observação mostra "Sem observação" e o botão "Editar observação"', () => {
+      cardExtra.atual = { isLost: true, lossReason: 'Lead sem interação' };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      expect(within(bloco).getByText('Sem observação')).toBeInTheDocument();
+      expect(within(bloco).getByRole('button', { name: 'Editar observação' })).toBeInTheDocument();
+    });
+
+    it('perdido sem motivo mostra "Não informado"', () => {
+      cardExtra.atual = { isLost: true };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      expect(screen.getByRole('region', { name: BLOCO_PERDA }).textContent).toContain('Motivo da perda: Não informado');
+    });
+
+    it('card aberto (não perdido) NÃO mostra o bloco', () => {
+      cardExtra.atual = { leadLocation: 'Santana', lossNote: 'sobra de uma perda antiga' };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      expect(screen.queryByRole('region', { name: BLOCO_PERDA })).toBeNull();
+    });
+
+    it('🎯 Salvar a observação manda EXATAMENTE { lossNote } — sem motivo, status ou fechamento', async () => {
+      cardExtra.atual = { isLost: true, lossReason: 'Sem transporte ou apoio para vir' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      await user.click(within(bloco).getByRole('button', { name: 'Editar observação' }));
+      const campo = screen.getByLabelText(ROTULO_OBSERVACAO);
+      expect(campo).toHaveFocus();
+      expect(campo.tagName).toBe('TEXTAREA');
+      expect(campo).toHaveAttribute('maxLength', '500');
+      await user.type(campo, ' depende do filho ');
+      expect(screen.getByText('18/500')).toBeInTheDocument();
+      await user.click(within(bloco).getByRole('button', { name: 'Salvar' }));
+
+      expect(mutateUpdateDeal).toHaveBeenCalledTimes(1);
+      expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({ id: 'deal-1', updates: { lossNote: 'depende do filho' } });
+      expect(addToastSpy).toHaveBeenCalledWith('Observação salva.', 'success');
+      expect(moveDealSpy).not.toHaveBeenCalled();
+    });
+
+    it('apagar tudo e salvar manda { lossNote: "" } (o transformDealToDb grava null)', async () => {
+      cardExtra.atual = { isLost: true, lossReason: 'Distância', lossNote: 'texto antigo' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      await user.click(within(bloco).getByRole('button', { name: 'Editar observação' }));
+      const campo = screen.getByLabelText(ROTULO_OBSERVACAO);
+      expect(campo).toHaveValue('texto antigo');
+      await user.clear(campo);
+      await user.click(within(bloco).getByRole('button', { name: 'Salvar' }));
+
+      expect(mutateUpdateDeal.mock.calls[0][0]).toEqual({ id: 'deal-1', updates: { lossNote: '' } });
+    });
+
+    it('🎯 falha ao salvar a observação ⇒ toast de erro e o texto continua no campo', async () => {
+      cardExtra.atual = { isLost: true, lossReason: 'Distância' };
+      mutateUpdateDeal.mockImplementation(async () => {
+        throw new Error('PGRST204: column loss_note does not exist');
+      });
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      await user.click(within(bloco).getByRole('button', { name: 'Editar observação' }));
+      await user.type(screen.getByLabelText(ROTULO_OBSERVACAO), 'sem apoio');
+      await user.click(within(bloco).getByRole('button', { name: 'Salvar' }));
+
+      expect(addToastSpy).toHaveBeenCalledWith(
+        'Não deu para salvar a observação. O que você digitou continua aí.',
+        'error'
+      );
+      expect(screen.getByLabelText(ROTULO_OBSERVACAO)).toHaveValue('sem apoio');
+    });
+
+    it('Cancelar descarta sem gravar', async () => {
+      cardExtra.atual = { isLost: true, lossReason: 'Distância', lossNote: 'texto antigo' };
+      const user = userEvent.setup();
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+      const bloco = screen.getByRole('region', { name: BLOCO_PERDA });
+      await user.click(within(bloco).getByRole('button', { name: 'Editar observação' }));
+      await user.type(screen.getByLabelText(ROTULO_OBSERVACAO), ' errado');
+      await user.click(within(bloco).getByRole('button', { name: 'Cancelar' }));
+
+      expect(mutateUpdateDeal).not.toHaveBeenCalled();
+      expect(screen.getByRole('region', { name: BLOCO_PERDA }).textContent).toContain('Observação: texto antigo');
+    });
   });
 });

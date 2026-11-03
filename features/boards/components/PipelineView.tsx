@@ -43,6 +43,11 @@ interface PipelineViewProps {
   setViewMode: (mode: 'kanban' | 'list') => void;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
+  /** Story 2.67 (AC5) — "Onde mora contém…". */
+  localFilter?: string;
+  setLocalFilter?: (term: string) => void;
+  /** Story 2.67 (AC5, C1) — o quadro carregou o teto de cards. */
+  quadroNoTeto?: boolean;
   ownerFilter: 'all' | 'mine';
   setOwnerFilter: (filter: 'all' | 'mine') => void;
   statusFilter: 'open' | 'won' | 'lost' | 'all';
@@ -75,6 +80,7 @@ interface PipelineViewProps {
     dealTitle: string;
     stageId: string;
     localSugerido?: string;
+    localAtual?: string;
   } | null;
   handleLossReasonConfirm: (reason: string, extras?: LossReasonExtras) => void;
   handleLossReasonClose: () => void;
@@ -219,6 +225,9 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
   setViewMode,
   searchTerm,
   setSearchTerm,
+  localFilter = '',
+  setLocalFilter,
+  quadroNoTeto = false,
   ownerFilter,
   setOwnerFilter,
   statusFilter,
@@ -323,6 +332,9 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
             setViewMode={setViewMode}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
+            localFilter={localFilter}
+            setLocalFilter={setLocalFilter}
+            quadroNoTeto={quadroNoTeto}
             ownerFilter={ownerFilter}
             setOwnerFilter={setOwnerFilter}
             statusFilter={statusFilter}
@@ -415,6 +427,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
         onConfirm={handleLossReasonConfirm}
         dealTitle={lossReasonModal?.dealTitle}
         localSugerido={lossReasonModal?.localSugerido}
+        localAtual={lossReasonModal?.localAtual}
       />
 
       {activeBoard && (

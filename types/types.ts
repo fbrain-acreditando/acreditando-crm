@@ -242,10 +242,17 @@ export interface Deal {
   lastStageChangeDate?: string; // For stagnation tracking
   lossReason?: string; // For win/loss analysis
   /**
-   * Story 2.66 — onde a pessoa mora, digitado pelo atendimento ao perder por
-   * Distância (`deals.loss_location`). Separado do `customFields.ondeReside`.
+   * Story 2.67 — onde a pessoa mora, digitado pelo atendimento em qualquer
+   * etapa (`deals.lead_location`). Separado do `customFields.ondeReside`.
+   * É da pessoa: vazio na perda NÃO apaga.
    */
-  lossLocation?: string;
+  leadLocation?: string;
+  /**
+   * Story 2.67 — observação da perda atual, em qualquer motivo
+   * (`deals.loss_note`). É da perda: regravada a cada perda. `null` só aparece
+   * num update ("apagar"); o que vem do banco chega como `undefined`.
+   */
+  lossNote?: string | null;
   aiExtracted?: Record<string, any>; // AI-extracted BANT fields (zero config)
 
   /**

@@ -90,10 +90,16 @@ export interface DbDeal {
   /** Motivo da perda, se aplicável. */
   loss_reason: string | null;
   /**
-   * Story 2.66 — local onde a pessoa mora, digitado pelo atendimento ao perder
-   * por Distância. NÃO é o `custom_fields.ondeReside` (que a IA preenche).
+   * Story 2.67 — onde a pessoa mora, digitado pelo atendimento em QUALQUER
+   * etapa. NÃO é o `custom_fields.ondeReside` (que a IA preenche).
+   * Substitui a coluna de local da 2.66 (aposentada: o front não lê nem grava).
    */
-  loss_location: string | null;
+  lead_location: string | null;
+  /**
+   * Story 2.67 — observação da perda ATUAL, em qualquer motivo. Regravada a
+   * cada perda (texto ou `null`) e editável no card perdido.
+   */
+  loss_note: string | null;
   /** Tags associadas. */
   tags: string[];
   /** Data da última mudança de estágio. */
@@ -183,8 +189,11 @@ export const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]
     companyId: db.client_company_id || '', // @deprecated - backwards compatibility
     aiSummary: db.ai_summary || undefined,
     lossReason: db.loss_reason || undefined,
-    // Story 2.66 — `null` (não informado) vira `undefined`, como o `lossReason`.
-    lossLocation: db.loss_location || undefined,
+    // Story 2.67 — `null` (não informado) vira `undefined`, como o `lossReason`.
+    // Os campos calculados `lead_location_busca`/`loss_reason_chave` (C5) NÃO
+    // são mapeados: não vêm no `select('*')`, só a lista da 2.68 os pede.
+    leadLocation: db.lead_location || undefined,
+    lossNote: db.loss_note || undefined,
     tags: db.tags || [],
     lastStageChangeDate: db.last_stage_change_date || undefined,
     customFields: db.custom_fields || {},
@@ -242,10 +251,13 @@ export const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
   else if (deal.companyId !== undefined) db.client_company_id = sanitizeUUID(deal.companyId);
   if (deal.aiSummary !== undefined) db.ai_summary = deal.aiSummary || null;
   if (deal.lossReason !== undefined) db.loss_reason = deal.lossReason || null;
-  // Story 2.66 — só entra no UPDATE quando veio. Perder por outro motivo,
-  // reabrir ou ganhar NÃO leva a chave, e por isso não apagam o local (D4).
-  // Texto vazio vira `null`: é o "apagar de propósito" da edição no card (AC5).
-  if (deal.lossLocation !== undefined) db.loss_location = deal.lossLocation || null;
+  // Story 2.67 — só entram no UPDATE quando vieram. Reabrir, ganhar ou mudar
+  // de etapa NÃO levam as chaves, e por isso não apagam o local nem a
+  // observação. Texto vazio vira `null` ("apagar de propósito").
+  // ⚠️ Nunca gravar `lead_location_busca` nem `loss_reason_chave`: são campos
+  // calculados (funções), não colunas — o PostgREST recusaria o update.
+  if (deal.leadLocation !== undefined) db.lead_location = deal.leadLocation || null;
+  if (deal.lossNote !== undefined) db.loss_note = deal.lossNote || null;
   if (deal.tags !== undefined) db.tags = deal.tags;
   if (deal.lastStageChangeDate !== undefined) db.last_stage_change_date = deal.lastStageChangeDate || null;
   if (deal.customFields !== undefined) db.custom_fields = deal.customFields;
@@ -281,6 +293,13 @@ export const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
  * );
  * ```
  */
+/**
+ * Story 2.67 (AC5, C1) — teto de cards que o quadro carrega (os mais novos).
+ * Exportado para o aviso do cabeçalho ("O quadro mostra só os 1.000 cards mais
+ * recentes…") usar o MESMO número do `.limit`.
+ */
+export const LIMITE_DEALS_DO_QUADRO = 1000;
+
 export const dealsService = {
   /**
    * Busca todos os deals da organização com seus itens.
@@ -310,7 +329,7 @@ export const dealsService = {
       if (options?.signal) dealsQuery = dealsQuery.abortSignal(options.signal);
       const { data, error } = await dealsQuery
         .order('created_at', { ascending: false })
-        .limit(1000);
+        .limit(LIMITE_DEALS_DO_QUADRO);
 
       if (error) return { data: null, error };
 
