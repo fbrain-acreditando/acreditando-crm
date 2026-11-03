@@ -36,7 +36,8 @@ export function paraE164(entrada: string | null | undefined): string | null {
 /**
  * Formas do mesmo número BR com e sem o 9º dígito.
  *
- * - `+55 DD 9XXXXXXXX` (13 dígitos, celular com 9) ⇒ também `+55 DD XXXXXXXX`.
+ * - `+55 DD 9XXXXXXXX` (13 dígitos, 9 seguido de 6-9) ⇒ também `+55 DD XXXXXXXX`.
+ *   `9` seguido de 2-5 ⇒ só a própria forma (story 2.63, QA-1).
  * - `+55 DD XXXXXXXX` com o primeiro dígito 6-9 (celular antigo, sem 9) ⇒ também `+55 DD 9XXXXXXXX`.
  * - Fixo (primeiro dígito 2-5) e número estrangeiro: só a própria forma.
  */
@@ -48,7 +49,9 @@ export function variantesDoTelefone(entrada: string | null | undefined): Variant
   if (!m) return { principal: e164, variantes: [e164] };
 
   const [, ddd, assinante] = m;
-  if (assinante.length === 9 && assinante.startsWith('9')) {
+  // Story 2.63, QA-1 (03/11): só `9` seguido de 6–9. `91…`–`95…` nunca existiram
+  // com 8 dígitos; tirar o 9 deles daria um número com cara de FIXO (outra pessoa).
+  if (assinante.length === 9 && /^9[6-9]/.test(assinante)) {
     const semNove = `+55${ddd}${assinante.slice(1)}`;
     return { principal: e164, variantes: [e164, semNove] };
   }

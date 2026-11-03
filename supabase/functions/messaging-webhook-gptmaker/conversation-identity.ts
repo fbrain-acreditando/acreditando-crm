@@ -29,6 +29,10 @@
  * 5. Lid que resolveu e tinha conversa antiga ⇒ deixa um **ponteiro** na antiga
  *    (`sucedida_por`), para ela não emudecer sem nada apontando para a nova.
  *
+ * Story 2.63: no passo 2, se a chave EXATA não acha conversa e a chave é de
+ * telefone, procura a chave com a OUTRA forma do número (com/sem o 9º dígito).
+ * Achou por ela ⇒ reusa e alinha a chave à do fornecedor (`alinharChave`).
+ *
  * ## 🔴 Contrato inegociável: NUNCA lança
  *
  * Nenhuma porta pode derrubar esta função. Falha em porta acessória (marcação,
@@ -41,6 +45,8 @@
 
 import { MOTIVO_AMBIGUO, MOTIVO_SEM_TELEFONE, type AliasStatus } from "./alias-map.ts";
 import { chatIdPorTelefone } from "./parser.ts";
+import { mascararTelefone, outrasFormas } from "./nono-digito.ts";
+import type { AlinhamentoResultado } from "./chave-da-conversa.ts";
 
 export interface IdentityEvent {
   chatId: string;
@@ -64,8 +70,18 @@ export interface ConversaEncontrada {
 export interface ConversationPorts {
   /** AC2 — o alias resolve para telefone? Só `resolved` devolve telefone. */
   resolverAlias(alias: string): Promise<{ phone: string | null; status: AliasStatus | null }>;
-  /** Conversa por `(channel_id, external_contact_id)`. */
+  /** Conversa por `(channel_id, external_contact_id)` — sempre a chave EXATA. */
   acharConversa(chatId: string): Promise<ConversaEncontrada | null>;
+  /**
+   * Story 2.63, AC3 — a conversa achada pela variante passa a ter a chave do
+   * evento (a do fornecedor). Nunca lança; `"ocupada"` = a chave nova já é de
+   * outra conversa e nada foi trocado.
+   */
+  alinharChave(input: {
+    conversationId: string;
+    chaveNova: string;
+    chaveAnterior: string;
+  }): Promise<AlinhamentoResultado>;
   /** Contato por telefone (ou criação). `null` quando nem isso deu. */
   resolverContato(input: { phone: string | null; nome: string | null }): Promise<string | null>;
   /**
@@ -119,6 +135,8 @@ export interface IdentityOutcome {
   /** A conversa já existia? (Nesse caso nada é criado nem marcado.) */
   reusouConversa: boolean;
   identidadeNaoConfirmada: boolean;
+  /** Story 2.63 — a conversa foi achada pela OUTRA forma do telefone? */
+  casouPelaVariante: boolean;
 }
 
 /** Nome mostrado na conversa/card. Sem nome e sem telefone, sobra a chave. */
@@ -149,6 +167,7 @@ interface ProgressoParcial {
   aliasResolvido: boolean;
   reusouConversa: boolean;
   identidadeNaoConfirmada: boolean;
+  casouPelaVariante: boolean;
 }
 
 /**
@@ -169,6 +188,7 @@ export async function garantirIdentidadeDaConversa(
     aliasResolvido: false,
     reusouConversa: false,
     identidadeNaoConfirmada: false,
+    casouPelaVariante: false,
   };
 
   try {
@@ -237,6 +257,29 @@ async function decidir(
     // Mesmo reusando, a conversa antiga do lid precisa do ponteiro (MÉDIA-2).
     await apontarConversaAntiga(ports, event, aliasResolvido, existente.conversationId);
     return { ...progresso };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2b. Story 2.63 — a conversa existe com a OUTRA forma do telefone?
+  // ---------------------------------------------------------------------------
+  // Só quando a chave é de TELEFONE (nunca para `@lid` não resolvido — AC6).
+  if (!precisaMarcar) {
+    const pelaVariante = await acharPelaVariante(ports, chatId, phone);
+    if (pelaVariante) {
+      progresso.conversationId = pelaVariante.conversa.conversationId;
+      progresso.contactId = pelaVariante.conversa.contactId;
+      progresso.reusouConversa = true;
+      progresso.casouPelaVariante = true;
+
+      // AC3 — acessório: falhar aqui não desfaz o reuso (a mensagem entra).
+      await ports.alinharChave({
+        conversationId: pelaVariante.conversa.conversationId,
+        chaveNova: chatId,
+        chaveAnterior: pelaVariante.chave,
+      });
+      await apontarConversaAntiga(ports, event, aliasResolvido, pelaVariante.conversa.conversationId);
+      return { ...progresso };
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -317,6 +360,44 @@ async function decidir(
   await apontarConversaAntiga(ports, event, aliasResolvido, conversationId);
 
   return { ...progresso };
+}
+
+/**
+ * Story 2.63, AC2 — procura a conversa pela OUTRA forma do telefone.
+ *
+ * - A variante sai do **telefone**, nunca do rabo do `chatId` (R1 do @po).
+ * - Só vale se a chave efetiva É a chave de telefone (`<canal>-<dígitos do
+ *   telefone>`). Se não for (ex.: chave de `@lid` com telefone ao lado), não
+ *   procura — não se inventa casamento.
+ * - **Nunca lança**: erro aqui é absorvido e o evento segue pelo caminho de hoje
+ *   (cria conversa). Duplicar é aborrecimento; perder mensagem não é aceitável.
+ */
+async function acharPelaVariante(
+  ports: ConversationPorts,
+  chatId: string,
+  phone: string | null
+): Promise<{ conversa: ConversaEncontrada; chave: string } | null> {
+  try {
+    if (!phone || chatIdPorTelefone(chatId, phone) !== chatId) return null;
+
+    for (const forma of outrasFormas(phone)) {
+      const chave = chatIdPorTelefone(chatId, forma);
+      if (!chave || chave === chatId) continue;
+      const conversa = await ports.acharConversa(chave);
+      if (conversa) {
+        ports.log(`[GPTMaker] 9º dígito — conversa achada pela variante ${mascararTelefone(forma)}`);
+        return { conversa, chave };
+      }
+    }
+    return null;
+  } catch (e) {
+    ports.log(
+      `[GPTMaker] 9º dígito — falha na busca pela variante (segue pelo caminho de hoje): ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+    return null;
+  }
 }
 
 /**

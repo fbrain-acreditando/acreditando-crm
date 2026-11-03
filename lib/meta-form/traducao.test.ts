@@ -140,6 +140,18 @@ describe('2.59 AC5 — variantes do telefone com e sem o 9º dígito', () => {
     expect(variantesDoTelefone('abc')).toBeNull();
     expect(paraE164('5535998205552')).toBe('+5535998205552');
   });
+
+  // Story 2.63, QA-1 (03/11) — `9` seguido de 2–5 nunca existiu com 8 dígitos:
+  // tirar o 9 daria um número com cara de FIXO, de outra pessoa. Números fictícios.
+  it('9 + 2–5 ⇒ só a própria forma, sem variante (QA-1 da 2.63)', () => {
+    for (const tel of ['+5511923456789', '+5511933456789', '+5511943456789', '+5511953456789']) {
+      expect(variantesDoTelefone(tel)).toEqual({ principal: tel, variantes: [tel] });
+    }
+  });
+
+  it('9 + 6–9 continua gerando a forma sem o 9 (QA-1 da 2.63)', () => {
+    expect(variantesDoTelefone('+5511967654321')?.variantes).toEqual(['+5511967654321', '+551167654321']);
+  });
 });
 
 describe('2.59 QA L3 — as 6 faixas de investimento, e nada além delas', () => {
