@@ -9,6 +9,7 @@ import { KanbanBoard } from './Kanban/KanbanBoard';
 import { KanbanList } from './Kanban/KanbanList';
 import { DeleteBoardModal } from './Modals/DeleteBoardModal';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
+import type { LossReasonExtras } from '@/components/ui/localDaPerda';
 import { DealView, CustomFieldDefinition, Board, BoardStage } from '@/types';
 import { ExportTemplateModal } from './Modals/ExportTemplateModal';
 import { useAuth } from '@/context/AuthContext';
@@ -73,8 +74,9 @@ interface PipelineViewProps {
     dealId: string;
     dealTitle: string;
     stageId: string;
+    localSugerido?: string;
   } | null;
-  handleLossReasonConfirm: (reason: string) => void;
+  handleLossReasonConfirm: (reason: string, extras?: LossReasonExtras) => void;
   handleLossReasonClose: () => void;
   boardCreateOverlay?: { title: string; subtitle?: string } | null;
 }
@@ -412,6 +414,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
         onClose={handleLossReasonClose}
         onConfirm={handleLossReasonConfirm}
         dealTitle={lossReasonModal?.dealTitle}
+        localSugerido={lossReasonModal?.localSugerido}
       />
 
       {activeBoard && (

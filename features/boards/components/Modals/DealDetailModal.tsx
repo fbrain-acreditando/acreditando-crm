@@ -20,6 +20,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { ConfirmDialog as ConfirmModal } from '@/components/ui/confirm-dialog';
 import { LossReasonModal } from '@/components/ui/LossReasonModal';
+import { LIMITE_LOCAL, localSugeridoDoCard } from '@/components/ui/localDaPerda';
 import { LeadNameEditor } from '@/components/LeadNameEditor';
 import { CustomFieldInput } from './CustomFieldInput';
 import { separarCamposDoFormularioMeta, TITULO_SECAO_FORMULARIO_META } from './secaoFormularioMeta';
@@ -181,6 +182,11 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   const [showLossReasonModal, setShowLossReasonModal] = useState(false);
   const [pendingLostStageId, setPendingLostStageId] = useState<string | null>(null);
   const [lossReasonOrigin, setLossReasonOrigin] = useState<'button' | 'stage'>('button');
+  // Story 2.66 (AC5) — edição do local de quem perdemos por Distância.
+  const [editandoLocal, setEditandoLocal] = useState(false);
+  const [rascunhoLocal, setRascunhoLocal] = useState('');
+  const [salvandoLocal, setSalvandoLocal] = useState(false);
+  const localPerdaInputId = useId();
   const [showBriefingDrawer, setShowBriefingDrawer] = useState(false);
 
   // Story 2.27 — campos personalizados só gravam quando ela clica em Salvar.
@@ -218,6 +224,8 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
       setShowLossReasonModal(false);
       setPendingLostStageId(null);
       setLossReasonOrigin('button');
+      setEditandoLocal(false);
+      setRascunhoLocal('');
       setTagQuery('');
       setShowBriefingDrawer(false);
     }
@@ -492,6 +500,27 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
     }
   };
 
+  /**
+   * Story 2.66 (AC5) — salva SÓ a chave `lossLocation` (update parcial: nada de
+   * `customFields`, nada de `lossReason`). Texto vazio grava `null` (via
+   * `transformDealToDb`) — é o único ponto do código que apaga o local, e de propósito.
+   *
+   * ⚠️ O `useUpdateDeal` desfaz o otimista em silêncio no erro: o aviso tem de
+   * vir daqui, e o campo continua aberto com o que ela digitou.
+   */
+  const salvarLocal = async () => {
+    setSalvandoLocal(true);
+    try {
+      await updateDeal(deal.id, { lossLocation: rascunhoLocal.trim() });
+      setEditandoLocal(false);
+      addToast('Local salvo.', 'success');
+    } catch {
+      addToast('Não deu para salvar o local. O que você digitou continua aí.', 'error');
+    } finally {
+      setSalvandoLocal(false);
+    }
+  };
+
   const salvarCampos = async (): Promise<boolean> => {
     if (!temPendencia) return true;
     // UMA escrita com todos os campos de uma vez. Um UPDATE por campo geraria
@@ -733,6 +762,80 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                 </button>
               </div>
             </div>
+
+            {/* Story 2.66 (AC5) — motivo e local de quem perdemos por Distância. */}
+            {deal.isLost && (deal.lossReason === 'Distância' || Boolean(deal.lossLocation)) && (
+              <section
+                aria-label="Motivo e local da perda"
+                className="mb-4 rounded-lg border border-red-200/70 bg-red-50/60 px-4 py-3 text-sm dark:border-red-900/40 dark:bg-red-900/10"
+              >
+                <p className="text-slate-700 dark:text-slate-300">
+                  <span className="font-semibold">Motivo da perda:</span> {deal.lossReason || 'Não informado'}
+                </p>
+                {editandoLocal ? (
+                  <form
+                    className="mt-2"
+                    onSubmit={e => {
+                      e.preventDefault();
+                      void salvarLocal();
+                    }}
+                  >
+                    <label
+                      htmlFor={localPerdaInputId}
+                      className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1"
+                    >
+                      Onde a pessoa mora? (bairro, cidade ou estado)
+                    </label>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <input
+                        id={localPerdaInputId}
+                        type="text"
+                        autoFocus
+                        maxLength={LIMITE_LOCAL}
+                        value={rascunhoLocal}
+                        onChange={e => setRascunhoLocal(e.target.value)}
+                        className="flex-1 min-w-[12rem] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-primary-500 dark:border-slate-600 dark:bg-black/20 dark:text-white"
+                      />
+                      <span className="text-xs text-slate-400">{rascunhoLocal.length}/{LIMITE_LOCAL}</span>
+                      <button
+                        type="submit"
+                        disabled={salvandoLocal}
+                        className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-primary-500 disabled:opacity-50"
+                      >
+                        Salvar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditandoLocal(false);
+                          setRascunhoLocal('');
+                        }}
+                        className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/5"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <p className="mt-1 flex flex-wrap items-center gap-2 text-slate-700 dark:text-slate-300">
+                    <span>
+                      <span className="font-semibold">Local:</span>{' '}
+                      {deal.lossLocation || <span className="italic text-slate-500">Local não informado</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRascunhoLocal(deal.lossLocation ?? '');
+                        setEditandoLocal(true);
+                      }}
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-500/10"
+                    >
+                      <Pencil size={12} aria-hidden="true" /> Editar local
+                    </button>
+                  </p>
+                )}
+              </section>
+            )}
 
             {dealBoard ? (
               <StageProgressBar
@@ -1453,7 +1556,11 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
             setPendingLostStageId(null);
             setLossReasonOrigin('button');
           }}
-          onConfirm={(reason) => {
+          onConfirm={(reason, extras) => {
+            // Story 2.66 — o local de quem perdemos por Distância vai na MESMA
+            // escrita da perda, nos três caminhos abaixo.
+            const lossLocation = extras?.lossLocation;
+
             // Priority:
             // 0. Stay in stage flag (Archive)
             // 1. Pending Stage (if set via click or explicit button)
@@ -1461,7 +1568,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
             // 3. Stage linked to 'OTHER' lifecycle
 
             if (dealBoard?.lostStayInStage) {
-              moveDeal(deal, deal.status, reason, false, true); // explicitLost = true
+              moveDeal(deal, deal.status, reason, false, true, lossLocation); // explicitLost = true
               setShowLossReasonModal(false);
               setPendingLostStageId(null);
               if (lossReasonOrigin === 'button') onClose();
@@ -1480,10 +1587,17 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
             }
 
             if (targetStageId) {
-              moveDeal(deal, targetStageId, reason);
+              moveDeal(deal, targetStageId, reason, undefined, undefined, lossLocation);
             } else {
               // Fallback: just mark as lost without moving
-              updateDeal(deal.id, { isLost: true, isWon: false, closedAt: new Date().toISOString(), lossReason: reason });
+              // ⚠️ Dívida anterior (story 2.66, Riscos): sem await/catch — se falhar, some sem aviso.
+              updateDeal(deal.id, {
+                isLost: true,
+                isWon: false,
+                closedAt: new Date().toISOString(),
+                lossReason: reason,
+                ...(lossLocation && { lossLocation }),
+              });
             }
             setShowLossReasonModal(false);
             setPendingLostStageId(null);
@@ -1491,6 +1605,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
             if (lossReasonOrigin === 'button') onClose();
           }}
           dealTitle={deal.title}
+          localSugerido={localSugeridoDoCard(deal)}
         />
 
         <BriefingDrawer

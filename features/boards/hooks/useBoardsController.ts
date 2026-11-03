@@ -14,6 +14,7 @@ import {
   useDealsByBoard,
 } from '@/lib/query/hooks/useDealsQuery';
 import { useMoveDeal } from '@/lib/query/hooks/useMoveDeal';
+import { localSugeridoDoCard, type LossReasonExtras } from '@/components/ui/localDaPerda';
 import { useCreateActivity } from '@/lib/query/hooks/useActivitiesQuery';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { useRealtimeSyncKanban } from '@/lib/realtime/useRealtimeSync';
@@ -322,6 +323,8 @@ export const useBoardsController = () => {
     dealId: string;
     dealTitle: string;
     stageId: string;
+    /** Story 2.66 (D3) — `ondeReside` do card, só como dica no campo do local. */
+    localSugerido?: string;
   } | null>(null);
 
   /**
@@ -520,6 +523,7 @@ export const useBoardsController = () => {
           dealId,
           dealTitle: deal.title,
           stageId,
+          localSugerido: localSugeridoDoCard(deal),
         });
       } else {
         // Use unified moveDeal for all other cases (WON or regular stages)
@@ -536,7 +540,7 @@ export const useBoardsController = () => {
   }, [activeBoard, deals, addToast, moveDealMutation, lifecycleStages, lastMouseDownDealId]);
 
   // Handler for loss reason modal confirmation
-  const handleLossReasonConfirm = (reason: string) => {
+  const handleLossReasonConfirm = (reason: string, extras?: LossReasonExtras) => {
     if (lossReasonModal && activeBoard) {
       const deal = deals.find(d => d.id === lossReasonModal.dealId);
       if (deal) {
@@ -544,6 +548,8 @@ export const useBoardsController = () => {
           dealId: lossReasonModal.dealId,
           targetStageId: lossReasonModal.stageId,
           lossReason: reason,
+          // Story 2.66 — o local vai na MESMA escrita da perda.
+          ...(extras?.lossLocation && { lossLocation: extras.lossLocation }),
           deal,
           board: activeBoard,
           lifecycleStages,
@@ -585,6 +591,7 @@ export const useBoardsController = () => {
         dealId,
         dealTitle: deal.title,
         stageId: newStageId,
+        localSugerido: localSugeridoDoCard(deal),
       });
     } else {
       // Regular move or WON stage

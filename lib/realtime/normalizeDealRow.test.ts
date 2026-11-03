@@ -99,6 +99,34 @@ describe('mesclarDealDoRealtime — o defeito que a Fernanda viu', () => {
   });
 });
 
+/**
+ * Story 2.66 (AC7) — a coluna nova `loss_location` chega pela MESMA tradução
+ * (`transformDeal`), sem lista à mão: é o que a regra da 2.29 garante.
+ */
+describe('story 2.66 — o local da perda chega pelo Realtime', () => {
+  it('🎯 `loss_location: "Guarulhos"` vira `lossLocation: "Guarulhos"` no cache', () => {
+    const linha = { ...LINHA_DO_BANCO, is_lost: true, loss_location: 'Guarulhos' };
+    const resultado = mesclarDealDoRealtime(NO_CACHE, linha) as unknown as Record<string, unknown>;
+
+    expect(resultado.lossLocation).toBe('Guarulhos');
+    expect(resultado.loss_location).toBeUndefined();
+    // E não se mistura com o `ondeReside` da IA.
+    expect((resultado.customFields as Record<string, unknown>).ondeReside).toBe('Guarulhos');
+  });
+
+  it('deal novo (fora do cache) também chega com o local', () => {
+    const novo = normalizarDealDoRealtime({ ...LINHA_DO_BANCO, loss_location: 'Manaus/AM' });
+
+    expect(novo.lossLocation).toBe('Manaus/AM');
+  });
+
+  it('`loss_location: null` chega como não informado', () => {
+    const resultado = mesclarDealDoRealtime(NO_CACHE, { ...LINHA_DO_BANCO, loss_location: null });
+
+    expect(resultado.lossLocation).toBeUndefined();
+  });
+});
+
 describe('normalizarDealDoRealtime — deal que ainda não está no cache', () => {
   it('entra traduzido, não cru', () => {
     const novo = normalizarDealDoRealtime(LINHA_DO_BANCO) as unknown as Record<string, unknown>;
