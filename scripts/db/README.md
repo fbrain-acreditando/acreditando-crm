@@ -17,8 +17,13 @@
 Todos os scripts leem o token de **fora do repositório**:
 
 ```
-C:\Users\filip_mg5w2c4\.credenciais\supabase-crm-mgmt.token
+C:\Users\filip_mg5w2c4\grupo-acreditando\.credenciais\supabase-crm-mgmt.token
 ```
+
+(Corrigido em 09/10/2026, story 2.62: o caminho antigo, `C:\Users\filip_mg5w2c4\.credenciais\`, não
+tem esse arquivo. `sql-ro.mjs` e `2.62-juntar-cards-do-mesmo-lead.mjs` também aceitam
+`SUPABASE_CRM_MGMT_TOKEN` ou `SUPABASE_CRM_MGMT_TOKEN_FILE`. Os scripts históricos de 11/08
+(`RESTAURAR.mjs`, `backup-julho.mjs`, …) ainda têm o caminho antigo cravado — não rodam sem ajuste.)
 
 Nenhum arquivo desta pasta contém segredo literal. O que está no código é o **ref do projeto**
 (`jmjhtprnxjffaqhdzfmc`), que já é público no contexto do repo.
@@ -70,6 +75,19 @@ Roda **apaga → restaura do arquivo → reconta** dentro de `DO $$ … RAISE EX
 🔑 **Ele prova a volta, não só a ida.** O primeiro dry-run escrito para esta operação passava sem
 testar nada — o `ON CONFLICT DO NOTHING` pulava todas as linhas porque elas ainda existiam.
 *Teste que passa sem exercitar o caminho é teste que mente.*
+
+### `2.62-juntar-cards-do-mesmo-lead.mjs` — junta os cards do mesmo lead (story 2.62)
+
+```powershell
+node scripts/db/2.62-juntar-cards-do-mesmo-lead.mjs                                    # DRY-RUN (padrão)
+node scripts/db/2.62-juntar-cards-do-mesmo-lead.mjs --ensaio --excluir-perdedores      # bloco abortado pelo Postgres
+node scripts/db/2.62-juntar-cards-do-mesmo-lead.mjs --execute --excluir-perdedores     # escreve (AC1–AC5)
+node scripts/db/2.62-juntar-cards-do-mesmo-lead.mjs --reverter <backup.json> [--execute]
+```
+
+Re-mede e compara com a lista de 07/10 antes de qualquer escrita; uma transação (`do $$ … $$`) por
+par; read-back de valor depois de cada par; backup em `grupo-acreditando\.dados-leads\2.62-<data>\`
+com cópia do script ao lado. Testes offline: `npx vitest run scripts/db/2.62-juntar-cards-do-mesmo-lead.test.ts`.
 
 ---
 
