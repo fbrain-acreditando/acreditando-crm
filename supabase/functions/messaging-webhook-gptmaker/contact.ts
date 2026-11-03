@@ -148,9 +148,46 @@ export interface ResolveContactInput {
   source?: string;
 }
 
+/**
+ * Story 2.63, AC4 — a função NOVA, que procura o telefone exato e, se não achar,
+ * a outra forma do número (com/sem o 9º dígito), sob trava pela forma canônica.
+ * A antiga (`find_or_create_contact`) fica intacta: é o que a v15 usa no rollback.
+ */
+export const RPC_CONTATO_POR_VARIANTES = "find_or_create_contact_por_variantes";
+export const RPC_CONTATO_EXATO = "find_or_create_contact";
+
+/** Como o banco casou o contato (só a função nova informa). */
+export type CasouPor = "exato" | "variante" | "criado";
+
+/** Lê a resposta da função nova (TABLE ⇒ array de 1 linha; aceita objeto também). */
+function lerRespostaPorVariantes(
+  data: unknown
+): { contactId: string; casouPor: CasouPor | null; telefoneCasado: string | null } | null {
+  const linha = Array.isArray(data) ? data[0] : data;
+  if (!linha || typeof linha !== "object") return null;
+  const r = linha as Record<string, unknown>;
+  if (typeof r.contact_id !== "string" || !r.contact_id) return null;
+  const casou = r.casou_por;
+  return {
+    contactId: r.contact_id,
+    casouPor: casou === "exato" || casou === "variante" || casou === "criado" ? casou : null,
+    telefoneCasado: typeof r.telefone_casado === "string" ? r.telefone_casado : null,
+  };
+}
+
+/** Telefone mascarado para log (mesma regra de `nono-digito.ts`, sem importar). */
+function mascarar(phone: string | null): string {
+  const d = String(phone ?? "").replace(/\D/g, "");
+  if (d.length <= 8) return "*".repeat(d.length);
+  return `${d.slice(0, 4)}${"*".repeat(d.length - 8)}${d.slice(-4)}`;
+}
+
 export type ResolveContactOutcome =
-  /** Caminho normal: o banco serializou e devolveu o contato (novo ou reusado). */
-  | { contactId: string; via: "rpc" }
+  /**
+   * Caminho normal: o banco serializou e devolveu o contato (novo ou reusado).
+   * `casouPor` só vem quando a função nova (2.63) respondeu.
+   */
+  | { contactId: string; via: "rpc"; casouPor?: CasouPor }
   /** A RPC falhou; caímos no insert direto para não perder o lead. */
   | { contactId: string; via: "fallback" }
   /** Nem a RPC nem o fallback deram contato. A mensagem ainda é gravada sem ele. */
@@ -171,12 +208,39 @@ export async function resolveContactId(
   const phone = input.phone && input.phone !== "" ? input.phone : null;
   const source = input.source ?? "whatsapp";
 
-  const { data, error } = await client.rpc("find_or_create_contact", {
+  const args = {
     p_organization_id: input.organizationId,
     p_phone: phone,
     p_name: input.name,
     p_source: source,
-  });
+  };
+
+  // Story 2.63 — primeiro a função que reconhece o 9º dígito.
+  const nova = await client.rpc(RPC_CONTATO_POR_VARIANTES, args);
+  if (!nova.error) {
+    const lida = lerRespostaPorVariantes(nova.data);
+    if (lida) {
+      if (lida.casouPor === "variante") {
+        log(
+          `[GPTMaker] 9º dígito — contato achado pela variante ${mascarar(lida.telefoneCasado)} (evento com ${mascarar(phone)})`
+        );
+      }
+      return lida.casouPor
+        ? { contactId: lida.contactId, via: "rpc", casouPor: lida.casouPor }
+        : { contactId: lida.contactId, via: "rpc" };
+    }
+  }
+
+  // A função nova não respondeu (ainda não aplicada, permissão, resposta vazia).
+  // Cai na ANTIGA — busca exata, mesma trava — antes do insert direto: duplicar
+  // pelo 9º dígito é o comportamento de antes desta story, não uma regressão.
+  log(
+    `[GPTMaker] ${RPC_CONTATO_POR_VARIANTES} indisponível (${
+      nova.error?.message ?? "resposta vazia"
+    }${nova.error?.code ? ` [${nova.error.code}]` : ""}) — usando ${RPC_CONTATO_EXATO}`
+  );
+
+  const { data, error } = await client.rpc(RPC_CONTATO_EXATO, args);
 
   if (!error && typeof data === "string" && data.length > 0) {
     return { contactId: data, via: "rpc" };

@@ -98,6 +98,9 @@ import {
   garantirIdentidadeDaConversa,
   type ConversationPorts,
 } from "./conversation-identity.ts";
+// Story 2.63 — conversa achada pela outra forma do telefone (com/sem o 9º
+// dígito) passa a ter a chave do fornecedor; senão o envio pelo CRM falha.
+import { alinharChaveDaConversa, type ChaveConversaClient } from "./chave-da-conversa.ts";
 
 // =============================================================================
 // TYPES
@@ -951,6 +954,14 @@ async function ensureConversation(
         return null;
       }
     },
+
+    // Story 2.63, AC3 — nunca lança (o módulo absorve o erro).
+    alinharChave: (input) =>
+      alinharChaveDaConversa(
+        supabase as unknown as ChaveConversaClient,
+        input,
+        (msg) => console.log(msg)
+      ),
 
     resolverContato: (input) =>
       findOrCreateContact(supabase, channel, {

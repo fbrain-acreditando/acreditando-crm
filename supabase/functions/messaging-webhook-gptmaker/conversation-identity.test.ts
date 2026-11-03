@@ -19,6 +19,8 @@ import {
   type ConversaEncontrada,
 } from './conversation-identity';
 import { MOTIVO_AMBIGUO, MOTIVO_SEM_TELEFONE, type AliasStatus } from './alias-map';
+import { resolveContactId, type ContactResolverClient } from './contact';
+import { encontrarCardAberto, type DealGuardClient } from './deal-guard';
 
 const LID = '150439953756312@lid';
 const CHAT_LID = '3E14B107-150439953756312@lid';
@@ -35,6 +37,10 @@ interface Cenario {
   criarFalha?: 'corrida' | 'erro';
   /** Porta que deve LANÇAR — o teste do contrato "nunca lança". */
   explode?: keyof ConversationPorts;
+  /** Story 2.63 — `acharConversa` lança SÓ para estas chaves. */
+  explodeNaChave?: string[];
+  /** Story 2.63 — resultado do alinhamento da chave (padrão: "alinhada"). */
+  alinhamento?: 'alinhada' | 'ocupada' | 'nada-a-fazer' | 'falhou';
 }
 
 function montar(c: Cenario = {}) {
@@ -44,6 +50,8 @@ function montar(c: Cenario = {}) {
   const sucessoes: Array<[string, string]> = [];
   const conversasCriadas: Array<Record<string, unknown>> = [];
   const cardsPedidos: Array<Record<string, unknown>> = [];
+  const alinhamentos: Array<{ conversationId: string; chaveNova: string; chaveAnterior: string }> = [];
+  const chavesProcuradas: string[] = [];
   let proximaConversa = 1;
 
   function registrar(nome: keyof ConversationPorts) {
@@ -61,7 +69,22 @@ function montar(c: Cenario = {}) {
 
     async acharConversa(chatId) {
       registrar('acharConversa');
+      chavesProcuradas.push(chatId);
+      if (c.explodeNaChave?.includes(chatId)) throw new Error(`busca por ${chatId} explodiu`);
       return conversas[chatId] ?? null;
+    },
+
+    async alinharChave(input) {
+      registrar('alinharChave');
+      alinhamentos.push(input);
+      const r = c.alinhamento ?? 'alinhada';
+      if (r === 'alinhada') {
+        // Simula o UPDATE: a conversa passa a responder pela chave nova.
+        const conv = conversas[input.chaveAnterior];
+        delete conversas[input.chaveAnterior];
+        conversas[input.chaveNova] = conv;
+      }
+      return r;
     },
 
     async resolverContato(input) {
@@ -102,7 +125,17 @@ function montar(c: Cenario = {}) {
     },
   };
 
-  return { ports, chamadas, marcacoes, sucessoes, conversasCriadas, cardsPedidos, conversas };
+  return {
+    ports,
+    chamadas,
+    marcacoes,
+    sucessoes,
+    conversasCriadas,
+    cardsPedidos,
+    conversas,
+    alinhamentos,
+    chavesProcuradas,
+  };
 }
 
 const EVENTO_LID = {
@@ -436,5 +469,441 @@ describe('AC5 — a decisão NUNCA lança', () => {
     expect(conversasCriadas[0].contactId).toBeNull();
     // Sem contato não há card — e é assim que já era.
     expect(r.dealId).toBeNull();
+  });
+});
+
+// =============================================================================
+// Story 2.63 — o mesmo telefone com e sem o 9º dígito
+// =============================================================================
+// ⚠️ Telefones fictícios (o repositório é público).
+
+const PFX = 'CANAL9';
+const T13 = '+5511987654321';
+const T12 = '+551187654321';
+const CHAVE13 = `${PFX}-5511987654321`;
+const CHAVE12 = `${PFX}-551187654321`;
+const LID_9 = '123456789012345@lid';
+const CHAVE_LID_9 = `${PFX}-${LID_9}`;
+
+const evento = (chatId: string, phone: string | null, lid: string | null = null) => ({
+  chatId,
+  lid,
+  contactName: 'Lead Fictício',
+  contactPhone: phone,
+});
+
+describe('2.63 AC2 — conversa: exata primeiro, variante depois', () => {
+  it('evento com 12 dígitos, conversa gravada com 13 ⇒ reusa a de 13', async () => {
+    const cen = montar({ conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'contato-lp' } } });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(r.conversationId).toBe('conv-13');
+    expect(r.contactId).toBe('contato-lp');
+    expect(r.reusouConversa).toBe(true);
+    expect(r.casouPelaVariante).toBe(true);
+    expect(cen.conversasCriadas).toHaveLength(0);
+    expect(cen.chamadas).not.toContain('resolverContato');
+    // A exata foi procurada ANTES da variante.
+    expect(cen.chavesProcuradas).toEqual([CHAVE12, CHAVE13]);
+  });
+
+  it('evento com 13 dígitos, conversa gravada com 12 ⇒ reusa a de 12', async () => {
+    const cen = montar({ conversas: { [CHAVE12]: { conversationId: 'conv-12', contactId: 'contato-wa' } } });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE13, T13));
+
+    expect(r.conversationId).toBe('conv-12');
+    expect(r.casouPelaVariante).toBe(true);
+    expect(cen.conversasCriadas).toHaveLength(0);
+  });
+
+  it('as duas existem ⇒ reusa a EXATA e nem procura a variante', async () => {
+    const cen = montar({
+      conversas: {
+        [CHAVE13]: { conversationId: 'conv-13', contactId: 'c13' },
+        [CHAVE12]: { conversationId: 'conv-12', contactId: 'c12' },
+      },
+    });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(r.conversationId).toBe('conv-12');
+    expect(r.casouPelaVariante).toBe(false);
+    expect(cen.chavesProcuradas).toEqual([CHAVE12]);
+    expect(cen.alinhamentos).toHaveLength(0);
+  });
+
+  it('@lid resolvido para telefone de 12, conversa de 13 ⇒ reusa a de 13', async () => {
+    const cen = montar({
+      alias: { phone: T12, status: 'resolved' },
+      conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'contato-lp' } },
+    });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE_LID_9, null, LID_9));
+
+    expect(r.conversationId).toBe('conv-13');
+    expect(r.aliasResolvido).toBe(true);
+    expect(r.casouPelaVariante).toBe(true);
+    // A chave nova é a de telefone derivada do lid (a que o fornecedor usa).
+    expect(cen.alinhamentos).toEqual([{ conversationId: 'conv-13', chaveNova: CHAVE12, chaveAnterior: CHAVE13 }]);
+    // R1: a busca da conversa ANTIGA do lid (apontarConversaAntiga) é exata —
+    // nenhuma variante derivada do rabo do chatId de lid.
+    expect(cen.chavesProcuradas).toEqual([CHAVE12, CHAVE13, CHAVE_LID_9]);
+  });
+});
+
+describe('2.63 AC3 — casou pela variante ⇒ alinha a chave', () => {
+  it('pede o alinhamento com a chave do EVENTO e guarda a anterior', async () => {
+    const cen = montar({ conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } } });
+
+    await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(cen.alinhamentos).toEqual([{ conversationId: 'conv-13', chaveNova: CHAVE12, chaveAnterior: CHAVE13 }]);
+    // Depois de alinhada, a próxima mensagem acha pela EXATA.
+    expect(cen.conversas[CHAVE12]?.conversationId).toBe('conv-13');
+  });
+
+  it('chave ocupada ⇒ não troca, mas a conversa é reusada e a mensagem entra', async () => {
+    const cen = montar({
+      alinhamento: 'ocupada',
+      conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } },
+    });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(r.conversationId).toBe('conv-13');
+    expect(cen.conversasCriadas).toHaveLength(0);
+  });
+
+  it('`alinharChave` explodindo PRESERVA a conversa achada pela variante', async () => {
+    const cen = montar({
+      explode: 'alinharChave',
+      conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } },
+    });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(r.conversationId).toBe('conv-13');
+    expect(r.casouPelaVariante).toBe(true);
+  });
+
+  it('AC7: o reuso pela variante escreve log identificável, com telefone mascarado', async () => {
+    const logs: string[] = [];
+    const cen = montar({ conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } } });
+    cen.ports.log = (m) => logs.push(m);
+
+    await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(logs).toContain('[GPTMaker] 9º dígito — conversa achada pela variante 5511*****4321');
+  });
+});
+
+describe('2.63 AC6 — caminhos que NÃO mudam', () => {
+  it('@lid NÃO resolvido: nenhuma variante, identidade continua não confirmada', async () => {
+    const cen = montar({ alias: { phone: null, status: null } });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE_LID_9, null, LID_9));
+
+    expect(cen.chavesProcuradas).toEqual([CHAVE_LID_9]);
+    expect(r.casouPelaVariante).toBe(false);
+    expect(r.identidadeNaoConfirmada).toBe(true);
+    expect(cen.marcacoes).toHaveLength(1);
+  });
+
+  it('@lid não resolvido com telefone ao lado: a chave é de lid ⇒ não procura variante', async () => {
+    const cen = montar({
+      alias: { phone: null, status: null },
+      conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } },
+    });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE_LID_9, T12, LID_9));
+
+    expect(r.conversationId).not.toBe('conv-13');
+    expect(cen.chavesProcuradas).toEqual([CHAVE_LID_9]);
+  });
+
+  it('telefone fixo: só a busca exata', async () => {
+    const cen = montar();
+
+    await garantirIdentidadeDaConversa(cen.ports, evento(`${PFX}-551132215555`, '+551132215555'));
+
+    expect(cen.chavesProcuradas).toEqual([`${PFX}-551132215555`]);
+  });
+
+  it('QA-1: 9 + 3 NÃO casa com o número de 12 com cara de fixo (outra pessoa)', async () => {
+    const chave13 = `${PFX}-5511933456789`;
+    const chaveFixo = `${PFX}-551133456789`;
+    const cen = montar({ conversas: { [chaveFixo]: { conversationId: 'conv-do-fixo', contactId: 'outra-pessoa' } } });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(chave13, '+5511933456789'));
+
+    expect(r.conversationId).toBe('conv-nova-1');
+    expect(r.casouPelaVariante).toBe(false);
+    expect(cen.chavesProcuradas).toEqual([chave13]);
+  });
+
+  it('número estrangeiro: só a busca exata', async () => {
+    const cen = montar();
+
+    await garantirIdentidadeDaConversa(cen.ports, evento(`${PFX}-14155552671`, '+14155552671'));
+
+    expect(cen.chavesProcuradas).toEqual([`${PFX}-14155552671`]);
+  });
+
+  it('chave que não é do telefone do evento ⇒ não procura variante (não inventa casamento)', async () => {
+    const cen = montar({ conversas: { [CHAVE13]: { conversationId: 'conv-13', contactId: 'c' } } });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(`${PFX}-5511900000000`, T12));
+
+    expect(r.conversationId).toBe('conv-nova-1');
+    expect(cen.chavesProcuradas).toEqual([`${PFX}-5511900000000`]);
+  });
+
+  it('"nunca lança": erro na busca da VARIANTE ⇒ segue pelo caminho de hoje (cria)', async () => {
+    const cen = montar({ explodeNaChave: [CHAVE13] });
+
+    const r = await garantirIdentidadeDaConversa(cen.ports, evento(CHAVE12, T12));
+
+    expect(r.conversationId).toBe('conv-nova-1');
+    expect(r.casouPelaVariante).toBe(false);
+    expect(cen.conversasCriadas).toHaveLength(1);
+    expect(cen.conversasCriadas[0].chatId).toBe(CHAVE12);
+  });
+});
+
+// =============================================================================
+// 2.63 AC4 + AC5 — sequência com o contato da LP (13) e a 1ª mensagem do
+// WhatsApp (12). Peças REAIS: `resolveContactId` (contact.ts) e
+// `encontrarCardAberto` (deal-guard.ts). O duplo do banco modela a função SQL
+// `find_or_create_contact_por_variantes` (exato → variante → cria) com as
+// próprias expressões regulares da migration — não com `nono-digito.ts`.
+// =============================================================================
+
+interface ContatoLinha {
+  id: string;
+  phone: string | null;
+  deleted_at: string | null;
+  merged_into_id: string | null;
+}
+interface DealLinha {
+  id: string;
+  contact_id: string;
+  board_id: string;
+  stage_id: string;
+  organization_id: string;
+  deleted_at: string | null;
+  created_at: string;
+}
+
+const ORG_9 = 'org-ficticia';
+const LEAD_NOVO_9 = '82d1a222-eeff-4627-baed-881908dbd702';
+
+function bancoFake(contatos: ContatoLinha[], deals: DealLinha[]) {
+  let seq = 0;
+  const vivo = (c: ContatoLinha, phone: string) =>
+    c.phone === phone && c.deleted_at === null && c.merged_into_id === null;
+
+  /** Modelo da função SQL da migration 20261103140000. */
+  const rpcClient: ContactResolverClient = {
+    async rpc(fn, args) {
+      if (fn !== 'find_or_create_contact_por_variantes') {
+        return { data: null, error: { message: `função desconhecida: ${fn}` } };
+      }
+      const phone = (args.p_phone as string | null) ?? null;
+      if (!phone) {
+        const id = `contato-novo-${++seq}`;
+        contatos.push({ id, phone: null, deleted_at: null, merged_into_id: null });
+        return { data: [{ contact_id: id, casou_por: 'criado', telefone_casado: null }], error: null };
+      }
+      let variante: string | null = null;
+      const m13 = phone.match(/^\+55(\d{2})9(\d{8})$/);
+      const m12 = phone.match(/^\+55(\d{2})([6-9]\d{7})$/);
+      if (m13) variante = `+55${m13[1]}${m13[2]}`;
+      else if (m12) variante = `+55${m12[1]}9${m12[2]}`;
+
+      const exato = contatos.find((c) => vivo(c, phone));
+      if (exato) return { data: [{ contact_id: exato.id, casou_por: 'exato', telefone_casado: phone }], error: null };
+      if (variante) {
+        const pelaVariante = contatos.find((c) => vivo(c, variante!));
+        if (pelaVariante) {
+          return {
+            data: [{ contact_id: pelaVariante.id, casou_por: 'variante', telefone_casado: variante }],
+            error: null,
+          };
+        }
+      }
+      const id = `contato-novo-${++seq}`;
+      contatos.push({ id, phone, deleted_at: null, merged_into_id: null });
+      return { data: [{ contact_id: id, casou_por: 'criado', telefone_casado: phone }], error: null };
+    },
+    from() {
+      throw new Error('insert direto não deveria acontecer neste teste');
+    },
+  };
+
+  const dealClient = {
+    from() {
+      return {
+        select() {
+          const eqs: Array<[string, unknown]> = [];
+          const nulos: string[] = [];
+          const q = {
+            eq(c: string, v: unknown) {
+              eqs.push([c, v]);
+              return q;
+            },
+            is(c: string) {
+              nulos.push(c);
+              return q;
+            },
+            order() {
+              return q;
+            },
+            async limit(n: number) {
+              const r = deals
+                .filter((d) => eqs.every(([c, v]) => (d as unknown as Record<string, unknown>)[c] === v))
+                .filter((d) => nulos.every((c) => (d as unknown as Record<string, unknown>)[c] === null))
+                .slice(0, n);
+              return { data: r.map((d) => ({ id: d.id, stage_id: d.stage_id })), error: null };
+            },
+          };
+          return q;
+        },
+        update() {
+          throw new Error('não usado');
+        },
+      };
+    },
+  } as unknown as DealGuardClient;
+
+  return { rpcClient, dealClient, contatos, deals };
+}
+
+function portasDeSequencia(banco: ReturnType<typeof bancoFake>, logs: string[]) {
+  const conversas: Record<string, ConversaEncontrada> = {};
+  const criadas: Array<{ chatId: string; contactId: string | null }> = [];
+  const ports: ConversationPorts = {
+    log: (m) => logs.push(m),
+    async resolverAlias() {
+      return { phone: null, status: null };
+    },
+    async acharConversa(chatId) {
+      return conversas[chatId] ?? null;
+    },
+    async alinharChave() {
+      return 'alinhada';
+    },
+    async resolverContato(input) {
+      const r = await resolveContactId(
+        banco.rpcClient,
+        { organizationId: ORG_9, phone: input.phone, name: input.nome ?? '' },
+        (m) => logs.push(m)
+      );
+      return r.contactId;
+    },
+    async criarConversa(input) {
+      const id = `conv-${criadas.length + 1}`;
+      criadas.push({ chatId: input.chatId, contactId: input.contactId });
+      conversas[input.chatId] = { conversationId: id, contactId: input.contactId };
+      return { conversationId: id };
+    },
+    async regraDeEntrada() {
+      return { boardId: BOARD, stageId: LEAD_NOVO_9 };
+    },
+    async garantirCard(input) {
+      const guarda = await encontrarCardAberto(banco.dealClient, {
+        organizationId: ORG_9,
+        contactId: input.contactId,
+        boardId: input.boardId,
+      });
+      if (guarda.temCardAberto) return guarda.dealId;
+      const id = `deal-novo-${banco.deals.length + 1}`;
+      banco.deals.push({
+        id,
+        contact_id: input.contactId,
+        board_id: input.boardId,
+        stage_id: input.stageId ?? LEAD_NOVO_9,
+        organization_id: ORG_9,
+        deleted_at: null,
+        created_at: '2026-11-03T00:00:00Z',
+      });
+      return id;
+    },
+    async marcarIdentidade() {},
+    async marcarSucessao() {},
+  };
+  return { ports, criadas };
+}
+
+describe('2.63 AC4/AC5 — contato e card: o reuso pela variante leva a guarda junto', () => {
+  it('contato da LP (13) com card em "Lead novo" + 1ª mensagem do WhatsApp (12) ⇒ 0 contatos e 0 cards novos', async () => {
+    const banco = bancoFake(
+      [{ id: 'contato-lp', phone: T13, deleted_at: null, merged_into_id: null }],
+      [
+        {
+          id: 'deal-lp',
+          contact_id: 'contato-lp',
+          board_id: BOARD,
+          stage_id: LEAD_NOVO_9,
+          organization_id: ORG_9,
+          deleted_at: null,
+          created_at: '2026-11-01T00:00:00Z',
+        },
+      ]
+    );
+    const logs: string[] = [];
+    const { ports, criadas } = portasDeSequencia(banco, logs);
+
+    const r = await garantirIdentidadeDaConversa(ports, evento(CHAVE12, T12));
+
+    // Conversa NOVA (não havia nenhuma), ligada ao contato da LP.
+    expect(criadas).toEqual([{ chatId: CHAVE12, contactId: 'contato-lp' }]);
+    expect(r.contactId).toBe('contato-lp');
+    // 0 contatos novos; o telefone do contato existente NÃO foi alterado.
+    expect(banco.contatos).toEqual([{ id: 'contato-lp', phone: T13, deleted_at: null, merged_into_id: null }]);
+    // 0 cards novos; o card continua na mesma etapa.
+    expect(r.dealId).toBe('deal-lp');
+    expect(banco.deals).toHaveLength(1);
+    expect(banco.deals[0].stage_id).toBe(LEAD_NOVO_9);
+    // AC7 — o reuso do contato também deixa rastro, mascarado.
+    expect(logs).toContain(
+      '[GPTMaker] 9º dígito — contato achado pela variante 5511*****4321 (evento com 5511****4321)'
+    );
+  });
+
+  it('o inverso: contato do WhatsApp (12) + evento com 13 ⇒ reusa o de 12', async () => {
+    const banco = bancoFake([{ id: 'contato-wa', phone: T12, deleted_at: null, merged_into_id: null }], []);
+    const { ports } = portasDeSequencia(banco, []);
+
+    const r = await garantirIdentidadeDaConversa(ports, evento(CHAVE13, T13));
+
+    expect(r.contactId).toBe('contato-wa');
+    expect(banco.contatos).toHaveLength(1);
+  });
+
+  it('nenhuma forma existe ⇒ 1 contato novo, com o telefone COMO VEIO', async () => {
+    const banco = bancoFake([], []);
+    const { ports } = portasDeSequencia(banco, []);
+
+    const r = await garantirIdentidadeDaConversa(ports, evento(CHAVE12, T12));
+
+    expect(banco.contatos).toHaveLength(1);
+    expect(banco.contatos[0].phone).toBe(T12);
+    expect(r.contactId).toBe(banco.contatos[0].id);
+    expect(banco.deals).toHaveLength(1);
+  });
+
+  it('contato da variante MESCLADO não é reusado ⇒ cria (mesmos filtros de hoje)', async () => {
+    const banco = bancoFake(
+      [{ id: 'contato-morto', phone: T13, deleted_at: null, merged_into_id: 'outro' }],
+      []
+    );
+    const { ports } = portasDeSequencia(banco, []);
+
+    const r = await garantirIdentidadeDaConversa(ports, evento(CHAVE12, T12));
+
+    expect(r.contactId).not.toBe('contato-morto');
+    expect(banco.contatos).toHaveLength(2);
   });
 });

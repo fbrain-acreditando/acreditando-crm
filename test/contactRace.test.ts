@@ -315,3 +315,60 @@ describe('resolveContactId — AC5: a mensagem nunca é perdida', () => {
     expect(linhas.join('\n')).toContain('XX000');
   });
 });
+
+/**
+ * Story 2.63 — a função nova (com/sem o 9º dígito) vem primeiro; a antiga é a
+ * rede de segurança enquanto a migration não estiver aplicada (AC8.4).
+ * Telefones fictícios.
+ */
+describe('resolveContactId — 2.63: função nova primeiro, antiga como rede', () => {
+  it('função nova indisponível ⇒ usa a ANTIGA (busca exata), sem insert direto', async () => {
+    const chamadas: string[] = [];
+    const base = criarFake();
+    const existente = base.inserir({ organization_id: ORG, name: 'Já cadastrado', phone: PHONE });
+    const client: ContactResolverClient = {
+      rpc: (fn, args) => {
+        chamadas.push(fn);
+        return base.client.rpc(fn, args);
+      },
+      from: (t) => base.client.from(t),
+    };
+    const linhas: string[] = [];
+
+    const r = await resolveContactId(client, { organizationId: ORG, phone: PHONE, name: 'X' }, (m) =>
+      linhas.push(m)
+    );
+
+    expect(chamadas).toEqual(['find_or_create_contact_por_variantes', 'find_or_create_contact']);
+    expect(r).toEqual({ contactId: existente.id, via: 'rpc' });
+    expect(base.rows).toHaveLength(1);
+    expect(linhas.join('\n')).toContain('find_or_create_contact_por_variantes indisponível');
+  });
+
+  it('função nova respondendo ⇒ devolve o contato e COMO casou', async () => {
+    const client: ContactResolverClient = {
+      async rpc(fn) {
+        if (fn !== 'find_or_create_contact_por_variantes') throw new Error(`não deveria chamar ${fn}`);
+        return {
+          data: [{ contact_id: 'contato-lp', casou_por: 'variante', telefone_casado: '+5511987654321' }],
+          error: null,
+        };
+      },
+      from() {
+        throw new Error('insert direto não deveria acontecer');
+      },
+    };
+    const linhas: string[] = [];
+
+    const r = await resolveContactId(
+      client,
+      { organizationId: ORG, phone: '+551187654321', name: 'X' },
+      (m) => linhas.push(m)
+    );
+
+    expect(r).toEqual({ contactId: 'contato-lp', via: 'rpc', casouPor: 'variante' });
+    expect(linhas).toEqual([
+      '[GPTMaker] 9º dígito — contato achado pela variante 5511*****4321 (evento com 5511****4321)',
+    ]);
+  });
+});
