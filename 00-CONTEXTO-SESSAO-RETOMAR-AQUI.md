@@ -1,4 +1,36 @@
-# 00 — Contexto de Sessão · Retomar Aqui (Acreditando CRM)
+# 00## Sessao 2026-11-03 (33) — 📍 local da perda (2.66), cards duplicados juntados (2.62) e 9º dígito (2.63) — TUDO EM PRODUCAO
+
+### Como retomar
+
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` (sessao 33) e continue — conferir o AC9 da 2.63
+> (3 e 7 dias) e seguir para a 2.52 (falta Q1 texto e Q2 numero de teste)."*
+
+- **Origem:** audios da Fernanda (29/10). Pipeline no vault: `11-Inbox-Demandas/pipeline-2026-11-03-fernanda-local-e-cards/`
+  (00-INDICE; arquivos 01–12 desta sessao, 20+ da sessao paralela que planeja 2.67/2.68).
+- **2.66 — local de quem perdemos por Distancia (EM PRODUCAO):** coluna `deals.loss_location` (migration aplicada e relida
+  antes do merge) · PR #24 → `b146505` · read-back no Chrome logado (card perdido por Distancia mostra "Local" + "Editar
+  local", 0/120; cancelado sem gravar). Falta o AC11 (teste da Fernanda). Story ainda InReview.
+- **2.62 — juntar cards duplicados (EXECUTADA):** a lista de 07/10 tinha mudado quase toda; decisoes D1–D3 do Filipe em 03/11;
+  28 casos verificados pela conversa (todos a mesma pessoa); correcao do empate de etapa (`check_deal_duplicate`: soft delete
+  do perdedor antes do `merge_contacts`); QA CONCERNS sem bloqueio; `--execute --excluir-perdedores` 29/29, Lead novo
+  162 → 146, idempotencia ok. Backup fora do repo (`grupo-acreditando/.dados-leads/2.62-20261103-1855/`). Script e story
+  na `main` pelo PR #26 (`d9e3f99`), ramo limpo.
+- **2.63 — o mesmo telefone com e sem o 9º digito (EM PRODUCAO):** QA-1 (so tira o 9 quando seguido de 6–9) corrigido nos 3
+  lugares (webhook, SQL, `lib/meta-form/telefone.ts`) · re-gate PASS · migration `find_or_create_contact_por_variantes`
+  aplicada e testada em bloco desfeito (4/4) · PR #25 → `993217b` · Edge Function **v16** (`verify_jwt=false`, 12 arquivos
+  identicos a main) · 15 eventos, 0 erros nos 9 min seguintes. Backup da v15 em `~/.dados-leads/crm-263-deploy-2026-11-03/`.
+  **Pendente AC9:** volume 3 dias e 0 gemeos novos em 7 dias (foto de antes: 22 com gemeo, 3 em 14 dias).
+- ⚠️ **Privacidade:** um telefone real de contato esta publico em 6 arquivos da `main` desde a 2.59 (`parser.test.ts`,
+  `lib/meta-form/*`…) — limpar. Os ramos locais `feat/2.62-juntar-cards-duplicados` e `feat/2.63-nono-digito` tem dado
+  pessoal no historico: **nunca enviar**; publicar sempre por ramo novo com squash.
+- **Ambiente:** `node_modules/@modelcontextprotocol/sdk` estava sem `dist/` (restaurado via `npm pack`); token de gestao
+  do Supabase vence 04/11. A sessao paralela usa a worktree `projetos/acreditando-crm-wt-267` com `node_modules` em
+  JUNCAO para o deste repo — nunca `git worktree remove` sem antes `rmdir` da juncao.
+- **Proximos:** AC9 da 2.63 · 2.52 "Iniciar conversa" (destravada; Q1/Q2) · story da LP (reusar card aberto) · conferir no
+  n8n o fluxo da 2.59 ("a IA nao puxa o formulario") · status Done de 2.66/2.63 apos as provas.
+
+---
+ — Contexto de Sessão · Retomar Aqui (Acreditando CRM)
 
 > Porta de entrada pra retomar o trabalho neste repo. Frase pra retomar:
 > *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue."*
