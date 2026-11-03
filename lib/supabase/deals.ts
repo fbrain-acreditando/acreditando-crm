@@ -89,6 +89,11 @@ export interface DbDeal {
   ai_summary: string | null;
   /** Motivo da perda, se aplicável. */
   loss_reason: string | null;
+  /**
+   * Story 2.66 — local onde a pessoa mora, digitado pelo atendimento ao perder
+   * por Distância. NÃO é o `custom_fields.ondeReside` (que a IA preenche).
+   */
+  loss_location: string | null;
   /** Tags associadas. */
   tags: string[];
   /** Data da última mudança de estágio. */
@@ -178,6 +183,8 @@ export const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]
     companyId: db.client_company_id || '', // @deprecated - backwards compatibility
     aiSummary: db.ai_summary || undefined,
     lossReason: db.loss_reason || undefined,
+    // Story 2.66 — `null` (não informado) vira `undefined`, como o `lossReason`.
+    lossLocation: db.loss_location || undefined,
     tags: db.tags || [],
     lastStageChangeDate: db.last_stage_change_date || undefined,
     customFields: db.custom_fields || {},
@@ -210,7 +217,7 @@ export const transformDeal = (db: DbDeal | DbDealWithItems, items?: DbDealItem[]
  * @param deal - Deal parcial no formato da aplicação.
  * @returns Deal parcial no formato do banco.
  */
-const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
+export const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
   const db: Partial<DbDeal> = {};
 
   if (deal.title !== undefined) db.title = deal.title;
@@ -235,6 +242,10 @@ const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
   else if (deal.companyId !== undefined) db.client_company_id = sanitizeUUID(deal.companyId);
   if (deal.aiSummary !== undefined) db.ai_summary = deal.aiSummary || null;
   if (deal.lossReason !== undefined) db.loss_reason = deal.lossReason || null;
+  // Story 2.66 — só entra no UPDATE quando veio. Perder por outro motivo,
+  // reabrir ou ganhar NÃO leva a chave, e por isso não apagam o local (D4).
+  // Texto vazio vira `null`: é o "apagar de propósito" da edição no card (AC5).
+  if (deal.lossLocation !== undefined) db.loss_location = deal.lossLocation || null;
   if (deal.tags !== undefined) db.tags = deal.tags;
   if (deal.lastStageChangeDate !== undefined) db.last_stage_change_date = deal.lastStageChangeDate || null;
   if (deal.customFields !== undefined) db.custom_fields = deal.customFields;

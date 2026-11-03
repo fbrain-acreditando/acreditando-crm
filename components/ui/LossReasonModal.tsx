@@ -4,13 +4,26 @@ import {
   MessageSquare, Baby, Home, ArrowRightLeft, MousePointerClick,
 } from 'lucide-react';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
+import { LIMITE_LOCAL, type LossReasonExtras } from './localDaPerda';
+
+export { LIMITE_LOCAL, localSugeridoDoCard, type LossReasonExtras } from './localDaPerda';
 
 interface LossReasonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (reason: string) => void;
+  onConfirm: (reason: string, extras?: LossReasonExtras) => void;
   dealTitle?: string;
+  /**
+   * Story 2.66 (D3) — o `ondeReside` do card, mostrado só como DICA cinza no
+   * campo "Onde a pessoa mora?". Nunca é gravado: se ela não digitar, o local
+   * fica vazio.
+   */
+  localSugerido?: string;
 }
+
+/** Story 2.66 — o `value` canônico que abre o 2º passo (não muda: histórico 2.26/2.45). */
+const VALOR_DISTANCIA = 'Distância';
+const DICA_LOCAL_PADRAO = 'Ex.: Zona Leste de SP, Guarulhos, Manaus/AM';
 
 /**
  * Motivos rápidos de perda.
@@ -91,15 +104,22 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
   onClose,
   onConfirm,
   dealTitle,
+  localSugerido,
 }) => {
   const [reason, setReason] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
+  // Story 2.66 — 2º passo do "Distância": onde a pessoa mora.
+  const [showLocalInput, setShowLocalInput] = useState(false);
+  const [local, setLocal] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const localInputRef = useRef<HTMLInputElement>(null);
   
   const generatedId = useId();
   const titleId = `loss-reason-title-${generatedId}`;
   const descId = `loss-reason-desc-${generatedId}`;
   const inputId = `loss-reason-input-${generatedId}`;
+  const localInputId = `loss-location-input-${generatedId}`;
+  const localCounterId = `loss-location-counter-${generatedId}`;
 
   // Restore focus to trigger element on close
   useFocusReturn({ enabled: isOpen });
@@ -108,6 +128,8 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
     if (isOpen) {
       setReason('');
       setShowCustomInput(false);
+      setShowLocalInput(false);
+      setLocal('');
     }
   }, [isOpen]);
 
@@ -117,11 +139,21 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
     }
   }, [showCustomInput]);
 
+  // Story 2.66 — o campo do local ganha foco ao abrir o passo.
+  useEffect(() => {
+    if (showLocalInput && localInputRef.current) {
+      localInputRef.current.focus();
+    }
+  }, [showLocalInput]);
+
   if (!isOpen) return null;
 
   const handleQuickReason = (value: string) => {
     if (value === '') {
       setShowCustomInput(true);
+    } else if (value === VALOR_DISTANCIA) {
+      // Story 2.66 — Distância não fecha na hora: pergunta onde a pessoa mora.
+      setShowLocalInput(true);
     } else {
       onConfirm(value);
       onClose();
@@ -134,6 +166,15 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
       onConfirm(reason.trim());
       onClose();
     }
+  };
+
+  // Story 2.66 (D1) — o local é OPCIONAL: campo vazio confirma sem a chave,
+  // e a dica (placeholder) nunca é gravada.
+  const handleLocalSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const texto = local.trim();
+    onConfirm(VALOR_DISTANCIA, texto ? { lossLocation: texto } : {});
+    onClose();
   };
 
   const handleSkip = () => {
@@ -198,7 +239,57 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
               Qual foi o motivo da perda? Isso ajuda a melhorar suas estratégias.
             </p>
 
-            {!showCustomInput ? (
+            {showLocalInput ? (
+              // Story 2.66 — mesmo visual do "Outro", mas o Confirmar fica
+              // habilitado com o campo vazio (D1: o local não trava a perda).
+              <form onSubmit={handleLocalSubmit}>
+                <label
+                  htmlFor={localInputId}
+                  className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2"
+                >
+                  Onde a pessoa mora? (bairro, cidade ou estado)
+                </label>
+                <input
+                  ref={localInputRef}
+                  id={localInputId}
+                  type="text"
+                  value={local}
+                  maxLength={LIMITE_LOCAL}
+                  onChange={(e) => setLocal(e.target.value)}
+                  placeholder={localSugerido?.trim() ? `Ex.: ${localSugerido.trim()}` : DICA_LOCAL_PADRAO}
+                  aria-describedby={localCounterId}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 
+                             bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-white
+                             placeholder:text-slate-400 dark:placeholder:text-slate-500
+                             focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500
+                             transition-all"
+                />
+                <p id={localCounterId} className="mt-1 text-right text-xs text-slate-400">
+                  {local.length}/{LIMITE_LOCAL}
+                </p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLocalInput(false);
+                      setLocal('');
+                    }}
+                    className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400
+                               hover:bg-slate-100 dark:hover:bg-white/5 transition-colors focus-visible-ring"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 px-4 py-2.5 rounded-lg text-sm font-bold text-white
+                               bg-red-600 hover:bg-red-500
+                               shadow-lg shadow-red-600/20 transition-all focus-visible-ring"
+                  >
+                    Confirmar
+                  </button>
+                </div>
+              </form>
+            ) : !showCustomInput ? (
               // Story 2.45 — a lista foi de 6 para 12 itens. Em 2 colunas fixas
               // isso vira 6 linhas e o modal passa da altura da tela em telefone.
               // `max-h` + rolagem mantém o modal do tamanho de antes; os mais
@@ -267,7 +358,7 @@ export const LossReasonModal: React.FC<LossReasonModalProps> = ({
           </div>
 
           {/* Footer */}
-          {!showCustomInput && (
+          {!showCustomInput && !showLocalInput && (
             <div className="px-6 pb-6">
               <button
                 type="button"

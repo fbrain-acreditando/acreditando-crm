@@ -39,9 +39,14 @@ describe('LossReasonModal — motivos rápidos', () => {
     render(<LossReasonModal {...props} onConfirm={onConfirm} />);
 
     await user.click(screen.getByRole('button', { name: /distância/i }));
+    // Story 2.66 — Distância agora tem um 2º passo (o local). Confirmar em
+    // branco continua gravando o MESMO value canônico.
+    expect(onConfirm).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }));
 
     // Um motivo, um value. É o que permite agrupar no painel.
-    expect(onConfirm).toHaveBeenCalledWith('Distância');
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0][0]).toBe('Distância');
   });
 
   it('"Distância" vem primeiro — é o motivo nº 1 medido (6 de 11 perdas)', () => {
@@ -124,5 +129,140 @@ describe('LossReasonModal — story 2.45', () => {
 
     // E "Outro" continua sendo a saída de escape, no fim.
     expect(rotulos[rotulos.length - 1]).toMatch(/outro/i);
+  });
+});
+
+/**
+ * Story 2.66 — "Onde a pessoa mora?" ao perder por Distância.
+ *
+ * Pedido da Fernanda (29/10): *"um campo pra eu preencher o local"*. O local é
+ * OPCIONAL (D1), a dica cinza vem do `ondeReside` e NUNCA é gravada (D3), e os
+ * outros motivos continuam com um clique e um argumento.
+ */
+describe('LossReasonModal — local da perda por Distância (story 2.66)', () => {
+  const ROTULO_LOCAL = 'Onde a pessoa mora? (bairro, cidade ou estado)';
+
+  async function abrirPassoDoLocal(extra: Partial<React.ComponentProps<typeof LossReasonModal>> = {}) {
+    const onConfirm = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<LossReasonModal {...props} onConfirm={onConfirm} onClose={onClose} {...extra} />);
+    await user.click(screen.getByRole('button', { name: /distância/i }));
+    return { onConfirm, onClose, user };
+  }
+
+  it('🎯 clicar em Distância NÃO fecha: abre o campo, com rótulo acentuado e foco nele', async () => {
+    const { onConfirm, onClose } = await abrirPassoDoLocal();
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    const campo = screen.getByLabelText(ROTULO_LOCAL);
+    expect(campo).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Voltar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmar' })).toBeEnabled();
+    // O "Pular esta etapa" sai de cena no 2º passo, como no "Outro".
+    expect(screen.queryByRole('button', { name: /pular esta etapa/i })).not.toBeInTheDocument();
+  });
+
+  it('🎯 Confirmar com texto ⇒ onConfirm("Distância", { lossLocation }) sem espaços nas pontas', async () => {
+    const { onConfirm, onClose, user } = await abrirPassoDoLocal();
+
+    await user.type(screen.getByLabelText(ROTULO_LOCAL), '  Manaus/AM  ');
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledWith('Distância', { lossLocation: 'Manaus/AM' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('Enter confirma', async () => {
+    const { onConfirm, user } = await abrirPassoDoLocal();
+
+    await user.type(screen.getByLabelText(ROTULO_LOCAL), 'Guarulhos{Enter}');
+
+    expect(onConfirm).toHaveBeenCalledWith('Distância', { lossLocation: 'Guarulhos' });
+  });
+
+  it('🎯 campo vazio com a dica do ondeReside ⇒ onConfirm recebe {} (a dica nunca é gravada)', async () => {
+    const { onConfirm, user } = await abrirPassoDoLocal({ localSugerido: 'Zona Leste, no Carrão' });
+
+    expect(screen.getByLabelText(ROTULO_LOCAL)).toHaveAttribute('placeholder', 'Ex.: Zona Leste, no Carrão');
+    expect(screen.getByLabelText(ROTULO_LOCAL)).toHaveValue('');
+
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+    expect(onConfirm).toHaveBeenCalledWith('Distância', {});
+    expect(onConfirm.mock.calls[0][1]).not.toHaveProperty('lossLocation');
+  });
+
+  it('só espaços conta como vazio', async () => {
+    const { onConfirm, user } = await abrirPassoDoLocal();
+
+    await user.type(screen.getByLabelText(ROTULO_LOCAL), '   ');
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+    expect(onConfirm).toHaveBeenCalledWith('Distância', {});
+  });
+
+  it('sem ondeReside, a dica padrão aparece', async () => {
+    await abrirPassoDoLocal();
+    expect(screen.getByLabelText(ROTULO_LOCAL)).toHaveAttribute(
+      'placeholder',
+      'Ex.: Zona Leste de SP, Guarulhos, Manaus/AM'
+    );
+  });
+
+  it('Voltar devolve à lista SEM chamar onConfirm', async () => {
+    const { onConfirm, user } = await abrirPassoDoLocal();
+
+    await user.type(screen.getByLabelText(ROTULO_LOCAL), 'Osasco');
+    await user.click(screen.getByRole('button', { name: 'Voltar' }));
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: /motivos rápidos/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(ROTULO_LOCAL)).not.toBeInTheDocument();
+  });
+
+  it('limite de 120 caracteres, com contador visível', async () => {
+    const { user } = await abrirPassoDoLocal();
+    const campo = screen.getByLabelText(ROTULO_LOCAL);
+
+    expect(campo).toHaveAttribute('maxLength', '120');
+    await user.type(campo, 'Carrão');
+    expect(screen.getByText('6/120')).toBeInTheDocument();
+  });
+
+  it('os outros motivos seguem com UM clique e UM argumento', async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(<LossReasonModal {...props} onConfirm={onConfirm} />);
+
+    await user.click(screen.getByRole('button', { name: /preço/i }));
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0]).toEqual(['Preço muito alto']);
+  });
+
+  it('"Pular esta etapa" segue com um argumento', async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(<LossReasonModal {...props} onConfirm={onConfirm} />);
+
+    await user.click(screen.getByRole('button', { name: /pular esta etapa/i }));
+
+    expect(onConfirm.mock.calls[0]).toEqual(['Não informado']);
+  });
+
+  it('"Outro" segue exigindo texto e grava um argumento', async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(<LossReasonModal {...props} onConfirm={onConfirm} />);
+
+    await user.click(screen.getByRole('button', { name: /outro/i }));
+    expect(screen.getByRole('button', { name: 'Confirmar' })).toBeDisabled();
+    await user.type(screen.getByPlaceholderText(/digite o motivo/i), 'vaquinha');
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+    expect(onConfirm.mock.calls[0]).toEqual(['vaquinha']);
   });
 });

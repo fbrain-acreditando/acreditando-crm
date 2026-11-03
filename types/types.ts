@@ -241,6 +241,11 @@ export interface Deal {
   customFields?: Record<string, any>; // Dynamic fields storage
   lastStageChangeDate?: string; // For stagnation tracking
   lossReason?: string; // For win/loss analysis
+  /**
+   * Story 2.66 — onde a pessoa mora, digitado pelo atendimento ao perder por
+   * Distância (`deals.loss_location`). Separado do `customFields.ondeReside`.
+   */
+  lossLocation?: string;
   aiExtracted?: Record<string, any>; // AI-extracted BANT fields (zero config)
 
   /**
