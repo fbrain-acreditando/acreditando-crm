@@ -1,4 +1,13 @@
-# 00## Sessao 2026-11-03 (33) — 📍 local da perda (2.66), cards duplicados juntados (2.62) e 9º dígito (2.63) — TUDO EM PRODUCAO
+# 00 — Contexto de Sessão · Retomar Aqui (Acreditando CRM)
+
+> Porta de entrada pra retomar o trabalho neste repo. Frase pra retomar:
+> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue."*
+>
+> 📖 Memória completa (curada) no vault: **[[CRM Acreditando (repo nossocrm)]]** + **[[CRM IA Acreditando]]**.
+> Manual da arquitetura do repo: `CLAUDE.md` + `AGENTS.md` (na raiz).
+
+---
+## Sessao 2026-11-03 (33) — 📍 local da perda (2.66), cards duplicados juntados (2.62) e 9º dígito (2.63) — TUDO EM PRODUCAO
 
 ### Como retomar
 
@@ -28,15 +37,6 @@
   JUNCAO para o deste repo — nunca `git worktree remove` sem antes `rmdir` da juncao.
 - **Proximos:** AC9 da 2.63 · 2.52 "Iniciar conversa" (destravada; Q1/Q2) · story da LP (reusar card aberto) · conferir no
   n8n o fluxo da 2.59 ("a IA nao puxa o formulario") · status Done de 2.66/2.63 apos as provas.
-
----
- — Contexto de Sessão · Retomar Aqui (Acreditando CRM)
-
-> Porta de entrada pra retomar o trabalho neste repo. Frase pra retomar:
-> *"leia `projetos/acreditando-crm/00-CONTEXTO-SESSAO-RETOMAR-AQUI.md` e continue."*
->
-> 📖 Memória completa (curada) no vault: **[[CRM Acreditando (repo nossocrm)]]** + **[[CRM IA Acreditando]]**.
-> Manual da arquitetura do repo: `CLAUDE.md` + `AGENTS.md` (na raiz).
 
 ---
 ## Sessao 2026-09-22 (29) — 🪪 o lead virou DOIS cards: a mesma conversa do WhatsApp partida em duas (telefone x @lid)
