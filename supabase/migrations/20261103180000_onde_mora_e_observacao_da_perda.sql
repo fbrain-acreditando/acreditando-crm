@@ -38,10 +38,13 @@
 
 -- 1. Normalização para busca: imutável, sem extensão, search_path fixo (R10).
 --    As duas cadeias do translate têm o MESMO tamanho (48 letras).
+--    ⚠️ QA 2.67 (H1): só FUNÇÕES levam `pg_catalog.`. `nullif`, `coalesce`,
+--    `greatest` e `least` são palavras da linguagem SQL, não funções do
+--    catálogo: `pg_catalog.nullif(...)` dá 42883 e derruba a migration inteira.
 CREATE OR REPLACE FUNCTION public.texto_de_busca(p_valor text)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
 SET search_path = '' AS $$
-  SELECT pg_catalog.nullif(pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(pg_catalog.translate(coalesce(p_valor, ''),
+  SELECT nullif(pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(pg_catalog.translate(coalesce(p_valor, ''),
     'ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ',
     'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn')), '\s+', ' ', 'g')), '');
 $$;
@@ -75,7 +78,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.loss_reason_chave(d public.deals)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
 SET search_path = '' AS $$
-  SELECT public.texto_de_busca(coalesce(pg_catalog.nullif(pg_catalog.btrim(d.loss_reason), ''), 'Não informado'));
+  SELECT public.texto_de_busca(coalesce(nullif(pg_catalog.btrim(d.loss_reason), ''), 'Não informado'));
 $$;
 COMMENT ON FUNCTION public.lead_location_busca(public.deals) IS 'Story 2.68 — campo calculado do PostgREST: texto_de_busca(lead_location). Filtrar com ?lead_location_busca=ilike.*termo*.';
 COMMENT ON FUNCTION public.loss_reason_chave(public.deals) IS 'Story 2.68 — campo calculado do PostgREST: texto_de_busca(loss_reason), vazio = "nao informado". Nunca nulo.';
@@ -87,5 +90,16 @@ UPDATE public.deals SET lead_location = btrim(loss_location)
 COMMENT ON COLUMN public.deals.lead_location IS 'Story 2.67 — onde a pessoa mora, digitado pelo atendimento em qualquer etapa. NÃO é o custom_fields.ondeReside. NULL = não informado.';
 COMMENT ON COLUMN public.deals.loss_note IS 'Story 2.67 — observação da perda ATUAL (qualquer motivo). Regravada a cada perda e editável no card; NULL = sem observação.';
 COMMENT ON COLUMN public.deals.loss_location IS 'DESCONTINUADA pela story 2.67 — copiada para lead_location. Não gravar. DROP numa story de limpeza, com divergência = 0.';
+
+-- 5. Permissões (QA 2.67, L1) — convenção de `20260223000001_fix_rpc_anon_access.sql`:
+--    sem EXECUTE para PUBLIC/anon (senão `/rpc/texto_de_busca` fica chamável sem
+--    login). O PostgREST só calcula o campo para quem tem EXECUTE: a tela usa
+--    `authenticated`; o `service_role` fica para scripts e a IA. Idempotente.
+REVOKE ALL ON FUNCTION public.texto_de_busca(text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.lead_location_busca(public.deals) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.loss_reason_chave(public.deals) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.texto_de_busca(text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.lead_location_busca(public.deals) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.loss_reason_chave(public.deals) TO authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';

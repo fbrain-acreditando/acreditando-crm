@@ -140,6 +140,25 @@ describe('AC1 — migration aditiva, idempotente e sem coluna calculada guardada
     expect(sql).not.toMatch(/GENERATED/i);
   });
 
+  it('🎯 QA H1 — palavras da linguagem SQL nunca levam `pg_catalog.` (dá 42883 e derruba a migration)', () => {
+    // `nullif`, `coalesce`, `greatest` e `least` são sintaxe, não funções do
+    // catálogo: `pg_catalog.nullif(...)` não existe. Só os comandos (sem os
+    // comentários, que citam o erro de propósito).
+    expect(comandos).not.toMatch(/pg_catalog\.(nullif|coalesce|greatest|least)\s*\(/i);
+    // E as funções de verdade continuam qualificadas (R10).
+    for (const fn of ['lower', 'regexp_replace', 'btrim', 'translate']) {
+      expect(comandos).toContain(`pg_catalog.${fn}(`);
+    }
+    expect(comandos).toContain('SELECT nullif(pg_catalog.lower(');
+  });
+
+  it('QA L1 — sem EXECUTE para PUBLIC/anon nas 3 funções; authenticated e service_role mantêm', () => {
+    for (const assinatura of ['texto_de_busca\\(text\\)', 'lead_location_busca\\(public\\.deals\\)', 'loss_reason_chave\\(public\\.deals\\)']) {
+      expect(comandos).toMatch(new RegExp(`REVOKE ALL ON FUNCTION public\\.${assinatura} FROM PUBLIC, anon;`));
+      expect(comandos).toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${assinatura} TO authenticated, service_role;`));
+    }
+  });
+
   it('as 2 colunas com IF NOT EXISTS, tipo text, e só elas', () => {
     expect(comandos).toMatch(/ALTER TABLE public\.deals ADD COLUMN IF NOT EXISTS lead_location text;/);
     expect(comandos).toMatch(/ALTER TABLE public\.deals ADD COLUMN IF NOT EXISTS loss_note text;/);

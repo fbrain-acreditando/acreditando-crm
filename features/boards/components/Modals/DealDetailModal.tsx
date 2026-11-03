@@ -527,11 +527,6 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
     }
   };
 
-  /**
-   * Story 2.67 (AC4, Q2) — salva SÓ a chave `lossNote`. Não mexe em
-   * `lossReason`, `isLost`, `status` nem `closedAt`, e não gera atividade.
-   * Vazio grava `null` (via `transformDealToDb`).
-   */
   // Story 2.67 (AC3) — dica do campo "Onde mora": o `ondeReside`, ou a padrão.
   // É só placeholder: nunca é gravada.
   const ondeResideDoCard = localSugeridoDoCard(deal);
@@ -539,6 +534,11 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
     ? `Ex.: ${ondeResideDoCard}`
     : 'Ex.: Santana (Zona Norte) — depende de apoio para vir';
 
+  /**
+   * Story 2.67 (AC4, Q2) — salva SÓ a chave `lossNote`. Não mexe em
+   * `lossReason`, `isLost`, `status` nem `closedAt`, e não gera atividade.
+   * Vazio grava `null` (via `transformDealToDb`).
+   */
   const salvarObservacao = async () => {
     setSalvandoObservacao(true);
     try {
