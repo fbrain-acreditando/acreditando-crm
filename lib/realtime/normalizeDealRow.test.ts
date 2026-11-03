@@ -100,33 +100,43 @@ describe('mesclarDealDoRealtime — o defeito que a Fernanda viu', () => {
 });
 
 /**
- * Story 2.66 (AC7) — a coluna nova `loss_location` chega pela MESMA tradução
- * (`transformDeal`), sem lista à mão: é o que a regra da 2.29 garante.
+ * Story 2.67 (AC9) — as colunas novas `lead_location` e `loss_note` chegam pela
+ * MESMA tradução (`transformDeal`), sem lista à mão: é o que a regra da 2.29
+ * garante. (O Realtime manda só colunas da tabela; os campos calculados da
+ * 2.68 nunca chegam por ele.)
  */
-describe('story 2.66 — o local da perda chega pelo Realtime', () => {
-  it('🎯 `loss_location: "Guarulhos"` vira `lossLocation: "Guarulhos"` no cache', () => {
-    const linha = { ...LINHA_DO_BANCO, is_lost: true, loss_location: 'Guarulhos' };
+describe('story 2.67 — onde mora e observação chegam pelo Realtime', () => {
+  it('🎯 `lead_location: "Santana"` e `loss_note: "sem apoio"` viram `leadLocation`/`lossNote` no cache', () => {
+    const linha = { ...LINHA_DO_BANCO, is_lost: true, lead_location: 'Santana', loss_note: 'sem apoio' };
     const resultado = mesclarDealDoRealtime(NO_CACHE, linha) as unknown as Record<string, unknown>;
 
-    expect(resultado.lossLocation).toBe('Guarulhos');
-    expect(resultado.loss_location).toBeUndefined();
+    expect(resultado.leadLocation).toBe('Santana');
+    expect(resultado.lossNote).toBe('sem apoio');
+    expect(resultado.lead_location).toBeUndefined();
+    expect(resultado.loss_note).toBeUndefined();
     // E não se mistura com o `ondeReside` da IA.
     expect((resultado.customFields as Record<string, unknown>).ondeReside).toBe('Guarulhos');
   });
 
   it('deal novo (fora do cache) também chega com o local', () => {
-    const novo = normalizarDealDoRealtime({ ...LINHA_DO_BANCO, loss_location: 'Manaus/AM' });
+    const novo = normalizarDealDoRealtime({ ...LINHA_DO_BANCO, lead_location: 'São Paulo' });
 
-    expect(novo.lossLocation).toBe('Manaus/AM');
+    expect(novo.leadLocation).toBe('São Paulo');
   });
 
-  it('`loss_location: null` chega como não informado', () => {
-    const resultado = mesclarDealDoRealtime(NO_CACHE, { ...LINHA_DO_BANCO, loss_location: null });
+  it('`null` chega como não informado, e a coluna aposentada `loss_location` é ignorada', () => {
+    const resultado = mesclarDealDoRealtime(NO_CACHE, {
+      ...LINHA_DO_BANCO,
+      lead_location: null,
+      loss_note: null,
+      loss_location: 'Manaus/AM',
+    }) as unknown as Record<string, unknown>;
 
-    expect(resultado.lossLocation).toBeUndefined();
+    expect(resultado.leadLocation).toBeUndefined();
+    expect(resultado.lossNote).toBeUndefined();
+    expect(resultado).not.toHaveProperty('lossLocation');
   });
 });
-
 describe('normalizarDealDoRealtime — deal que ainda não está no cache', () => {
   it('entra traduzido, não cru', () => {
     const novo = normalizarDealDoRealtime(LINHA_DO_BANCO) as unknown as Record<string, unknown>;

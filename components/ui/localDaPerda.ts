@@ -1,6 +1,6 @@
 /**
- * Story 2.66 — peças do "local de quem perdemos por Distância" usadas pelo
- * `LossReasonModal`, pelo quadro e pelo card aberto.
+ * Stories 2.66/2.67 — peças do "Onde mora" e da observação da perda, usadas
+ * pelo `LossReasonModal`, pelo quadro e pelo card aberto.
  *
  * Moram fora do componente de propósito: as suítes que mockam o
  * `LossReasonModal` (ex.: `test/stories/US-001-…`) não precisam conhecer estas
@@ -8,19 +8,25 @@
  */
 
 /**
- * O que vem junto do motivo. Hoje só o local de quem perdemos por Distância.
- * Opcional: os outros motivos continuam chamando `onConfirm(value)` com um
- * argumento só (contrato retrocompatível).
+ * O que vem junto do motivo (story 2.67).
+ * - `leadLocation`: onde a pessoa mora. Só vem quando ela MUDOU o texto em
+ *   relação ao que o card já tinha e não está vazio (apagar é só pelo card).
+ * - `lossNote`: observação da perda. Sempre vem do modal: o texto, ou `''`
+ *   quando vazio (o hook grava `null`, S9).
  */
 export interface LossReasonExtras {
-  lossLocation?: string;
+  leadLocation?: string;
+  lossNote?: string;
 }
 
-/** Limite do local digitado (no modal da perda e na edição do card). */
-export const LIMITE_LOCAL = 120;
+/** Limite do "Onde mora" (no modal da perda e no card). Igual ao `CHECK` do banco. */
+export const LIMITE_LOCAL = 200;
+
+/** Limite da observação da perda (no modal e no card). Igual ao `CHECK` do banco. */
+export const LIMITE_OBSERVACAO = 500;
 
 /**
- * D3 — a dica do campo do local: o `ondeReside` do card, quando é texto.
+ * D3 da 2.66 — a dica do campo do local: o `ondeReside` do card, quando é texto.
  * É só placeholder, nunca é gravado.
  */
 export function localSugeridoDoCard(

@@ -32,11 +32,18 @@ interface MoveDealParams {
   targetStageId: string;
   lossReason?: string;
   /**
-   * Story 2.66 — local digitado ao perder por Distância. Vai no MESMO update da
-   * mudança de coluna (nunca numa 2ª escrita). Ausente ⇒ a chave não entra no
-   * update e o local já gravado fica como está (D4).
+   * Story 2.67 — onde a pessoa mora, digitado na janela de perda. Vai no MESMO
+   * update da mudança de coluna (nunca numa 2ª escrita). Truthy: ausente ou
+   * vazio ⇒ a chave não entra no update e o local já gravado fica como está
+   * (o local é da pessoa; apagar é só pelo card).
    */
-  lossLocation?: string;
+  leadLocation?: string;
+  /**
+   * Story 2.67 (S9) — observação da perda. É da PERDA: toda perda grava
+   * `lossNote` (o texto, ou `null` quando vazio), para a observação de uma
+   * perda antiga não aparecer ao lado de um motivo novo. Fora da perda, ignorada.
+   */
+  lossNote?: string;
   // Context needed for automations
   deal: Deal | DealView;
   board: Board;
@@ -69,7 +76,7 @@ export const useMoveDeal = () => {
   const { showToast } = useOptionalToast();
 
   return useMutation<MoveDealResult, Error, MoveDealParams, MoveDealContext>({
-    mutationFn: async ({ dealId, targetStageId, lossReason, lossLocation, deal, board, lifecycleStages, explicitWin, explicitLost }) => {
+    mutationFn: async ({ dealId, targetStageId, lossReason, leadLocation, lossNote, deal, board, lifecycleStages, explicitWin, explicitLost }) => {
       const targetStage = board.stages.find(s => s.id === targetStageId);
 
       // Determine isWon/isLost based on params OR linkedLifecycleStage
@@ -122,14 +129,20 @@ export const useMoveDeal = () => {
         }
       }
 
+      // Story 2.67 (S9) — é perda quando o card fica perdido E veio um motivo
+      // (o modal sempre manda um: até o "Pular" grava "Não informado").
+      const ehPerda = isLost === true && Boolean(lossReason);
+
       // Build updates object
       const updates: Partial<Deal> = {
         status: targetStageId,
         lastStageChangeDate: new Date().toISOString(),
         ...(lossReason && { lossReason }),
-        // Story 2.66 — truthy, como o `lossReason`: texto vazio não apaga o local
-        // anterior (apagar é só pela edição no card, AC5).
-        ...(lossLocation && { lossLocation }),
+        // Story 2.67 — truthy, como o `lossReason`: texto vazio não apaga o local
+        // anterior (apagar é só pela edição no card, AC3).
+        ...(leadLocation && { leadLocation }),
+        // Story 2.67 (S9) — a observação é regravada em TODA perda; vazia = null.
+        ...(ehPerda && { lossNote: lossNote || null }),
         ...(isWon !== undefined && { isWon }),
         ...(isLost !== undefined && { isLost }),
         ...(closedAt !== undefined && { closedAt: closedAt as string }),
@@ -172,8 +185,13 @@ export const useMoveDeal = () => {
         dealTitle: deal.title,
         type: 'STATUS_CHANGE',
         title: `Moveu para ${stageLabel}`,
+        // Story 2.67 — histórico; a fonte de verdade são as colunas.
         description: lossReason
-          ? `Motivo da perda: ${lossReason}${lossLocation ? ` · Local: ${lossLocation}` : ''}`
+          ? [
+              `Motivo da perda: ${lossReason}`,
+              leadLocation ? `Onde mora: ${leadLocation}` : '',
+              ehPerda && lossNote ? `Observação: ${lossNote}` : '',
+            ].filter(Boolean).join(' · ')
           : undefined,
         date: new Date().toISOString(),
         completed: true,
@@ -268,7 +286,7 @@ export const useMoveDeal = () => {
     },
 
     // Optimistic update: update UI instantly before server responds
-    onMutate: async ({ dealId, targetStageId, deal, explicitWin, explicitLost, board, lossLocation }) => {
+    onMutate: async ({ dealId, targetStageId, deal, explicitWin, explicitLost, board, lossReason, leadLocation, lossNote }) => {
       // #region agent log
       if (process.env.NODE_ENV !== 'production') {
         const logData = {
@@ -299,6 +317,13 @@ export const useMoveDeal = () => {
         explicitLost
         || (board.lostStageId ? targetStageId === board.lostStageId : targetStage?.linkedLifecycleStage === 'OTHER');
 
+      // Story 2.67 — o card mostra local e observação sem F5. A observação
+      // segue a mesma regra do servidor (S9): toda perda a substitui.
+      const extrasDaPerda: Partial<Deal> = {
+        ...(leadLocation && { leadLocation }),
+        ...(isLost && lossReason && { lossNote: lossNote || undefined }),
+      };
+
       // Optimistically update APENAS DEALS_VIEW_KEY (única fonte de verdade)
       queryClient.setQueryData<DealView[]>(DEALS_VIEW_KEY, (old) => {
         if (!old) return old;
@@ -323,8 +348,7 @@ export const useMoveDeal = () => {
               lastStageChangeDate: new Date().toISOString(),
               isWon: isWon ?? d.isWon,
               isLost: isLost ?? d.isLost,
-              // Story 2.66 — o card mostra o local sem F5.
-              ...(lossLocation && { lossLocation }),
+              ...extrasDaPerda,
               updatedAt: new Date().toISOString(),
             };
             // #region agent log
@@ -353,7 +377,7 @@ export const useMoveDeal = () => {
           lastStageChangeDate: new Date().toISOString(),
           isWon: isWon ?? old.isWon,
           isLost: isLost ?? old.isLost,
-          ...(lossLocation && { lossLocation }),
+          ...extrasDaPerda,
           updatedAt: new Date().toISOString(),
         };
       });
@@ -430,9 +454,10 @@ export const useMoveDealSimple = (
     lossReason?: string,
     explicitWin?: boolean,
     explicitLost?: boolean,
-    // Story 2.66 — 6º parâmetro OPCIONAL, no fim, para não quebrar as chamadas
-    // posicionais que já existem.
-    lossLocation?: string
+    // Story 2.66/2.67 — 6º e 7º parâmetros OPCIONAIS, no fim, para não quebrar
+    // as chamadas posicionais que já existem (5 ou 6 argumentos).
+    leadLocation?: string,
+    lossNote?: string
   ) => {
     if (!board) {
       console.error('[useMoveDealSimple] No board provided');
@@ -443,8 +468,9 @@ export const useMoveDealSimple = (
       dealId: deal.id,
       targetStageId,
       lossReason,
-      // Só entra quando veio: chamada antiga (5 argumentos) gera o mesmo objeto.
-      ...(lossLocation !== undefined && { lossLocation }),
+      // Só entram quando vieram: chamada antiga (5 argumentos) gera o mesmo objeto.
+      ...(leadLocation !== undefined && { leadLocation }),
+      ...(lossNote !== undefined && { lossNote }),
       deal,
       board,
       lifecycleStages,

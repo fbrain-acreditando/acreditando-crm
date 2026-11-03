@@ -1,13 +1,15 @@
 /**
- * Story 2.66 (QA TEST-001) — o caminho do QUADRO repassa o local da perda.
+ * Story 2.67 — o caminho do QUADRO repassa o "Onde mora" e a observação da
+ * perda (sucede o teste TEST-001 da 2.66), e o filtro "Onde mora" + o aviso do
+ * teto de 1.000 cards (AC5).
  *
- * O gate do @qa mostrou que tirar o repasse de `extras.lossLocation` em
- * `useBoardsController.handleLossReasonConfirm` deixava a suíte inteira verde
- * (mutação M3). Este arquivo cobre os dois caminhos do quadro que abrem o modal
- * da perda — arrastar o card (`handleDrop`) e o teclado (`handleMoveDealToStage`)
- * — e afirma o VALOR que chega a `moveDealMutation.mutate`.
+ * Cobre os dois caminhos do quadro que abrem o modal da perda — arrastar o
+ * card (`handleDrop`) e o teclado (`handleMoveDealToStage`) — e afirma o VALOR
+ * que chega a `moveDealMutation.mutate`. As mutações de controle do AC11
+ * (tirar o repasse do `leadLocation` e, separadamente, o do `lossNote`) têm de
+ * reprovar testes daqui.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type React from 'react';
 
@@ -31,6 +33,7 @@ const h = vi.hoisted(() => {
     isWon: false,
     isLost: false,
     updatedAt: '2026-11-01T12:00:00Z',
+    leadLocation: 'Santana' as string | undefined,
     customFields: { ondeReside: 'Zona Leste' },
   };
   const mutate = vi.fn();
@@ -39,7 +42,7 @@ const h = vi.hoisted(() => {
     board,
     deal,
     boards: [board],
-    deals: [deal],
+    deals: [deal] as Array<Record<string, unknown>>,
     lifecycleStages: [] as unknown[],
     customFields: [] as unknown[],
     mutate,
@@ -123,13 +126,13 @@ const caminhos = [
   ['mover pelo teclado para Perdido', abrirPeloTeclado],
 ] as const;
 
-describe('Story 2.66 — o quadro repassa o local da perda (QA TEST-001)', () => {
+describe('Story 2.67 — o quadro repassa local e observação da perda (AC7)', () => {
   beforeEach(() => {
     h.mutate.mockClear();
   });
 
   describe.each(caminhos)('%s', (_nome, abrir) => {
-    it('abre o modal sem mover nada e com a dica do ondeReside', () => {
+    it('abre o modal sem mover nada, com a dica do ondeReside e o local atual do card', () => {
       const { result } = renderHook(() => useBoardsController());
       abrir(result);
 
@@ -139,15 +142,19 @@ describe('Story 2.66 — o quadro repassa o local da perda (QA TEST-001)', () =>
         dealId: 'deal-1',
         stageId: 'stage-perdido',
         localSugerido: 'Zona Leste',
+        localAtual: 'Santana',
       });
     });
 
-    it('motivo "Distância" + local: o moveDeal recebe lossLocation "Manaus/AM"', () => {
+    it('🎯 local alterado + observação: o moveDeal recebe leadLocation e lossNote', () => {
       const { result } = renderHook(() => useBoardsController());
       abrir(result);
 
       act(() => {
-        result.current.handleLossReasonConfirm('Distância', { lossLocation: 'Manaus/AM' });
+        result.current.handleLossReasonConfirm('Sem transporte ou apoio para vir', {
+          leadLocation: 'Santana — sem apoio',
+          lossNote: 'depende do filho',
+        });
       });
 
       expect(h.mutate).toHaveBeenCalledTimes(1);
@@ -155,28 +162,29 @@ describe('Story 2.66 — o quadro repassa o local da perda (QA TEST-001)', () =>
       expect(payload).toMatchObject({
         dealId: 'deal-1',
         targetStageId: 'stage-perdido',
-        lossReason: 'Distância',
-        lossLocation: 'Manaus/AM',
+        lossReason: 'Sem transporte ou apoio para vir',
       });
-      expect(payload.lossLocation).toBe('Manaus/AM');
+      expect(payload.leadLocation).toBe('Santana — sem apoio');
+      expect(payload.lossNote).toBe('depende do filho');
+      expect(payload).not.toHaveProperty('lossLocation');
       expect(result.current.lossReasonModal).toBeNull();
     });
 
-    it('sem local: a chave lossLocation nem vai no payload', () => {
+    it('🎯 observação vazia vai como "" (o hook grava null), e sem local a chave não vai', () => {
       const { result } = renderHook(() => useBoardsController());
       abrir(result);
 
       act(() => {
-        result.current.handleLossReasonConfirm('Preço');
+        result.current.handleLossReasonConfirm('Preço muito alto', { lossNote: '' });
       });
 
-      expect(h.mutate).toHaveBeenCalledTimes(1);
       const payload = h.mutate.mock.calls[0][0];
-      expect(payload.lossReason).toBe('Preço');
-      expect(payload).not.toHaveProperty('lossLocation');
+      expect(payload.lossReason).toBe('Preço muito alto');
+      expect(payload).toHaveProperty('lossNote', '');
+      expect(payload).not.toHaveProperty('leadLocation');
     });
 
-    it('a dica do ondeReside nunca vira o local gravado', () => {
+    it('chamada sem extras não inventa chaves', () => {
       const { result } = renderHook(() => useBoardsController());
       abrir(result);
 
@@ -184,7 +192,80 @@ describe('Story 2.66 — o quadro repassa o local da perda (QA TEST-001)', () =>
         result.current.handleLossReasonConfirm('Distância');
       });
 
-      expect(h.mutate.mock.calls[0][0]).not.toHaveProperty('lossLocation');
+      expect(h.mutate.mock.calls[0][0]).not.toHaveProperty('leadLocation');
+      expect(h.mutate.mock.calls[0][0]).not.toHaveProperty('lossNote');
     });
+  });
+});
+
+describe('Story 2.67 — filtro "Onde mora" e aviso do teto (AC5)', () => {
+  const base = h.deal;
+  const comLocal = (id: string, leadLocation: string | undefined, extra: Record<string, unknown> = {}) => ({
+    ...base,
+    id,
+    title: `Lead ${id}`,
+    leadLocation,
+    createdAt: '2026-11-01T12:00:00Z',
+    ...extra,
+  });
+  const original = h.deals;
+
+  afterEach(() => {
+    h.deals = original;
+  });
+
+  function idsFiltrados(result: { current: Controller }) {
+    return result.current.filteredDeals.map(d => d.id);
+  }
+
+  it('🎯 "santana" acha "Santana — depende de apoio"; "sao paulo" acha "São Paulo"', () => {
+    h.deals = [
+      comLocal('a', 'Santana — depende de apoio'),
+      comLocal('b', 'São Paulo'),
+      comLocal('c', 'Guarulhos'),
+    ];
+    const { result } = renderHook(() => useBoardsController());
+
+    act(() => result.current.setLocalFilter('santana'));
+    expect(idsFiltrados(result)).toEqual(['a']);
+
+    act(() => result.current.setLocalFilter('  SAO   paulo '));
+    expect(idsFiltrados(result)).toEqual(['b']);
+  });
+
+  it('filtro vazio não esconde nada; card sem local some com o filtro preenchido', () => {
+    h.deals = [comLocal('a', 'Santana'), comLocal('b', undefined)];
+    const { result } = renderHook(() => useBoardsController());
+
+    expect(idsFiltrados(result)).toEqual(['a', 'b']);
+    act(() => result.current.setLocalFilter('   '));
+    expect(idsFiltrados(result)).toEqual(['a', 'b']);
+    act(() => result.current.setLocalFilter('a'));
+    expect(idsFiltrados(result)).toEqual(['a']);
+  });
+
+  it('soma com o status (Perdidos + "Santana")', () => {
+    h.deals = [
+      comLocal('aberto', 'Santana'),
+      comLocal('perdido', 'Santana', { isLost: true, status: 'stage-perdido' }),
+      comLocal('perdido-longe', 'Manaus/AM', { isLost: true, status: 'stage-perdido' }),
+    ];
+    const { result } = renderHook(() => useBoardsController());
+
+    act(() => {
+      result.current.setStatusFilter('lost');
+      result.current.setLocalFilter('Santana');
+    });
+    expect(idsFiltrados(result)).toEqual(['perdido']);
+  });
+
+  it('🎯 com 1.000 cards o aviso do teto aparece; com 999, não', () => {
+    h.deals = Array.from({ length: 999 }, (_, i) => comLocal(`d${i}`, undefined));
+    const { result, rerender } = renderHook(() => useBoardsController());
+    expect(result.current.quadroNoTeto).toBe(false);
+
+    h.deals = Array.from({ length: 1000 }, (_, i) => comLocal(`d${i}`, undefined));
+    rerender();
+    expect(result.current.quadroNoTeto).toBe(true);
   });
 });

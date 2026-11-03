@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Search, LayoutGrid, Table as TableIcon, User, Settings, Lightbulb, Download } from 'lucide-react';
+import { Plus, Search, LayoutGrid, Table as TableIcon, User, Settings, Lightbulb, Download, MapPin, Info } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
 import { Board } from '@/types';
@@ -19,6 +19,11 @@ interface KanbanHeaderProps {
     setViewMode: (mode: 'kanban' | 'list') => void;
     searchTerm: string;
     setSearchTerm: (term: string) => void;
+    /** Story 2.67 (AC5) — "Onde mora contém…" (só aparece com o setter). */
+    localFilter?: string;
+    setLocalFilter?: (term: string) => void;
+    /** Story 2.67 (AC5, C1) — o quadro carregou o teto de cards. */
+    quadroNoTeto?: boolean;
     ownerFilter: 'all' | 'mine';
     setOwnerFilter: (filter: 'all' | 'mine') => void;
     statusFilter: 'open' | 'won' | 'lost' | 'all';
@@ -68,12 +73,15 @@ export const KanbanHeader: React.FC<KanbanHeaderProps> = ({
     onExportTemplates,
     viewMode, setViewMode,
     searchTerm, setSearchTerm,
+    localFilter = '', setLocalFilter,
+    quadroNoTeto = false,
     ownerFilter, setOwnerFilter,
     statusFilter, setStatusFilter,
     onNewDeal
 }) => {
     return (
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+        <div className="mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div className="flex items-center gap-4 w-full sm:w-auto flex-wrap">
                 {/* Board Selector */}
                 <BoardSelector
@@ -174,6 +182,21 @@ export const KanbanHeader: React.FC<KanbanHeaderProps> = ({
                         className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-white/5 text-sm outline-none focus:ring-2 focus:ring-primary-500 dark:text-white backdrop-blur-sm"
                     />
                 </div>
+                {/* Story 2.67 (AC5) — "Onde mora contém…", sem diferenciar
+                    maiúscula e acento. Vale em qualquer status. */}
+                {setLocalFilter && (
+                    <div className="relative w-full sm:w-52">
+                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} aria-hidden="true" />
+                        <input
+                            type="text"
+                            aria-label="Filtrar por onde a pessoa mora"
+                            placeholder="Onde mora (ex.: Santana)"
+                            value={localFilter}
+                            onChange={(e) => setLocalFilter(e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white/50 dark:bg-white/5 text-sm outline-none focus:ring-2 focus:ring-primary-500 dark:text-white backdrop-blur-sm"
+                        />
+                    </div>
+                )}
                 <div className="relative">
                     <select
                         value={statusFilter}
@@ -217,6 +240,17 @@ export const KanbanHeader: React.FC<KanbanHeaderProps> = ({
                     <Plus size={18} aria-hidden="true" /> Novo Negócio
                 </Button>
             </div>
+        </div>
+        {/* Story 2.67 (AC5, C1) — o quadro carrega só os N cards mais novos. */}
+        {quadroNoTeto && (
+            <p
+                role="status"
+                className="mt-3 flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-500/30 rounded-lg px-3 py-2"
+            >
+                <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>O quadro mostra só os 1.000 cards mais recentes. Cards mais antigos podem não aparecer nos filtros.</span>
+            </p>
+        )}
         </div>
     );
 };

@@ -15,6 +15,8 @@ import {
 } from '@/lib/query/hooks/useDealsQuery';
 import { useMoveDeal } from '@/lib/query/hooks/useMoveDeal';
 import { localSugeridoDoCard, type LossReasonExtras } from '@/components/ui/localDaPerda';
+import { normalizarTexto } from '@/features/boards/filtros/normalizarTexto';
+import { LIMITE_DEALS_DO_QUADRO } from '@/lib/supabase/deals';
 import { useCreateActivity } from '@/lib/query/hooks/useActivitiesQuery';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { useRealtimeSyncKanban } from '@/lib/realtime/useRealtimeSync';
@@ -128,6 +130,8 @@ export const useBoardsController = () => {
 
   // Filter State (declared before AI context useEffect that uses them)
   const [searchTerm, setSearchTerm] = useState('');
+  // Story 2.67 (AC5) — "Onde mora contém…", sem diferenciar maiúscula e acento.
+  const [localFilter, setLocalFilter] = useState('');
   const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
   // O board abre mostrando TUDO, inclusive ganhos e perdidos (story 2.31).
   // Por que 'all' e nao 'open': com 'open', `matchesStatus = !isWon && !isLost` apaga da tela
@@ -325,6 +329,8 @@ export const useBoardsController = () => {
     stageId: string;
     /** Story 2.66 (D3) — `ondeReside` do card, só como dica no campo do local. */
     localSugerido?: string;
+    /** Story 2.67 — o `leadLocation` do card: valor inicial do campo do local. */
+    localAtual?: string;
   } | null>(null);
 
   /**
@@ -392,6 +398,8 @@ export const useBoardsController = () => {
 
     // Cache do searchTerm em lowercase (evita toLowerCase() 2x por deal)
     const searchLower = searchTerm.toLowerCase();
+    // Story 2.67 (AC5) — termo do local normalizado uma vez só.
+    const localNormalizado = normalizarTexto(localFilter);
 
     // Parse das datas do filtro uma única vez (antes era new Date() por deal)
     const startTime = dateRange.start ? new Date(dateRange.start).getTime() : null;
@@ -440,7 +448,11 @@ export const useBoardsController = () => {
         }
       }
 
-      return matchesSearch && matchesOwner && matchesDate && matchesStatus && matchesRecent;
+      // Story 2.67 (AC5) — card sem local NÃO passa com o filtro preenchido.
+      const matchesLocal =
+        !localNormalizado || normalizarTexto(l.leadLocation).includes(localNormalizado);
+
+      return matchesSearch && matchesOwner && matchesDate && matchesStatus && matchesRecent && matchesLocal;
     }).map(deal => {
       // Enrich owner info if it matches current user
       if (deal.ownerId === profile?.id || deal.ownerId === (profile as any)?.user_id) { // Fallback for some profile types
@@ -459,6 +471,7 @@ export const useBoardsController = () => {
   }, [
     deals,
     searchTerm,
+    localFilter,
     ownerFilter,
     dateRange.start,      // Apenas as propriedades usadas do dateRange
     dateRange.end,
@@ -524,6 +537,7 @@ export const useBoardsController = () => {
           dealTitle: deal.title,
           stageId,
           localSugerido: localSugeridoDoCard(deal),
+          localAtual: deal.leadLocation,
         });
       } else {
         // Use unified moveDeal for all other cases (WON or regular stages)
@@ -548,8 +562,9 @@ export const useBoardsController = () => {
           dealId: lossReasonModal.dealId,
           targetStageId: lossReasonModal.stageId,
           lossReason: reason,
-          // Story 2.66 — o local vai na MESMA escrita da perda.
-          ...(extras?.lossLocation && { lossLocation: extras.lossLocation }),
+          // Story 2.67 — local e observação vão na MESMA escrita da perda.
+          ...(extras?.leadLocation && { leadLocation: extras.leadLocation }),
+          ...(extras?.lossNote !== undefined && { lossNote: extras.lossNote }),
           deal,
           board: activeBoard,
           lifecycleStages,
@@ -592,6 +607,7 @@ export const useBoardsController = () => {
         dealTitle: deal.title,
         stageId: newStageId,
         localSugerido: localSugeridoDoCard(deal),
+        localAtual: deal.leadLocation,
       });
     } else {
       // Regular move or WON stage
@@ -894,6 +910,10 @@ export const useBoardsController = () => {
     setViewMode,
     searchTerm,
     setSearchTerm,
+    localFilter,
+    setLocalFilter,
+    // Story 2.67 (AC5, C1) — o quadro bateu no teto de cards carregados.
+    quadroNoTeto: deals.length >= LIMITE_DEALS_DO_QUADRO,
     ownerFilter,
     setOwnerFilter,
     statusFilter,
