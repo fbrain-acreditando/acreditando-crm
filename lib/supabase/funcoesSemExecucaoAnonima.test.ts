@@ -20,6 +20,10 @@
  * (CREATE/DROP/RENAME), independentemente da linha: a `20260223000000` faz o
  * REVOKE antes do `CREATE OR REPLACE` de funções que já existiam (o Postgres
  * mantém o ACL), e o T0 confirma essas funções fechadas em produção.
+ * QA Loop 1 (gate 33, C2): se a função tem DROP no MESMO arquivo, as permissões
+ * dela voltam a contar POR LINHA (REVOKE → DROP → CREATE = nasce aberta).
+ * Também lidos no QA Loop 1: `GRANT/REVOKE … ON ALL FUNCTIONS IN SCHEMA public`
+ * (C1) e `ALTER FUNCTION … SECURITY DEFINER|INVOKER` (C1b).
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,7 +37,17 @@ type Evento =
   | { tipo: 'create'; ia: number; pos: number; nome: string; sig: string; definer: boolean; gatilho: boolean }
   | { tipo: 'drop'; ia: number; pos: number; nome: string; sig: string | null }
   | { tipo: 'rename'; ia: number; pos: number; nome: string; sig: string | null; novo: string }
-  | { tipo: 'revoke' | 'grant'; ia: number; pos: number; nome: string; sig: string | null; papeis: string[] };
+  | { tipo: 'seguranca'; ia: number; pos: number; nome: string; sig: string | null; definer: boolean }
+  | {
+      tipo: 'revoke' | 'grant';
+      ia: number;
+      pos: number;
+      nome: string;
+      sig: string | null;
+      papeis: string[];
+      /** `… ON ALL FUNCTIONS IN SCHEMA public` (nome = '*'). */
+      todas?: boolean;
+    };
 
 type Funcao = { nome: string; sig: string; definer: boolean; gatilho: boolean; fechada: boolean; criadaEm: string };
 
@@ -205,12 +219,30 @@ function lerEventos(arquivos: Arquivo[]): Evento[] {
       }
     }
 
-    const reRenomeia = /\balter\s+function\s+([\w."]+)\s*(\(([^)]*)\))?\s*rename\s+to\s+([\w"]+)/gi;
-    while ((m = reRenomeia.exec(s))) {
+    // QA Loop 1, C1: `GRANT/REVOKE … ON ALL FUNCTIONS IN SCHEMA public` vale para
+    // todas as funções que existem até ali. (O `ALTER DEFAULT PRIVILEGES … ON
+    // FUNCTIONS` não casa aqui: ele só mexe em funções futuras.)
+    const reTodas = /\b(revoke|grant)\b([^;]*?)\bon\s+all\s+functions\s+in\s+schema\s+([^;]*?)\b(from|to)\b([^;]*);/gi;
+    while ((m = reTodas.exec(s))) {
+      const schemas = m[3].split(',').map(x => x.trim().replace(/"/g, '').toLowerCase());
+      if (!schemas.includes('public')) continue;
+      const papeis = m[5].split(',').map(p => p.trim().toLowerCase().replace(/"/g, '').split(/\s/)[0]);
+      eventos.push({ tipo: m[1].toLowerCase() as 'revoke' | 'grant', ia, pos: m.index, nome: '*', sig: null, papeis, todas: true });
+    }
+
+    // `ALTER FUNCTION … RENAME TO` e (QA Loop 1, C1b) `ALTER FUNCTION … SECURITY DEFINER|INVOKER`.
+    const reAltera = /\balter\s+function\s+([\w."]+)\s*(\(([^)]*)\))?([^;]*)/gi;
+    while ((m = reAltera.exec(s))) {
       const nome = nomeDaFuncao(m[1]);
-      const novo = nomeDaFuncao(m[4]);
-      if (!nome || !novo) continue;
-      eventos.push({ tipo: 'rename', ia, pos: m.index, nome, sig: m[2] ? assinatura(nome, m[3]) : null, novo });
+      if (!nome) continue;
+      const sig = m[2] ? assinatura(nome, m[3]) : null;
+      const resto = m[4];
+      const renomeia = /\brename\s+to\s+([\w"]+)/i.exec(resto);
+      const novo = renomeia ? nomeDaFuncao(renomeia[1]) : null;
+      if (novo) eventos.push({ tipo: 'rename', ia, pos: m.index, nome, sig, novo });
+      const seguranca = /\bsecurity\s+(definer|invoker)\b/i.exec(resto);
+      if (seguranca)
+        eventos.push({ tipo: 'seguranca', ia, pos: m.index, nome, sig, definer: seguranca[1].toLowerCase() === 'definer' });
     }
 
     const reApaga = /\bdrop\s+function\s+(?:if\s+exists\s+)?([\w."]+)\s*(\(([^)]*)\))?/gi;
@@ -221,15 +253,27 @@ function lerEventos(arquivos: Arquivo[]): Evento[] {
     }
   });
 
-  // Por arquivo: primeiro a estrutura, depois as permissões (ver cabeçalho).
-  const fase = (e: Evento) => (e.tipo === 'revoke' || e.tipo === 'grant' ? 1 : 0);
+  // Por arquivo: primeiro a estrutura, depois as permissões (ver cabeçalho),
+  // com duas exceções que ficam POR LINHA (fase 0, junto com a estrutura):
+  //   • C2 — permissão de uma função que tem DROP no mesmo arquivo: REVOKE → DROP
+  //     → CREATE deixa a função recriada aberta, e só a ordem por linha vê isso;
+  //   • REVOKE … ON ALL FUNCTIONS: só fecha o que já existe naquela linha
+  //     (o GRANT … ON ALL FUNCTIONS fica na fase 1: reabre tudo do arquivo).
+  const apagadasNoArquivo = new Set(
+    eventos.filter(e => e.tipo === 'drop').map(e => `${e.ia}:${e.nome}`),
+  );
+  const fase = (e: Evento) => {
+    if (e.tipo !== 'revoke' && e.tipo !== 'grant') return 0;
+    if (e.todas) return e.tipo === 'revoke' ? 0 : 1;
+    return apagadasNoArquivo.has(`${e.ia}:${e.nome}`) ? 0 : 1;
+  };
   return eventos.sort((a, b) => a.ia - b.ia || fase(a) - fase(b) || a.pos - b.pos);
 }
 
 function estadoFinal(arquivos: Arquivo[]): Map<string, Funcao> {
   const estado = new Map<string, Funcao>();
-  const alvos = (e: { nome: string; sig: string | null }) =>
-    [...estado.keys()].filter(k => (e.sig ? k === e.sig : k.startsWith(`${e.nome}(`)));
+  const alvos = (e: { nome: string; sig: string | null; todas?: boolean }) =>
+    [...estado.keys()].filter(k => (e.todas ? true : e.sig ? k === e.sig : k.startsWith(`${e.nome}(`)));
 
   for (const e of lerEventos(arquivos)) {
     if (e.tipo === 'create') {
@@ -250,6 +294,8 @@ function estadoFinal(arquivos: Arquivo[]): Map<string, Funcao> {
         estado.delete(k);
         estado.set(nova, { ...f, nome: e.novo, sig: nova });
       });
+    } else if (e.tipo === 'seguranca') {
+      alvos(e).forEach(k => (estado.get(k)!.definer = e.definer));
     } else if (e.tipo === 'revoke' && e.papeis.includes('anon')) {
       alvos(e).forEach(k => (estado.get(k)!.fechada = true));
     } else if (e.tipo === 'grant' && (e.papeis.includes('anon') || e.papeis.includes('public'))) {
@@ -436,6 +482,102 @@ CREATE FUNCTION public.soma(a int) RETURNS int LANGUAGE sql AS $$ select a + 1 $
   it('(controle) GRANT … TO anon depois do REVOKE reabre ⇒ reprova', () => {
     const reabre = { nome: '20991231000000_reabre.sql', sql: 'GRANT EXECUTE ON FUNCTION public.mark_deal_won(uuid) TO anon;' };
     expect(funcoesAbertas([...MIGRATIONS, reabre]).map(f => f.sig)).toEqual(['mark_deal_won(uuid)']);
+  });
+});
+
+describe('QA Loop 1 (gate 33) — os pontos cegos C1, C1b e C2', () => {
+  const FECHADAS_HOJE = [...estadoFinal(MIGRATIONS).values()]
+    .filter(f => f.definer && !f.gatilho && !(f.nome in EXCECOES))
+    .map(f => f.sig)
+    .sort();
+
+  it.each(['anon', 'PUBLIC'])(
+    '(C1) GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO %s numa migration posterior reabre TODAS ⇒ reprova',
+    papel => {
+      const reabreTudo = {
+        nome: '20991231000000_reabre_tudo.sql',
+        sql: `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${papel};`,
+      };
+      const abertas = funcoesAbertas([...MIGRATIONS, reabreTudo]).map(f => f.sig).sort();
+      expect(abertas).toEqual(FECHADAS_HOJE);
+      expect(abertas).toContain('cleanup_rate_limits(integer)');
+      expect(abertas).toContain('get_user_org_id()');
+      expect(abertas.length).toBeGreaterThanOrEqual(22);
+    },
+  );
+
+  it('(C1, controle) GRANT ON ALL FUNCTIONS só a authenticated, ou em outro schema, não reabre', () => {
+    const inofensivas = {
+      nome: '20991231000000_inofensivas.sql',
+      sql: `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA outro TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;`,
+    };
+    expect(funcoesAbertas([...MIGRATIONS, inofensivas])).toEqual([]);
+  });
+
+  it('(C1, controle) REVOKE … ON ALL FUNCTIONS FROM anon fecha o que já existe, não o que é criado depois no mesmo arquivo', () => {
+    const arquivo = {
+      nome: '20991231000000_revoga_tudo.sql',
+      sql: `CREATE FUNCTION public.antes() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ select 1 $$;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon;
+CREATE FUNCTION public.depois() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ select 2 $$;`,
+    };
+    expect(funcoesAbertas([...MIGRATIONS, arquivo]).map(f => f.sig)).toEqual(['depois()']);
+  });
+
+  it('(C1b) ALTER FUNCTION … SECURITY DEFINER numa INVOKER sem REVOKE ⇒ reprova', () => {
+    const cria = {
+      nome: '20991230000000_invoker.sql',
+      sql: 'CREATE FUNCTION public.vira_dono(p uuid) RETURNS void LANGUAGE sql AS $$ select 1 $$;',
+    };
+    expect(funcoesAbertas([...MIGRATIONS, cria])).toEqual([]); // INVOKER: fora do critério
+    const altera = {
+      nome: '20991231000000_vira_definer.sql',
+      sql: 'ALTER FUNCTION public.vira_dono(uuid) SECURITY DEFINER;',
+    };
+    expect(funcoesAbertas([...MIGRATIONS, cria, altera]).map(f => f.sig)).toEqual(['vira_dono(uuid)']);
+  });
+
+  it('(C1b, controle) ALTER FUNCTION … SECURITY INVOKER tira a função do critério', () => {
+    const cria = {
+      nome: '20991230000000_definer.sql',
+      sql: 'CREATE FUNCTION public.deixa_de_ser(p uuid) RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ select 1 $$;',
+    };
+    const altera = { nome: '20991231000000_invoker.sql', sql: 'alter function deixa_de_ser(uuid) security invoker;' };
+    expect(funcoesAbertas([...MIGRATIONS, cria]).map(f => f.sig)).toEqual(['deixa_de_ser(uuid)']);
+    expect(funcoesAbertas([...MIGRATIONS, cria, altera])).toEqual([]);
+  });
+
+  it('(C2) no MESMO arquivo, REVOKE → DROP → CREATE: a função recriada nasce aberta ⇒ reprova', () => {
+    const arquivo = {
+      nome: '20991231000000_revoga_apaga_cria.sql',
+      sql: `REVOKE ALL ON FUNCTION public.cleanup_rate_limits(integer) FROM PUBLIC, anon, authenticated;
+DROP FUNCTION public.cleanup_rate_limits(integer);
+CREATE FUNCTION public.cleanup_rate_limits(older_than_minutes integer DEFAULT 5)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN DELETE FROM public.rate_limits; RETURN 0; END; $$;`,
+    };
+    expect(funcoesAbertas([...MIGRATIONS, arquivo]).map(f => f.sig)).toEqual(['cleanup_rate_limits(integer)']);
+  });
+
+  it('(C2, controle) DROP → CREATE → REVOKE no mesmo arquivo continua fechada', () => {
+    const arquivo = {
+      nome: '20991231000000_apaga_cria_revoga.sql',
+      sql: `DROP FUNCTION IF EXISTS public.cleanup_rate_limits(integer);
+CREATE FUNCTION public.cleanup_rate_limits(older_than_minutes integer DEFAULT 5)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN 0; END; $$;
+REVOKE ALL ON FUNCTION public.cleanup_rate_limits(integer) FROM PUBLIC, anon, authenticated;`,
+    };
+    expect(funcoesAbertas([...MIGRATIONS, arquivo])).toEqual([]);
+  });
+
+  it('(C2, controle) sem DROP no arquivo, a regra de fase continua: as 3 da 20260223000000 seguem fechadas', () => {
+    const estado = estadoFinal(MIGRATIONS);
+    for (const sig of ['get_dashboard_stats()', 'get_contact_stage_counts()', 'get_singleton_organization_id()']) {
+      expect(estado.get(sig)?.definer).toBe(true);
+      expect(estado.get(sig)?.fechada).toBe(true);
+    }
   });
 });
 
