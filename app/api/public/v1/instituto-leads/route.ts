@@ -11,6 +11,7 @@ import {
 import {
   chavesAutorizadas,
   FORMATO_DA_CHAVE,
+  impressaoDoPedido,
   INSTITUTO_ENDPOINT,
   logPedidoErro,
   processarPedidoDaLoja,
@@ -18,6 +19,29 @@ import {
 } from '@/lib/instituto/processarPedido';
 
 export const runtime = 'nodejs';
+
+/** QA M2: espera de até ~2,5 s pelo 1º clique (o n8n espera 4 s — 2.65 AC4). */
+const ESPERA_PELO_PRIMEIRO_MS = 250;
+const TENTATIVAS_DE_ESPERA = 10;
+
+function emAndamento(o: Awaited<ReturnType<typeof beginIdempotency>>): boolean {
+  return o.kind === 'replay' && (o.body as { code?: unknown } | null)?.code === 'IDEMPOTENCY_IN_PROGRESS';
+}
+
+/**
+ * Clique duplo (QA M2): o 2º pedido igual que chega enquanto o 1º ainda grava
+ * ESPERA o 1º terminar e devolve a mesma resposta (replay, sucesso) — em vez do
+ * 409 `IDEMPOTENCY_IN_PROGRESS`. Se o 1º falhar (5xx libera a chave), o 2º
+ * processa. Só devolve o "em andamento" se o 1º passar de ~2,5 s.
+ */
+async function reservarEsperandoOClique(ref: IdempotencyRef) {
+  let outcome = await beginIdempotency(ref);
+  for (let i = 0; i < TENTATIVAS_DE_ESPERA && emAndamento(outcome); i++) {
+    await new Promise((ok) => setTimeout(ok, ESPERA_PELO_PRIMEIRO_MS));
+    outcome = await beginIdempotency(ref);
+  }
+  return outcome;
+}
 
 /**
  * POST /api/public/v1/instituto-leads — story 2.64.
@@ -90,11 +114,13 @@ export async function POST(request: Request) {
         organizationId: auth.organizationId,
         endpoint: INSTITUTO_ENDPOINT,
         idempotencyKey,
-        requestHash: hashRequestBody(raw),
+        // QA M2: o hash é do PEDIDO (telefone + produto), não do corpo inteiro —
+        // `aceito_em` muda a cada clique e viraria 409 CONFLICT num reenvio.
+        requestHash: hashRequestBody(impressaoDoPedido(validado.pedido, validado.telefone)),
       };
 
   if (ref) {
-    const outcome = await beginIdempotency(ref);
+    const outcome = await reservarEsperandoOClique(ref);
     if (outcome.kind === 'replay') {
       const body = (outcome.body ?? {}) as Record<string, unknown>;
       return NextResponse.json({ ...body, idempotent_replay: true }, { status: outcome.status });

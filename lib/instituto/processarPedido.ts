@@ -92,10 +92,39 @@ export const RPC_CONTATO_POR_VARIANTES = 'find_or_create_contact_por_variantes';
 
 const LIMITE_DA_PAGINA = 300;
 
+/**
+ * QA M1 (05/11): a MESMA regra de e-mail da página (`site/api/lead.js`, `validar`,
+ * e `site/app.js`). Um e-mail que a página aceita nunca pode virar 422 aqui —
+ * senão o pedido não vira card e só sobra um alerta no Telegram.
+ */
+export const REGRA_DO_EMAIL_DA_PAGINA = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
+
+/**
+ * Normaliza como a página (`limpar(…, 160).toLowerCase()`) e tira o ponto do fim
+ * (`nome@gmail.com.`, comum no teclado do celular) quando o resto continua válido.
+ * Devolve `null` se a página também recusaria.
+ */
+export function normalizarEmail(bruto: string): string | null {
+  const e = String(bruto ?? '').trim().replace(/\s+/g, ' ').slice(0, 160).toLowerCase();
+  if (!REGRA_DO_EMAIL_DA_PAGINA.test(e)) return null;
+  const semPontoNoFim = e.replace(/\.+$/, '');
+  return REGRA_DO_EMAIL_DA_PAGINA.test(semPontoNoFim) ? semPontoNoFim : e;
+}
+
 export const PedidoSchema = z
   .object({
     nome: z.string().trim().min(1).max(120),
-    email: z.string().trim().toLowerCase().pipe(z.email()),
+    email: z
+      .string()
+      .max(400)
+      .transform((v, ctx) => {
+        const e = normalizarEmail(v);
+        if (!e) {
+          ctx.addIssue({ code: 'custom', message: 'email fora da regra da página' });
+          return z.NEVER;
+        }
+        return e;
+      }),
     whatsapp: z.string().trim().min(8).max(30),
     perfil: z.enum(VALORES_DOS_PERFIS),
     produto: z.enum(SLUGS_DOS_PRODUTOS),
@@ -129,6 +158,17 @@ export type CodigoDeValidacao =
   | 'NOME_INVALIDO'
   | 'PAGINA_INVALIDA'
   | 'VALIDATION_ERROR';
+
+/**
+ * QA M2 (05/11): o que define "o mesmo pedido" para a idempotência — telefone
+ * (E.164) + produto. A `Idempotency-Key` (2.65 AC4) já leva o dia; a data/hora do
+ * aviso, a página, o perfil e o e-mail NÃO entram: reenvio e clique duplo do
+ * mesmo pedido no mesmo dia devolvem o card já criado, com sucesso (nunca 409
+ * `IDEMPOTENCY_CONFLICT` nem alerta falso).
+ */
+export function impressaoDoPedido(pedido: PedidoDaLoja, telefone: string): { telefone: string; produto: string } {
+  return { telefone, produto: pedido.produto };
+}
 
 export type ResultadoDaValidacao =
   | { ok: true; pedido: PedidoDaLoja; telefone: string }
