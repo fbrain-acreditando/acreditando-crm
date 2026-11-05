@@ -42,7 +42,7 @@ vi.mock('@/lib/public-api/auth', () => ({
 }));
 
 import { POST } from '@/app/api/public/v1/instituto-leads/route';
-import { idDaNota, TITULO_DA_NOTA, decidirCard } from '@/lib/instituto/processarPedido';
+import { idDaNota, TITULO_DA_NOTA, decidirCard, impressaoDoPedido, normalizarEmail } from '@/lib/instituto/processarPedido';
 import {
   ETAPA_PRODUTO_VENDIDO,
   ETAPA_PRODUTOS_DE_TREINAMENTO,
@@ -295,6 +295,8 @@ describe('2.64 AC3 — contrato do pedido', () => {
     ['telefone que não é BR', pedido({ whatsapp: '+14155550123' }), 'TELEFONE_INVALIDO'],
     ['telefone curto', pedido({ whatsapp: '12345' }), 'TELEFONE_INVALIDO'],
     ['sem e-mail', (() => { const { email: _e, ...r } = pedido(); return r; })(), 'EMAIL_INVALIDO'],
+    ['e-mail sem ponto no domínio (a página também recusa)', pedido({ email: 'nome@gmail' }), 'EMAIL_INVALIDO'],
+    ['e-mail com espaço (a página também recusa)', pedido({ email: 'nome sobrenome@gmail.com' }), 'EMAIL_INVALIDO'],
     ['nome com mais de 120 caracteres', pedido({ nome: 'J'.repeat(121) }), 'NOME_INVALIDO'],
   ])('%s ⇒ 422 com o código certo e nada gravado', async (_n, corpo, code) => {
     const r = await enviar(corpo);
@@ -304,6 +306,30 @@ describe('2.64 AC3 — contrato do pedido', () => {
     // O erro diz o caminho, nunca o valor recebido.
     expect(JSON.stringify(r.body)).not.toContain('joana.teste');
     expect(JSON.stringify(r.body)).not.toContain('998887777');
+  });
+
+  // QA M1 (05/11): os 5 e-mails que a página aceita e a rota recusava. A regra é a mesma da página
+  // (`site/api/lead.js`, `validar`), comparada aqui contra a cópia literal dela.
+  const REGRA_DA_PAGINA = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
+  it.each([
+    ['maria-josé@uol.com.br', 'maria-josé@uol.com.br'],
+    ['nome@gmail.com.', 'nome@gmail.com'], // ponto no fim (teclado do celular) — normalizado
+    ['a..b@gmail.com', 'a..b@gmail.com'],
+    ['.nome@gmail.com', '.nome@gmail.com'],
+    ['nome@domínio.com.br', 'nome@domínio.com.br'],
+    ['  Nome@Gmail.COM ', 'nome@gmail.com'],
+  ])('e-mail que a página aceita (%s) ⇒ 201 e grava %s no contato novo', async (email, gravado) => {
+    expect(REGRA_DA_PAGINA.test(email.trim().toLowerCase())).toBe(true);
+    const r = await enviar(pedido({ email }), { chave: chaveDe(email) });
+    expect(r.status).toBe(201);
+    expect(db.tabelas.contacts.find((c) => c.id === r.body.contact_id)!.email).toBe(gravado);
+  });
+
+  it('normalizarEmail recusa o que a página recusa', () => {
+    for (const e of ['nome@gmail', 'semarroba.com', 'nome sobrenome@gmail.com', '@gmail.com', 'nome@.c']) {
+      expect(REGRA_DA_PAGINA.test(e)).toBe(false);
+      expect(normalizarEmail(e)).toBeNull();
+    }
   });
 
   it('versões aceitas = v3 (a da página hoje) e v4 (proposta pelo parecer 39); v4 grava a versão no card', async () => {
@@ -433,6 +459,19 @@ describe('2.64 AC5 — card: reaproveitar, 2º card, card novo', () => {
     expect(relido.custom_fields.produtoDeTreinamento).toBe('Bolsa impermeável'); // preenchido: fica
     expect(copia(db.tabelas.deals.find((x) => x.id === reab.id))).toEqual(reabAntes);
     expect(notas()[0].description).toMatch(/^Pediu também: Luvas inclusivas \(R\$ 185,90\)/);
+  });
+
+  it('QA B2: DOIS cards em "Produtos de treinamento" ⇒ reaproveita o MAIS ANTIGO (mesmo vindo depois na lista); o mais novo fica igual', async () => {
+    const c = contato();
+    const novo = card(c.id, { stage_id: ETAPA_PRODUTOS_DE_TREINAMENTO, custom_fields: { produtoDeTreinamento: 'ATS Pró' }, created_at: '2026-10-20T00:00:00Z' });
+    const antigo = card(c.id, { stage_id: ETAPA_PRODUTOS_DE_TREINAMENTO, custom_fields: { produtoDeTreinamento: 'Bolsa impermeável' }, created_at: '2026-10-02T00:00:00Z' });
+    const novoAntes = copia(novo);
+    const r = await enviar(pedido());
+    expect(r.body.acao).toBe('reaproveitou_card');
+    expect(r.body.deal_id).toBe(antigo.id);
+    expect(notas()[0].deal_id).toBe(antigo.id);
+    expect(copia(db.tabelas.deals.find((x) => x.id === novo.id))).toEqual(novoAntes);
+    expect(cardsDoContato(c.id)).toHaveLength(2);
   });
 
   it('card de produto com produto VAZIO ⇒ reaproveita e preenche só produtoDeTreinamento', async () => {
@@ -605,22 +644,52 @@ describe('2.64 AC7 — nota "Pedido da loja do Instituto"', () => {
 // --------------------------------------------------------------------------
 
 describe('2.64 AC8 — idempotência', () => {
-  it('mesmo pedido 3× (2 em paralelo) ⇒ 1 card, 1 nota; o paralelo recebe IDEMPOTENCY_IN_PROGRESS; o reenvio recebe o MESMO deal_id', async () => {
+  it('mesmo pedido 3× (2 em paralelo = clique duplo) ⇒ 1 card, 1 nota; os 3 com SUCESSO e o MESMO deal_id (QA M2: o 2º espera o 1º)', async () => {
     const [a, b] = await Promise.all([enviar(pedido()), enviar(pedido())]);
     const c = await enviar(pedido());
     expect(db.tabelas.deals).toHaveLength(1);
     expect(notas()).toHaveLength(1);
-    const criado = [a, b].find((r) => r.status === 201)!;
-    const emCurso = [a, b].find((r) => r.status !== 201)!;
-    expect(emCurso.status).toBe(409);
-    expect(emCurso.body.code).toBe('IDEMPOTENCY_IN_PROGRESS');
-    expect(c.status).toBe(201);
+    for (const r of [a, b, c]) {
+      expect(r.status).toBe(201);
+      expect(r.body.code).toBeUndefined();
+      expect(r.body.deal_id).toBe(db.tabelas.deals[0].id);
+      expect(r.body.acao).toBe('criou_contato_e_card');
+    }
+    expect([a, b].filter((r) => r.body.idempotent_replay === true)).toHaveLength(1);
     expect(c.body.idempotent_replay).toBe(true);
-    expect(c.body.deal_id).toBe(criado.body.deal_id);
-    expect(c.body.acao).toBe(criado.body.acao);
   });
 
-  it('mesma chave com corpo diferente ⇒ 409 IDEMPOTENCY_CONFLICT', async () => {
+  it('QA M2: reenvio do MESMO pedido com outra hora do aviso, outra página, outro perfil e e-mail ⇒ sucesso com o card já criado (nunca 409)', async () => {
+    const r1 = await enviar(pedido());
+    const r2 = await enviar(
+      pedido({
+        consentimento: { aceito: true, texto_versao: '2026-10-v3', aceito_em: '2026-11-05T14:07:31-03:00' },
+        pagina: 'https://instituto.acreditando.com.br/?utm_source=x#loja',
+        perfil: 'para_mim',
+        email: 'Joana.Teste@Exemplo.com',
+      })
+    );
+    expect(r2.status).toBe(201);
+    expect(r2.body.code).toBeUndefined();
+    expect(r2.body.idempotent_replay).toBe(true);
+    expect(r2.body.deal_id).toBe(r1.body.deal_id);
+    expect(db.tabelas.deals).toHaveLength(1);
+    expect(notas()).toHaveLength(1);
+  });
+
+  it('a impressão do pedido é só telefone + produto (sem a data/hora do aviso)', () => {
+    expect(impressaoDoPedido(pedido() as any, '+5541998887777')).toEqual({ telefone: '+5541998887777', produto: 'luvas-inclusivas' });
+  });
+
+  it('o 1º pedido falha (500, chave liberada) enquanto o 2º espera ⇒ o 2º processa e cria o card', async () => {
+    db.falharProxima('contacts', 'select', { code: 'XX000', message: 'falha' });
+    const [a, b] = await Promise.all([enviar(pedido()), enviar(pedido())]);
+    expect([a.status, b.status].sort()).toEqual([201, 500]);
+    expect(db.tabelas.deals).toHaveLength(1);
+    expect(notas()).toHaveLength(1);
+  });
+
+  it('mesma chave com OUTRO produto (chave montada errado) ⇒ 409 IDEMPOTENCY_CONFLICT', async () => {
     await enviar(pedido());
     const r = await enviar(pedido({ produto: 'ats-pro' }));
     expect(r.status).toBe(409);
@@ -660,6 +729,29 @@ describe('2.64 AC9 — read-back antes do "ok"', () => {
     expect(r.status).toBe(500);
     expect(r.body.code).toBe('READBACK_DIVERGENTE');
     expect(db.tabelas.public_api_idempotency).toHaveLength(0);
+  });
+
+  it('QA B2: card REAPROVEITADO relido sem o produto (alguém limpou entre gravar e reler) ⇒ 500 READBACK_DIVERGENTE e chave liberada', async () => {
+    const c = contato();
+    const d = card(c.id, { stage_id: ETAPA_PRODUTOS_DE_TREINAMENTO, custom_fields: { produtoDeTreinamento: 'Bolsa impermeável' } });
+    db.antesDaProxima('activities', 'upsert', () => {
+      db.tabelas.deals.find((x) => x.id === d.id)!.custom_fields = { produtoDeTreinamento: '' };
+    });
+    const r = await enviar(pedido());
+    expect(r.status).toBe(500);
+    expect(r.body.code).toBe('READBACK_DIVERGENTE');
+    expect(db.tabelas.public_api_idempotency).toHaveLength(0);
+  });
+
+  it('QA B2: card REAPROVEITADO excluído entre gravar e reler ⇒ 500 READBACK_DIVERGENTE', async () => {
+    const c = contato();
+    const d = card(c.id, { stage_id: ETAPA_PRODUTOS_DE_TREINAMENTO, custom_fields: { produtoDeTreinamento: 'Bolsa impermeável' } });
+    db.antesDaProxima('activities', 'upsert', () => {
+      db.tabelas.deals.find((x) => x.id === d.id)!.deleted_at = '2026-11-05T17:10:00Z';
+    });
+    const r = await enviar(pedido());
+    expect(r.status).toBe(500);
+    expect(r.body.code).toBe('READBACK_DIVERGENTE');
   });
 
   it('a nota não aparece na releitura ⇒ 500 READBACK_DIVERGENTE', async () => {
@@ -735,7 +827,10 @@ describe('2.64 AC11 — ?ensaio=1 decide sem gravar', () => {
 describe('2.64 AC12 — get_metricas_de_atendimento sem cards de produto', () => {
   const sql = fs.readFileSync(path.resolve(__dirname, '../../supabase/migrations/20261105120000_produtos_de_treinamento.sql'), 'utf8');
   const corpo = sql.slice(sql.indexOf('as $func$'), sql.lastIndexOf('$func$'));
-  const filtroProduto = /and not \(\s*coalesce\(d\.custom_fields \? 'produtoDeTreinamento', false\)\s*or coalesce\(d\.stage_id = any\(v_etapas_da_loja\), false\)\s*\)/g;
+  // QA B1: "produto" = valor NÃO VAZIO (não a mera existência da chave) OU etapa da loja.
+  const FILTRO = String.raw`and not \(\s*nullif\(btrim\(d\.custom_fields->>'produtoDeTreinamento'\), ''\) is not null\s*or coalesce\(d\.stage_id = any\(v_etapas_da_loja\), false\)\s*\)`;
+  const filtroProduto = new RegExp(FILTRO);
+  const filtroProdutoTodos = new RegExp(FILTRO, 'g');
 
   it('mesma assinatura e SECURITY DEFINER; as 2 etapas por uuid', () => {
     expect(sql).toMatch(/create or replace function public\.get_metricas_de_atendimento\(\s*p_org_id uuid,\s*p_start_date timestamptz,\s*p_end_date timestamptz default now\(\)\s*\)/);
@@ -745,7 +840,7 @@ describe('2.64 AC12 — get_metricas_de_atendimento sem cards de produto', () =>
   });
 
   it('Total de Leads e Ganhos/Perdidos ignoram card de produto (campo OU etapa)', () => {
-    expect(corpo.match(filtroProduto) ?? []).toHaveLength(2);
+    expect(corpo.match(filtroProdutoTodos) ?? []).toHaveLength(2);
     const total = corpo.slice(corpo.indexOf('into v_total_leads'), corpo.indexOf('into v_msgs_ia'));
     expect(total).toMatch(filtroProduto);
     const fech = corpo.slice(corpo.indexOf('into v_ganhos, v_perdidos'), corpo.indexOf('v_cobertura_desde from'));
@@ -755,7 +850,12 @@ describe('2.64 AC12 — get_metricas_de_atendimento sem cards de produto', () =>
   it('funil sem as barras da loja e sem card de produto nas outras barras', () => {
     const funil = corpo.slice(corpo.indexOf('into v_funil'), corpo.indexOf('into v_ganhos'));
     expect(funil).toMatch(/where bs\.id <> all\(v_etapas_da_loja\)/);
-    expect(funil).toMatch(/and not coalesce\(d\.custom_fields \? 'produtoDeTreinamento', false\)/);
+    expect(funil).toMatch(/and not \(nullif\(btrim\(d\.custom_fields->>'produtoDeTreinamento'\), ''\) is not null\)/);
+  });
+
+  it('QA B1: "Produto de treinamento" VAZIO não tira o card dos números — nenhuma conta usa só a existência da chave', () => {
+    expect(corpo).not.toContain("custom_fields ? 'produtoDeTreinamento'");
+    expect(corpo.match(/nullif\(btrim\(d\.custom_fields->>'produtoDeTreinamento'\), ''\) is not null/g) ?? []).toHaveLength(3);
   });
 
   it('o resto do corpo é o da 2.46 (só as linhas marcadas "2.64" mudaram)', () => {
