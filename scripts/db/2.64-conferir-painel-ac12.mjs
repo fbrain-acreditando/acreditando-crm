@@ -14,7 +14,8 @@
 // Linhas simuladas: r1 reabilitação aberta · r2 reabilitação perdida · w1 reabilitação ganha ·
 // p1 produto em "Produtos de treinamento" · p2 produto em "Produto vendido" · p3 produto em
 // "Perdido" · p4 produto em "Ganho" · m1 card SEM o campo, criado à mão na etapa da loja ·
-// n1 card sem etapa. Esperado com a 2.64: total 4 (r1, r2, w1, n1), ganhos 1, perdidos 1,
+// n1 card sem etapa · e1 reabilitação com "Produto de treinamento" VAZIO (QA B1 — conta como
+// reabilitação). Esperado com a 2.64: total 5 (r1, r2, w1, n1, e1), ganhos 1, perdidos 1,
 // funil sem as 2 barras da loja e com "Ganho" = 1 e "Perdido" = 1.
 import fs from 'node:fs';
 const sql = fs.readFileSync(process.argv[2], 'utf8').replace(/\r/g, '');
@@ -47,6 +48,7 @@ const linhas = [
   ['p4-prod-ganho', GANHO, cf({ produtoDeTreinamento: 'Faixa de joelho' }), 'true', 'false', T],
   ['m1-manual-na-etapa', PROD, null, 'false', 'false', 'null::timestamptz'],
   ['n1-sem-etapa', 'null::uuid', null, 'false', 'false', 'null::timestamptz'],
+  ['e1-reab-campo-vazio', QUAL, cf({ produtoDeTreinamento: '  ' }), 'false', 'false', 'null::timestamptz'],
 ].map(([n, s, c, w, l, fe]) => `('${n}', ${ORG}, ${s}, ${c}, null::timestamptz, ${T}, ${fe}, ${w}, ${l})`).join(',\n');
 const q = `with board_stages(id, board_id, name, "order") as (values ${st}),
 boards(id, organization_id) as (values (${B}, ${ORG})),

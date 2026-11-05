@@ -3,6 +3,16 @@
 -- ⛔ ESCRITA, NÃO APLICADA. Aplicar só depois do gate do @qa e com OK do
 --    Filipe (T2/T6), com token de gestão válido, e fazer o read-back do AC1/AC12.
 --
+-- 🔴 ORDEM OBRIGATÓRIA (QA A1, 05/11): ESTA MIGRATION SÓ RODA DEPOIS DO DEPLOY DA
+--    `main` COM O AC18 (T10), CONFERIDO NA VERCEL. Sem o AC18 no ar, a IA de
+--    preenchimento (que roda em toda transferência do WhatsApp) passa a ver os 4
+--    campos novos e pode gravar `produtoDeTreinamento`/`consentimentoEm` num card
+--    de reabilitação — e a Visão Geral nova tiraria esse card dos números.
+--    O banco não tem como conferir o deploy da Vercel: a trava é o checklist da
+--    T2 (item 0 do read-back: commit do AC18 publicado em produção).
+--    Depois de aplicar: a constante `ESTAGIOS_CONHECIDOS_ACREDITANDO` do teste 8c
+--    (`deal-guard.ts`) passa para 16 colunas (QA B3).
+--
 -- ============================================================================
 -- O QUE ESTA MIGRATION FAZ
 -- ============================================================================
@@ -42,8 +52,10 @@
 -- marcadas com "2.64". ⚠️ Na aplicação (T6), reler o md5: se mudou, partir do
 -- corpo novo e refazer.
 --
--- "Card de produto" (AC12) = `custom_fields ? 'produtoDeTreinamento'` OU
--- `stage_id` numa das 2 etapas novas. Os dois, porque: só a etapa deixaria
+-- "Card de produto" (AC12) = `produtoDeTreinamento` com valor NÃO VAZIO OU
+-- `stage_id` numa das 2 etapas novas. (QA B1: só a existência da chave não serve —
+-- o modal do card grava a chave vazia quando alguém escolhe e limpa o campo, e o
+-- card de reabilitação sumiria dos números.) Os dois, porque: só a etapa deixaria
 -- escapar o card de produto arrastado para "Perdido"/"Ganho"; só o campo
 -- deixaria escapar card criado à mão na etapa. (A IA de preenchimento não grava
 -- `produtoDeTreinamento` — AC18 —, então card de reabilitação não some.)
@@ -233,7 +245,7 @@ begin
     and d.created_at >= p_start_date
     and d.created_at <  p_end_date
     and not (
-      coalesce(d.custom_fields ? 'produtoDeTreinamento', false)
+      nullif(btrim(d.custom_fields->>'produtoDeTreinamento'), '') is not null
       or coalesce(d.stage_id = any(v_etapas_da_loja), false)
     );
 
@@ -276,7 +288,7 @@ begin
      and d.organization_id = p_org_id
      and d.created_at >= p_start_date
      and d.created_at <  p_end_date
-     and not coalesce(d.custom_fields ? 'produtoDeTreinamento', false)
+     and not (nullif(btrim(d.custom_fields->>'produtoDeTreinamento'), '') is not null)
     where bs.id <> all(v_etapas_da_loja)
     group by bs.id, bs.name, bs."order"
   ) s;
@@ -293,7 +305,7 @@ begin
     and d.closed_at >= p_start_date
     and d.closed_at <  p_end_date
     and not (
-      coalesce(d.custom_fields ? 'produtoDeTreinamento', false)
+      nullif(btrim(d.custom_fields->>'produtoDeTreinamento'), '') is not null
       or coalesce(d.stage_id = any(v_etapas_da_loja), false)
     );
 

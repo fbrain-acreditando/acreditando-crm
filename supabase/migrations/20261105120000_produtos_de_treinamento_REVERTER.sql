@@ -19,6 +19,11 @@
 --      Se houver card, MOVER PRIMEIRO (decidindo com a Fernanda para onde).
 --
 -- As 2 etapas da loja são as últimas do quadro: apagá-las não deixa buraco na ordem.
+--
+-- ⚠️ QA B4 (05/11): apagar as 2 etapas também APAGA as linhas delas em
+-- `stage_ai_config` e `ai_pending_stage_advances` (FK com CASCADE) e ZERA o
+-- `stage_id` delas em `webhook_events_out`, `ai_conversation_log` e
+-- `lead_routing_rules` (SET NULL). Em 05/11 não havia nenhuma; conferir antes.
 
 begin;
 
