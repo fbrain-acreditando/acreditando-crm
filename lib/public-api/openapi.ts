@@ -743,7 +743,7 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
         post: {
           tags: ['Deals'],
           summary: 'Receber um pedido da loja do Instituto Acreditando (story 2.64)',
-          description: 'Só para o n8n (story 2.65), com chave autorizada por id em INSTITUTO_LEADS_API_KEY_IDS (lista vazia = rota desligada, 503; outra chave da organização = 403 CHAVE_NAO_AUTORIZADA). Acha o contato pelo telefone (com e sem o 9º dígito; e-mail depois) ou cria pela RPC find_or_create_contact_por_variantes. Card em "Produtos de treinamento" (dona: Fernanda; valor = preço do produto): reaproveita o card de produto do contato; com card aberto de reabilitação, cria um 2º card; só com cards fechados (Ganho, Perdido, Clientes, Produto vendido), cria card novo. Uma nota "Pedido da loja do Instituto" por Idempotency-Key. Sucesso só depois de reler o card e a nota. `?ensaio=1` responde a ação prevista sem gravar.',
+          description: 'Só para a integração da loja, com chave de API autorizada para esta rota (sem chave autorizada configurada = rota desligada, 503; outra chave da organização = 403 CHAVE_NAO_AUTORIZADA). Acha o contato pelo telefone (com e sem o 9º dígito; e-mail depois) ou cria pela RPC find_or_create_contact_por_variantes. Card em "Produtos de treinamento" (responsável: a equipe comercial; valor = preço do produto): reaproveita o card de produto do contato; com card aberto de reabilitação, cria um 2º card; só com cards fechados (Ganho, Perdido, Clientes, Produto vendido), cria card novo. Uma nota "Pedido da loja do Instituto" por Idempotency-Key. Sucesso só depois de reler o card e a nota. `?ensaio=1` responde a ação prevista sem gravar.',
           security: [{ ApiKeyAuth: [] }],
           parameters: [
             { name: 'Idempotency-Key', in: 'header', required: true, schema: { type: 'string', pattern: '^instituto:[0-9a-f]{64}$' }, description: 'instituto: + 64 hexadecimais (receita da story 2.65, AC4).' },
@@ -783,11 +783,11 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
             200: { description: 'Card de produto reaproveitado — { acao: reaproveitou_card, deal_id, contact_id }' },
             201: { description: 'Card criado — { acao: criou_contato_e_card | segundo_card | criou_card, deal_id, contact_id }' },
             401: { $ref: '#/components/responses/Unauthorized' },
-            403: { description: 'Chave válida, mas fora de INSTITUTO_LEADS_API_KEY_IDS (CHAVE_NAO_AUTORIZADA)' },
+            403: { description: 'Chave válida, mas não autorizada nesta rota (CHAVE_NAO_AUTORIZADA)' },
             409: { description: 'Idempotency-Key com corpo diferente, pedido igual em curso, ou conflito de card' },
             422: { description: 'Corpo fora do contrato ou Idempotency-Key ausente/inválida — `code` diz qual (ex.: PRODUTO_DESCONHECIDO, VERSAO_DO_AVISO_DESCONHECIDA)' },
             500: { description: 'Erro de banco ou READBACK_DIVERGENTE (a chave é liberada; reenviar é seguro)' },
-            503: { description: 'Rota desligada (INSTITUTO_LEADS_API_KEY_IDS vazia) ou etapa ainda não criada (ETAPA_AUSENTE)' },
+            503: { description: 'Rota desligada (ROTA_DESLIGADA) ou etapa ainda não criada (ETAPA_AUSENTE)' },
           },
         },
       },
