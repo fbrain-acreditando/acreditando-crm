@@ -329,7 +329,10 @@ const MIGRATIONS: Arquivo[] = readdirSync(PASTA)
   .filter(n => n.endsWith('.sql'))
   .sort()
   .map(nome => ({ nome, sql: readFileSync(join(PASTA, nome), 'utf-8') }));
-const SEM_A_NOVA = MIGRATIONS.filter(a => a.nome !== NOVA);
+// O "mundo sem a 2.69" é o repo ATÉ ANTES dela. Migrations posteriores que
+// recriam uma das 22 funções repetem o REVOKE (regra deste teste) — a 2.64
+// recria `get_metricas_de_atendimento` — e não podem entrar no caso histórico.
+const SEM_A_NOVA = MIGRATIONS.filter(a => a.nome < NOVA);
 
 /** D2 da story, linhas 1–22 (assinaturas como o regprocedure normaliza). */
 const SO_SISTEMA = [
