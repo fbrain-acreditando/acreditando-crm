@@ -262,6 +262,8 @@ export function montarDescricaoDaNota(opts: {
   pedido: PedidoDaLoja;
   recebidoEm: string;
   reaproveitado: boolean;
+  /** AC4 caso 3 (decisão do Filipe, 05/11). */
+  emailEmOutroContato?: boolean;
 }): string {
   const produto = PRODUTOS_DA_LOJA[opts.pedido.produto as SlugDoProduto];
   const linhaProduto = `${produto.nome} (${precoEmReais(produto.preco)})`;
@@ -271,6 +273,9 @@ export function montarDescricaoDaNota(opts: {
     `Aviso de privacidade: versão ${opts.pedido.consentimento.texto_versao}, registrado em ${dataHoraBR(opts.pedido.consentimento.aceito_em)}`,
     `Página de origem: ${opts.pedido.pagina ?? 'não informada'}`,
     `Pedido recebido em ${dataHoraBR(opts.recebidoEm)} pela loja do site do Instituto.`,
+    ...(opts.emailEmOutroContato
+      ? ['Atenção: o e-mail informado também está em outro contato do CRM, com outro telefone. O pedido ficou no contato do WhatsApp digitado.']
+      : []),
   ].join('\n');
 }
 
@@ -340,6 +345,8 @@ interface Contexto {
   pedido: PedidoDaLoja;
   telefone: string;
   agoraIso: string;
+  /** AC4 caso 3: o e-mail do pedido está num contato com outro telefone. */
+  emailEmOutroContato?: boolean;
 }
 
 interface CardDoContato {
@@ -348,8 +355,26 @@ interface CardDoContato {
   created_at: string | null;
 }
 
-/** AC4 — contato VIVO por telefone (com e sem o 9º dígito); e-mail só depois. Empate ⇒ o mais antigo. */
-async function buscarContato(ctx: Contexto): Promise<{ id: string; por: 'telefone' | 'email' } | null> {
+/**
+ * AC4 (decisão do Filipe, 05/11 — M3 do QA): **o telefone manda.**
+ *   1. contato VIVO pelo telefone, com e sem o 9º dígito (empate ⇒ o mais antigo);
+ *   2. senão, pelo e-mail (o mais antigo) — só é reaproveitado se **não tiver
+ *      telefone** (o telefone digitado é gravado nele, só se vazio) ou se tiver o
+ *      **mesmo** telefone numa das variantes;
+ *   3. se o contato do e-mail tiver **outro** telefone, ele NÃO é usado: a rota cria
+ *      o contato pelo telefone digitado (RPC da 2.63) e a nota avisa que o e-mail
+ *      também está em outro contato (sem mostrar o telefone dele).
+ */
+export type ContatoAchado = { id: string; por: 'telefone' | 'email_sem_telefone' | 'email_mesmo_telefone' };
+
+export function mesmoTelefone(telefoneDoContato: string | null | undefined, telefoneDigitado: string): boolean {
+  const a = variantesDoTelefone(telefoneDoContato ?? '');
+  const b = variantesDoTelefone(telefoneDigitado);
+  if (!a || !b) return false;
+  return a.variantes.some((v) => b.variantes.includes(v));
+}
+
+async function buscarContato(ctx: Contexto): Promise<ContatoAchado | null> {
   const tel = variantesDoTelefone(ctx.telefone);
   if (tel) {
     const { data, error } = await ctx.sb
@@ -367,7 +392,7 @@ async function buscarContato(ctx: Contexto): Promise<{ id: string; por: 'telefon
   }
   const { data, error } = await ctx.sb
     .from('contacts')
-    .select('id,created_at')
+    .select('id,phone,created_at')
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .is('merged_into_id', null)
@@ -375,8 +400,13 @@ async function buscarContato(ctx: Contexto): Promise<{ id: string; por: 'telefon
     .order('created_at', { ascending: true })
     .limit(1);
   if (error) throw new ErroDeEtapa('buscar_contato', error);
-  const achado = (data as Array<{ id: string }> | null)?.[0];
-  return achado ? { id: achado.id, por: 'email' } : null;
+  const porEmail = (data as Array<{ id: string; phone: string | null }> | null)?.[0];
+  if (!porEmail) return null;
+  if (isBlank(porEmail.phone)) return { id: porEmail.id, por: 'email_sem_telefone' };
+  if (mesmoTelefone(porEmail.phone, ctx.telefone)) return { id: porEmail.id, por: 'email_mesmo_telefone' };
+  // Caso 3: o e-mail é de um contato com OUTRO telefone — o telefone manda.
+  ctx.emailEmOutroContato = true;
+  return null;
 }
 
 /** Relê o contato e, se vier mesclado, SEGUE `merged_into_id` até o vivo (R11 da 2.59). */
@@ -407,7 +437,7 @@ async function resolverContatoVivo(ctx: Contexto, contactId: string): Promise<{ 
  * ler-e-escrever).
  */
 async function completarContatoExistente(ctx: Contexto, contactId: string): Promise<void> {
-  const soSeVazio = async (coluna: 'name' | 'email' | 'source', valor: string) => {
+  const soSeVazio = async (coluna: 'name' | 'email' | 'source' | 'phone', valor: string) => {
     const { error } = await ctx.sb
       .from('contacts')
       .update({ [coluna]: valor, updated_at: ctx.agoraIso })
@@ -420,6 +450,10 @@ async function completarContatoExistente(ctx: Contexto, contactId: string): Prom
   await soSeVazio('name', ctx.pedido.nome);
   await soSeVazio('email', ctx.pedido.email);
   await soSeVazio('source', SOURCE_LP_INSTITUTO);
+  // AC4 caso 2: contato achado pelo e-mail sem telefone ganha o telefone digitado
+  // (com o 9º dígito), só se vazio. Contato com telefone NUNCA tem o telefone trocado.
+  const tel = variantesDoTelefone(ctx.telefone);
+  await soSeVazio('phone', tel?.principal ?? ctx.telefone);
 }
 
 /**
@@ -612,7 +646,12 @@ async function gravarNota(ctx: Contexto, dealId: string, contactId: string, reap
         contact_id: contactId,
         type: 'NOTE',
         title: TITULO_DA_NOTA,
-        description: montarDescricaoDaNota({ pedido: ctx.pedido, recebidoEm: ctx.agoraIso, reaproveitado }),
+        description: montarDescricaoDaNota({
+          pedido: ctx.pedido,
+          recebidoEm: ctx.agoraIso,
+          reaproveitado,
+          emailEmOutroContato: ctx.emailEmOutroContato,
+        }),
         date: ctx.agoraIso,
         completed: true,
         created_at: ctx.agoraIso,

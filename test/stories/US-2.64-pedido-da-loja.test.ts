@@ -398,12 +398,64 @@ describe('2.64 AC4 — contato: telefone com e sem o 9, depois e-mail; nada sobr
     expect(c.email).toBe('joana.teste@exemplo.com');
   });
 
-  it('achado por E-MAIL (telefone diferente) ⇒ usa esse contato e a RPC NÃO é chamada', async () => {
-    const c = contato({ phone: '+5511911112222', email: 'joana.teste@exemplo.com' });
+  // M3 (decisão do Filipe, 05/11): o telefone manda.
+  it('M3 caso 1: telefone acha um contato e o e-mail acha OUTRO ⇒ fica o do telefone; o do e-mail não é tocado', async () => {
+    const doEmail = contato({ phone: '+5511911112222', email: 'joana.teste@exemplo.com', created_at: '2026-01-01T00:00:00Z' });
+    const doTelefone = contato({ email: null, created_at: '2026-09-01T00:00:00Z' });
+    const antes = copia(doEmail);
+    const r = await enviar(pedido());
+    expect(r.body.contact_id).toBe(doTelefone.id);
+    expect(db.rpcChamadas).toHaveLength(0);
+    expect(copia(db.tabelas.contacts.find((x) => x.id === doEmail.id))).toEqual(antes);
+    expect(notas()[0].description).not.toContain('Atenção');
+  });
+
+  it('M3 caso 2: achado pelo E-MAIL e SEM telefone ⇒ reaproveita e grava o telefone digitado (com o 9); nada preenchido é trocado', async () => {
+    const c = contato({ phone: null, email: 'joana.teste@exemplo.com', name: 'Joana (cadastro antigo)', source: 'site' });
+    const r = await enviar(pedido());
+    expect(r.status).toBe(201);
+    expect(r.body.contact_id).toBe(c.id);
+    expect(db.rpcChamadas).toHaveLength(0);
+    const relido = db.tabelas.contacts.find((x) => x.id === c.id)!;
+    expect(relido.phone).toBe(TEL_COM_9_E164);
+    expect(relido.name).toBe('Joana (cadastro antigo)');
+    expect(relido.source).toBe('site');
+    expect(db.tabelas.contacts).toHaveLength(1);
+    expect(notas()[0].description).not.toContain('Atenção');
+  });
+
+  it('M3 caso 2b: achado pelo E-MAIL com o MESMO telefone noutra forma (sem "+") ⇒ reaproveita; telefone não muda', async () => {
+    const c = contato({ phone: '5541998887777', email: 'joana.teste@exemplo.com' });
     const r = await enviar(pedido());
     expect(r.body.contact_id).toBe(c.id);
     expect(db.rpcChamadas).toHaveLength(0);
-    expect(db.tabelas.contacts.find((x) => x.id === c.id)!.phone).toBe('+5511911112222');
+    expect(db.tabelas.contacts.find((x) => x.id === c.id)!.phone).toBe('5541998887777');
+  });
+
+  it('M3 caso 3: achado pelo E-MAIL com OUTRO telefone ⇒ cria contato pelo telefone digitado (RPC) e a nota avisa, sem o telefone do outro', async () => {
+    const outro = contato({ phone: '+5511911112222', email: 'joana.teste@exemplo.com', name: 'Outra pessoa' });
+    const antes = copia(outro);
+    const r = await enviar(pedido());
+    expect(r.status).toBe(201);
+    expect(r.body.acao).toBe('criou_contato_e_card');
+    expect(r.body.contact_id).not.toBe(outro.id);
+    expect(db.rpcChamadas.map((c) => [c.fn, c.args.p_phone])).toEqual([['find_or_create_contact_por_variantes', TEL_COM_9_E164]]);
+    const novo = db.tabelas.contacts.find((x) => x.id === r.body.contact_id)!;
+    expect(novo.phone).toBe(TEL_COM_9_E164);
+    expect(novo.source).toBe('lp_instituto');
+    expect(copia(db.tabelas.contacts.find((x) => x.id === outro.id))).toEqual(antes); // o outro não é tocado
+    expect(cardsDoContato(outro.id)).toHaveLength(0);
+    const nota = notas()[0].description;
+    expect(nota).toContain('Atenção: o e-mail informado também está em outro contato do CRM');
+    for (const s of ['911112222', '11112222', 'Outra pessoa']) expect(nota).not.toContain(s);
+  });
+
+  it('M3 caso 3 em ensaio ⇒ ação prevista criou_contato_e_card, nada gravado', async () => {
+    contato({ phone: '+5511911112222', email: 'joana.teste@exemplo.com' });
+    const r = await enviar(pedido(), { ensaio: true });
+    expect(r.body).toMatchObject({ acao: 'criou_contato_e_card', ensaio: true });
+    expect(db.escritas).toHaveLength(0);
+    expect(db.rpcChamadas).toHaveLength(0);
   });
 
   it('dois contatos com o telefone ⇒ o MAIS ANTIGO; mesclado e excluído não contam; nunca erro', async () => {
