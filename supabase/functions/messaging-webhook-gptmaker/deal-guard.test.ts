@@ -231,10 +231,10 @@ describe('AC7 item 8c — guarda da lista de estágios', () => {
     for (const t of ESTAGIOS_TERMINAIS_ACREDITANDO) expect(ids.has(t)).toBe(true);
   });
 
-  it('a lista conhecida tem exatamente 13 colunas, sem id repetido', () => {
-    expect(ESTAGIOS_CONHECIDOS_ACREDITANDO).toHaveLength(13);
+  it('a lista conhecida tem exatamente 14 colunas, sem id repetido', () => {
+    expect(ESTAGIOS_CONHECIDOS_ACREDITANDO).toHaveLength(14);
     const ids = new Set(ESTAGIOS_CONHECIDOS_ACREDITANDO.map((s) => s.id));
-    expect(ids.size).toBe(13);
+    expect(ids.size).toBe(14);
   });
 
   it('o estágio de proposta continua gravado COM espaço no começo', () => {

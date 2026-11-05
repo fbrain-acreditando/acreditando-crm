@@ -64,10 +64,16 @@ export interface DbError {
 export const BOARD_ACREDITANDO = "5f6bded2-0f7c-418d-9598-7ea75d032242";
 
 /**
- * As 13 colunas do quadro, lidas do banco em 25/09/2026 via
+ * As 14 colunas do quadro, lidas do banco em 25/09/2026 e relidas em 05/11/2026 via
  * `node scripts/db/sql-ro.mjs`. Existe para o teste 8c do AC7: se um estágio
  * aparecer, sumir ou for renomeado, o teste quebra — a constante não pode
  * envelhecer calada.
+ *
+ * 05/11 (story 2.64, sem mudar regra): a frente do remarketing criou pela tela
+ * "Campanha Novembro" (order 5) e as 8 colunas seguintes andaram +1. Ela NÃO é
+ * terminal (é fila) — a guarda já a tratava como aberta; só a foto mudou.
+ * Depois da migration da 2.64 (T2) entram "Produtos de treinamento" e
+ * "Produto vendido" (14 e 15): atualizar esta lista no read-back da T2.
  *
  * 📌 O nome está aqui **para o teste conferir**, nunca para a regra comparar.
  */
@@ -81,15 +87,16 @@ export const ESTAGIOS_CONHECIDOS_ACREDITANDO: ReadonlyArray<{
   { id: "3b1384fa-5fe2-4725-a8e1-7576a8690637", name: "Qualificado", order: 2 },
   { id: "c97424a3-9107-419e-82dc-e6431cafbee3", name: "Apresentação enviada", order: 3 },
   { id: "fef376be-5c81-48de-bccd-95264abd28e6", name: "Aguardando retorno", order: 4 },
-  { id: "c8f1ea2e-2607-4df8-ad3d-a25eb201de80", name: "Avaliação agendada", order: 5 },
-  { id: "d0ceffc3-bd49-4921-bb4a-77a187ddc562", name: "Avaliação realizada", order: 6 },
+  { id: "d0171b1d-3043-420f-8459-7db8aae35947", name: "Campanha Novembro", order: 5 },
+  { id: "c8f1ea2e-2607-4df8-ad3d-a25eb201de80", name: "Avaliação agendada", order: 6 },
+  { id: "d0ceffc3-bd49-4921-bb4a-77a187ddc562", name: "Avaliação realizada", order: 7 },
   // 🔻 Espaço no começo — é assim que está gravado. Não "consertar".
-  { id: "9f1b2a7a-e6b1-4e04-b041-87581fc6a8a9", name: " Proposta enviada", order: 7 },
-  { id: "f359ee98-b7b1-460d-a7be-2ef92f92c4c7", name: "Ganho", order: 8 },
-  { id: "78defbd3-6ca4-4b96-b67a-2268e7e6dce5", name: "Perdido", order: 9 },
-  { id: "3ed212e5-32a9-4bda-8d70-bb8be49e790d", name: "Clientes", order: 10 },
-  { id: "2da4a3f4-4333-4c79-a990-491e789d5096", name: "Profissional", order: 11 },
-  { id: "1b829bbd-b7de-42bd-beb2-6e0baaeb4d04", name: "Projeto Social", order: 12 },
+  { id: "9f1b2a7a-e6b1-4e04-b041-87581fc6a8a9", name: " Proposta enviada", order: 8 },
+  { id: "f359ee98-b7b1-460d-a7be-2ef92f92c4c7", name: "Ganho", order: 9 },
+  { id: "78defbd3-6ca4-4b96-b67a-2268e7e6dce5", name: "Perdido", order: 10 },
+  { id: "3ed212e5-32a9-4bda-8d70-bb8be49e790d", name: "Clientes", order: 11 },
+  { id: "2da4a3f4-4333-4c79-a990-491e789d5096", name: "Profissional", order: 12 },
+  { id: "1b829bbd-b7de-42bd-beb2-6e0baaeb4d04", name: "Projeto Social", order: 13 },
 ];
 
 /** Ganho · Perdido · Clientes — D4. Card nesses estágios NÃO conta como aberto. */
