@@ -35,8 +35,8 @@
  * - `2026-11-v4` — a proposta pelo parecer LGPD do AC16 (pipeline 39, item 2.2:
  *   "Usamos seus dados só para responder ao seu pedido de compra…"). Aceita
  *   desde já para a troca não derrubar pedido: página aberta em cache ainda
- *   manda a v3 por um tempo. ⏳ Texto aguardando o OK do Filipe — se a v4 não
- *   for aprovada, tirar daqui.
+ *   manda a v3 por um tempo. ✅ Texto aprovado pelo Filipe em 05/11
+ *   (a página passa a mandar a v4 na story 2.65, T0).
  */
 export const VERSOES_DO_AVISO_ACEITAS = ['2026-10-v3', '2026-11-v4'] as const;
 
