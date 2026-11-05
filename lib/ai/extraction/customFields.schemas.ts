@@ -134,3 +134,35 @@ export function isBlank(value: unknown): boolean {
   if (typeof value === 'string') return value.trim() === '';
   return false;
 }
+
+// =============================================================================
+// Chaves que a IA de preenchimento NUNCA grava — story 2.64, AC18 (E1)
+// =============================================================================
+
+/**
+ * Campos do card que só a rota da loja do Instituto (story 2.64, AC6) ou uma
+ * pessoa na tela podem gravar. A IA que preenche campos a partir da conversa
+ * ignora estas chaves nos DOIS caminhos do Next.js:
+ *   • `customFields.service.ts` (`extractAndUpdateCustomFields`): saem das
+ *     definições ANTES de montar o schema ⇒ não vão no pedido ao modelo;
+ *   • `lib/public-api/aiExtraction.ts` (porta do n8n, 2.49): chave da lista que
+ *     chegar vai para `skipped` com `chave_reservada`, sem derrubar o lote.
+ *
+ * Por quê: `produtoDeTreinamento` num card de reabilitação o tiraria dos números
+ * da Visão Geral (AC12); `consentimentoEm`/`consentimentoVersao` preenchidos por
+ * IA seriam um registro de aviso de privacidade inventado.
+ *
+ * ⚠️ Lista EXATA, comparada por igualdade — `paraQuemE` (reabilitação) continua
+ * sendo preenchido pela IA; nada de prefixo.
+ */
+export const CHAVES_FORA_DA_EXTRACAO_POR_IA: ReadonlyArray<string> = [
+  'produtoDeTreinamento',
+  'paraQuemEOProduto',
+  'consentimentoEm',
+  'consentimentoVersao',
+];
+
+/** `true` se a IA de preenchimento não pode gravar esta chave (AC18). */
+export function chaveForaDaExtracaoPorIa(key: string): boolean {
+  return CHAVES_FORA_DA_EXTRACAO_POR_IA.includes(key);
+}
