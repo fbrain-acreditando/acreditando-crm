@@ -60,12 +60,14 @@ export function decidirFechamentoAoMover(opts: {
   wonStageId: string | null;
   lostStageId: string | null;
   destinoArquivaSemReabrir: boolean;
+  /** Etapa de Ganho/Perdido pelo tipo (`linked_lifecycle_stage` CUSTOMER/OTHER). */
+  destinoEhFechamento?: boolean;
   agora: string;
 }): { ok: true; campos: Record<string, unknown> } | { ok: false; erro: string } {
   const ehGanho = !!opts.wonStageId && opts.stageId === opts.wonStageId;
   const ehPerdido = !!opts.lostStageId && opts.stageId === opts.lostStageId;
   if (opts.mark === 'reopen') {
-    if (ehGanho || ehPerdido || opts.destinoArquivaSemReabrir) {
+    if (ehGanho || ehPerdido || opts.destinoEhFechamento || opts.destinoArquivaSemReabrir) {
       return { ok: false, erro: 'reopen is not allowed for this stage (won, lost or archive stage)' };
     }
     return { ok: true, campos: { is_won: false, is_lost: false, closed_at: null } };
@@ -135,20 +137,26 @@ export async function moveStageByDealId(opts: {
   }
 
   let destinoArquivaSemReabrir = false;
+  let destinoEhFechamento = false;
   if (opts.mark === 'reopen') {
+    // 2.72 (correção): neste CRM `boards.won_stage_id`/`lost_stage_id` costumam ser
+    // nulos; a tela reconhece Ganho/Perdido por `linked_lifecycle_stage`
+    // (CUSTOMER / OTHER — `StageProgressBar`, `DealDetailModal`). Medido em 06/11.
     const { data: destino, error: destinoError } = await sb
       .from('board_stages')
-      .select('arquiva_sem_reabrir')
+      .select('arquiva_sem_reabrir,linked_lifecycle_stage')
       .eq('organization_id', opts.organizationId)
       .eq('id', stageId)
       .maybeSingle();
     if (destinoError) return { ok: false as const, status: 500, body: { error: destinoError.message, code: 'DB_ERROR' } };
     destinoArquivaSemReabrir = (destino as any)?.arquiva_sem_reabrir === true;
+    const ciclo = (destino as any)?.linked_lifecycle_stage;
+    destinoEhFechamento = ciclo === 'CUSTOMER' || ciclo === 'OTHER';
   }
 
   const now = new Date().toISOString();
   const fechamento = decidirFechamentoAoMover({
-    mark: opts.mark, stageId, wonStageId, lostStageId, destinoArquivaSemReabrir, agora: now,
+    mark: opts.mark, stageId, wonStageId, lostStageId, destinoArquivaSemReabrir, destinoEhFechamento, agora: now,
   });
   if (!fechamento.ok) return { ok: false as const, status: 422, body: { error: fechamento.erro, code: 'VALIDATION_ERROR' } };
   const updates: any = { stage_id: stageId, last_stage_change_date: now, updated_at: now, ...fechamento.campos };

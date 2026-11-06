@@ -16,6 +16,8 @@ const CATEGORIA = '0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d';
 const AGORA = '2026-11-05T23:00:00.000Z';
 
 let arquivaSemReabrir = false;
+let ciclo: string | null = null;
+let quadro: { won_stage_id: string | null; lost_stage_id: string | null } = { won_stage_id: GANHO, lost_stage_id: PERDIDO };
 const updates: unknown[] = [];
 
 /** Builder mínimo: responde por tabela; registra todo `update`. */
@@ -27,8 +29,8 @@ function builder(tabela: string) {
     maybeSingle: async () => {
       if (tabela === 'deals' && b._upd) return { data: { id: DEAL, ...(b._upd as object) }, error: null };
       if (tabela === 'deals') return { data: { id: DEAL, board_id: BOARD, stage_id: PERDIDO }, error: null };
-      if (tabela === 'boards') return { data: { won_stage_id: GANHO, lost_stage_id: PERDIDO }, error: null };
-      if (tabela === 'board_stages') return { data: { id: 'x', arquiva_sem_reabrir: arquivaSemReabrir }, error: null };
+      if (tabela === 'boards') return { data: quadro, error: null };
+      if (tabela === 'board_stages') return { data: { id: 'x', arquiva_sem_reabrir: arquivaSemReabrir, linked_lifecycle_stage: ciclo }, error: null };
       return { data: null, error: null };
     },
   };
@@ -87,7 +89,10 @@ describe('decidirFechamentoAoMover — regra pura', () => {
 });
 
 describe('moveStageByDealId — o que é gravado', () => {
-  beforeEach(() => { updates.length = 0; arquivaSemReabrir = false; });
+  beforeEach(() => {
+    updates.length = 0; arquivaSemReabrir = false; ciclo = null;
+    quadro = { won_stage_id: GANHO, lost_stage_id: PERDIDO };
+  });
 
   it('AC1: reopen grava is_lost=false, is_won=false, closed_at=null e o destino', async () => {
     const r = await moveStageByDealId({ organizationId: ORG, dealId: DEAL, target: { to_stage_id: COMUM }, mark: 'reopen' });
@@ -121,5 +126,23 @@ describe('moveStageByDealId — o que é gravado', () => {
     expect(r.status).toBe(200);
     expect(updates[0]).not.toHaveProperty('is_lost');
     expect(updates[0]).not.toHaveProperty('closed_at');
+  });
+
+  // Como é o quadro real (medido 06/11): won/lost_stage_id nulos; Ganho/Perdido
+  // só pelo tipo da etapa. Em produção o 1º deploy aceitou reopen para "Perdido".
+  it.each([['Perdido', 'OTHER'], ['Ganho', 'CUSTOMER']])(
+    'AC4 (quadro real): reopen para %s pelo tipo da etapa dá 422 e não grava', async (_n, tipo) => {
+      quadro = { won_stage_id: null, lost_stage_id: null };
+      ciclo = tipo;
+      const r = await moveStageByDealId({ organizationId: ORG, dealId: DEAL, target: { to_stage_id: PERDIDO }, mark: 'reopen' });
+      expect(r.status).toBe(422);
+      expect(updates).toHaveLength(0);
+    });
+
+  it('AC1 (quadro real): reopen para coluna comum reabre', async () => {
+    quadro = { won_stage_id: null, lost_stage_id: null };
+    const r = await moveStageByDealId({ organizationId: ORG, dealId: DEAL, target: { to_stage_id: COMUM }, mark: 'reopen' });
+    expect(r.status).toBe(200);
+    expect(updates[0]).toMatchObject({ is_lost: false, closed_at: null });
   });
 });
