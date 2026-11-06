@@ -64,7 +64,7 @@ export interface DbError {
 export const BOARD_ACREDITANDO = "5f6bded2-0f7c-418d-9598-7ea75d032242";
 
 /**
- * As 14 colunas do quadro, lidas do banco em 25/09/2026 e relidas em 05/11/2026 via
+ * As 16 colunas do quadro, lidas do banco em 25/09/2026 e relidas em 05/11/2026 via
  * `node scripts/db/sql-ro.mjs`. Existe para o teste 8c do AC7: se um estágio
  * aparecer, sumir ou for renomeado, o teste quebra — a constante não pode
  * envelhecer calada.
@@ -72,8 +72,8 @@ export const BOARD_ACREDITANDO = "5f6bded2-0f7c-418d-9598-7ea75d032242";
  * 05/11 (story 2.64, sem mudar regra): a frente do remarketing criou pela tela
  * "Campanha Novembro" (order 5) e as 8 colunas seguintes andaram +1. Ela NÃO é
  * terminal (é fila) — a guarda já a tratava como aberta; só a foto mudou.
- * Depois da migration da 2.64 (T2) entram "Produtos de treinamento" e
- * "Produto vendido" (14 e 15): atualizar esta lista no read-back da T2.
+ * A migration da 2.64 (T2, 05/11) acrescentou "Produtos de treinamento" e
+ * "Produto vendido" (14 e 15) — já nesta lista, relidas no read-back da T2.
  *
  * 📌 O nome está aqui **para o teste conferir**, nunca para a regra comparar.
  */
@@ -97,6 +97,9 @@ export const ESTAGIOS_CONHECIDOS_ACREDITANDO: ReadonlyArray<{
   { id: "3ed212e5-32a9-4bda-8d70-bb8be49e790d", name: "Clientes", order: 11 },
   { id: "2da4a3f4-4333-4c79-a990-491e789d5096", name: "Profissional", order: 12 },
   { id: "1b829bbd-b7de-42bd-beb2-6e0baaeb4d04", name: "Projeto Social", order: 13 },
+  // Story 2.64 (T2, migration aplicada em 05/11 23:32): as 2 etapas da loja do Instituto.
+  { id: "2f8091f5-90a8-4eae-bd2a-12f0d44b9517", name: "Produtos de treinamento", order: 14 },
+  { id: "824878b0-2ab4-4c07-81d7-ec367b5ebd68", name: "Produto vendido", order: 15 },
 ];
 
 /** Ganho · Perdido · Clientes — D4. Card nesses estágios NÃO conta como aberto. */

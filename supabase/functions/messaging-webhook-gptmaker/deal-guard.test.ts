@@ -226,15 +226,15 @@ describe('AC3 — a guarda de card aberto', () => {
 // =============================================================================
 
 describe('AC7 item 8c — guarda da lista de estágios', () => {
-  it('os 3 terminais estão entre os 13 estágios conhecidos', () => {
+  it('os 3 terminais estão entre os 16 estágios conhecidos', () => {
     const ids = new Set(ESTAGIOS_CONHECIDOS_ACREDITANDO.map((s) => s.id));
     for (const t of ESTAGIOS_TERMINAIS_ACREDITANDO) expect(ids.has(t)).toBe(true);
   });
 
-  it('a lista conhecida tem exatamente 14 colunas, sem id repetido', () => {
-    expect(ESTAGIOS_CONHECIDOS_ACREDITANDO).toHaveLength(14);
+  it('a lista conhecida tem exatamente 16 colunas, sem id repetido', () => {
+    expect(ESTAGIOS_CONHECIDOS_ACREDITANDO).toHaveLength(16);
     const ids = new Set(ESTAGIOS_CONHECIDOS_ACREDITANDO.map((s) => s.id));
-    expect(ids.size).toBe(14);
+    expect(ids.size).toBe(16);
   });
 
   it('o estágio de proposta continua gravado COM espaço no começo', () => {
