@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { createStaticAdminClient } from '@/lib/supabase/server';
 import { sanitizeUUID } from '@/lib/supabase/utils';
 import {
+  chaveForaDaExtracaoPorIa,
   coerceValueForField,
   isBlank,
   MIN_CONFIDENCE_TO_STORE,
@@ -86,6 +87,8 @@ export type AiExtractionInput = z.infer<typeof AiExtractionSchema>;
 export type SkipReason =
   | 'campo_ja_preenchido'
   | 'chave_desconhecida'
+  /** Story 2.64, AC18: campo que só a rota da loja ou uma pessoa grava. */
+  | 'chave_reservada'
   | 'confianca_baixa'
   | 'valor_invalido_para_o_tipo'
   | 'nota_manual';
@@ -176,6 +179,13 @@ export async function applyAiExtraction(opts: {
     };
 
     for (const key of incomingKeys) {
+      // Story 2.64, AC18 (E1) — campo da loja do Instituto: a IA não grava.
+      // Mesma lógica da regra 4: vai para `skipped` e o resto do lote segue.
+      if (chaveForaDaExtracaoPorIa(key)) {
+        skipped.push({ key, reason: 'chave_reservada' });
+        continue;
+      }
+
       const def = definitions.get(key);
 
       // Regra 4 — key desconhecida NÃO derruba o lote. O n8n manda 9 campos e

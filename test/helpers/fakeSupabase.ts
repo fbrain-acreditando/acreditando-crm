@@ -105,6 +105,7 @@ export class FakeSupabase {
     this.rpcChamadas.push({ fn, args });
     const erro = this.tirarErro(fn, 'rpc');
     if (erro) return { data: null, error: erro };
+    if (fn === 'find_or_create_contact_por_variantes') return this.rpcPorVariantes(args);
     if (fn !== 'find_or_create_contact') throw new Error(`fakeSupabase: rpc ${fn} não suportada`);
     const org = args.p_organization_id;
     const phone = args.p_phone;
@@ -130,6 +131,47 @@ export class FakeSupabase {
     });
     this.escritas.push({ tabela: 'contacts', op: 'rpc_insert', payload: { id } });
     return { data: id, error: null };
+  }
+
+  /**
+   * `find_or_create_contact_por_variantes` (story 2.63,
+   * `20261103140000_o_mesmo_telefone_com_e_sem_o_nono_digito.sql`): exato →
+   * variante (com/sem o 9, só celular BR, 9 seguido de 6–9) → cria com o
+   * telefone como veio. Ignora excluído e mesclado. RETURNS TABLE ⇒ lista.
+   */
+  private rpcPorVariantes(args: any) {
+    const org = args.p_organization_id;
+    const phone: string | null = args.p_phone || null;
+    const vivoCom = (tel: string) =>
+      this.tabelas.contacts
+        .filter((c) => c.organization_id === org && c.phone === tel && !c.deleted_at && !c.merged_into_id)
+        .sort((a, b) => comparar(a.created_at, b.created_at))[0];
+    if (phone) {
+      const exato = vivoCom(phone);
+      if (exato) return { data: [{ contact_id: exato.id, casou_por: 'exato', telefone_casado: phone }], error: null };
+      let variante: string | null = null;
+      const m1 = phone.match(/^\+55(\d{2})9([6-9]\d{7})$/);
+      const m2 = phone.match(/^\+55(\d{2})([6-9]\d{7})$/);
+      if (m1) variante = `+55${m1[1]}${m1[2]}`;
+      else if (m2) variante = `+55${m2[1]}9${m2[2]}`;
+      const v = variante ? vivoCom(variante) : undefined;
+      if (v) return { data: [{ contact_id: v.id, casou_por: 'variante', telefone_casado: variante }], error: null };
+    }
+    const id = crypto.randomUUID();
+    this.tabelas.contacts.push({
+      id,
+      organization_id: org,
+      name: args.p_name,
+      phone,
+      source: args.p_source,
+      email: null,
+      deleted_at: null,
+      merged_into_id: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    this.escritas.push({ tabela: 'contacts', op: 'rpc_insert', payload: { id } });
+    return { data: [{ contact_id: id, casou_por: 'criado', telefone_casado: phone }], error: null };
   }
 
   /** Travas do banco. Devolve o erro que o Postgres daria, ou null. */

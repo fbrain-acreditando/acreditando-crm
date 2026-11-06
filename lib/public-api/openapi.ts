@@ -4,6 +4,8 @@
 // - Keep this file updated together with route implementations.
 // - Prefer stable, integration-friendly shapes (simple objects, consistent errors).
 
+import { SLUGS_DOS_PRODUTOS, VALORES_DOS_PERFIS, VERSOES_DO_AVISO_ACEITAS } from '@/lib/instituto/catalogo';
+
 export type OpenApiDocument = Record<string, any>;
 
 export function getPublicApiOpenApiDocument(): OpenApiDocument {
@@ -734,6 +736,58 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
             409: { description: 'Idempotency-Key com corpo diferente, requisição igual em curso, ou contato já com card aberto no estágio de destino' },
             422: { description: 'Payload inválido' },
             500: { description: 'Erro de banco (a chave é liberada; reenviar é seguro)' },
+          },
+        },
+      },
+      '/instituto-leads': {
+        post: {
+          tags: ['Deals'],
+          summary: 'Receber um pedido da loja do Instituto Acreditando (story 2.64)',
+          description: 'Só para a integração da loja, com chave de API autorizada para esta rota (sem chave autorizada configurada = rota desligada, 503; outra chave da organização = 403 CHAVE_NAO_AUTORIZADA). Acha o contato pelo telefone (com e sem o 9º dígito; e-mail depois) ou cria pela RPC find_or_create_contact_por_variantes. Card em "Produtos de treinamento" (responsável: a equipe comercial; valor = preço do produto): reaproveita o card de produto do contato; com card aberto de reabilitação, cria um 2º card; só com cards fechados (Ganho, Perdido, Clientes, Produto vendido), cria card novo. Uma nota "Pedido da loja do Instituto" por Idempotency-Key. Sucesso só depois de reler o card e a nota. `?ensaio=1` responde a ação prevista sem gravar.',
+          security: [{ ApiKeyAuth: [] }],
+          parameters: [
+            { name: 'Idempotency-Key', in: 'header', required: true, schema: { type: 'string', pattern: '^instituto:[0-9a-f]{64}$' }, description: 'instituto: + 64 hexadecimais (receita da story 2.65, AC4).' },
+            { name: 'ensaio', in: 'query', required: false, schema: { type: 'string', enum: ['1'] }, description: 'Decide sem gravar nada e sem tocar na idempotência.' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['nome', 'email', 'whatsapp', 'perfil', 'produto', 'consentimento'],
+                  properties: {
+                    nome: { type: 'string', maxLength: 120 },
+                    email: { type: 'string', format: 'email' },
+                    whatsapp: { type: 'string', description: 'Celular ou fixo BR (ex.: 5511987654321).' },
+                    perfil: { type: 'string', enum: [...VALORES_DOS_PERFIS] },
+                    produto: { type: 'string', enum: [...SLUGS_DOS_PRODUTOS] },
+                    consentimento: {
+                      type: 'object',
+                      additionalProperties: false,
+                      required: ['aceito', 'texto_versao', 'aceito_em'],
+                      properties: {
+                        aceito: { type: 'boolean', const: true },
+                        texto_versao: { type: 'string', enum: [...VERSOES_DO_AVISO_ACEITAS], description: 'Versão do aviso de privacidade exibido.' },
+                        aceito_em: { type: 'string', format: 'date-time', description: 'ISO 8601 com fuso.' },
+                      },
+                    },
+                    pagina: { type: 'string', maxLength: 300, description: 'Opcional. Endereço completo da página (https://).' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: 'Card de produto reaproveitado — { acao: reaproveitou_card, deal_id, contact_id }' },
+            201: { description: 'Card criado — { acao: criou_contato_e_card | segundo_card | criou_card, deal_id, contact_id }' },
+            401: { $ref: '#/components/responses/Unauthorized' },
+            403: { description: 'Chave válida, mas não autorizada nesta rota (CHAVE_NAO_AUTORIZADA)' },
+            409: { description: 'Idempotency-Key com corpo diferente, pedido igual em curso, ou conflito de card' },
+            422: { description: 'Corpo fora do contrato ou Idempotency-Key ausente/inválida — `code` diz qual (ex.: PRODUTO_DESCONHECIDO, VERSAO_DO_AVISO_DESCONHECIDA)' },
+            500: { description: 'Erro de banco ou READBACK_DIVERGENTE (a chave é liberada; reenviar é seguro)' },
+            503: { description: 'Rota desligada (ROTA_DESLIGADA) ou etapa ainda não criada (ETAPA_AUSENTE)' },
           },
         },
       },

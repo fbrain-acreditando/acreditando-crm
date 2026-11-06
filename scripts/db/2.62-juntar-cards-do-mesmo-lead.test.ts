@@ -27,7 +27,10 @@ import {
   avaliar,
   TITULO_NOTA_A,
   TITULO_NOTA_B,
+  ETAPAS_DA_LOJA_DO_INSTITUTO,
+  sqlMedicao,
 } from './2.62-juntar-cards-do-mesmo-lead.mjs';
+import { ETAPAS_DA_LOJA } from '@/lib/instituto/catalogo';
 
 // ---------------------------------------------------------------------------------------------
 // Banco simulado
@@ -114,12 +117,16 @@ const prefixosPedidos = () => new Set([
   ...ESPERADO.tipoB.flatMap((e: any) => [e.perdedor, e.sobrevivente, e.contato]),
 ]);
 
-function medicao(m: Mundo) {
+function medicao(m: Mundo, sql = '') {
   const pref = prefixosPedidos();
   const cartoes = [...m.cards.values()].filter((c) => pref.has(c.id.slice(0, 8)));
   const contatos = [...m.contatos.values()].filter((c) => pref.has(c.id.slice(0, 8)));
   const idsCartoes = new Set(cartoes.map((c) => c.id));
-  const abertoNoBoard = (d: Card) => d.board_id === BOARD && !d.deleted_at && !d.is_won && !d.is_lost;
+  // AC15 da 2.64: o simulado obedece às etapas que a SQL do script exclui (lidas da própria SQL),
+  // para o teste quebrar se o script deixar de excluí-las.
+  const foraDaLoja = [...(sql.match(/stage_id::text not in \(([^)]*)\)/)?.[1] ?? '').matchAll(/'([0-9a-f-]{36})'/g)].map((x) => x[1]);
+  const abertoNoBoard = (d: Card) =>
+    d.board_id === BOARD && !d.deleted_at && !d.is_won && !d.is_lost && !(d.stage_id && foraDaLoja.includes(d.stage_id));
   const vivos = [...m.contatos.values()].filter((c) => !c.deleted_at && !c.merged_into_id);
   const porChave = new Map<string, string[]>();
   for (const c of vivos) { const k = chaveTel(c.phone); if (k) porChave.set(k, [...(porChave.get(k) ?? []), c.id]); }
@@ -261,7 +268,7 @@ function bancoSimulado(m: Mundo, opcoes: { esquecerSoftDelete?: boolean } = {}) 
     switch (tag) {
       case 'perfil': return [{ id: PERFIL, organization_id: ORG }];
       case 'fk-lista': return FK_LISTA;
-      case 'medicao': return [{ doc: medicao(m) }];
+      case 'medicao': return [{ doc: medicao(m, sql) }];
       case 'fk-contagem': return fkContagem(m, sql);
       case 'backup': return [{ doc: { deals: [...m.cards.values()].filter((d) => sql.includes(d.id)), contacts: [...m.contatos.values()].filter((c) => sql.includes(c.id)), messaging_conversations: [], contact_merge_log: [], fk: [] } }];
       case 'escrita': checarTriggerDuplicado(m, sql); aplicarEscrita(m, sql, opcoes); return [];
@@ -746,5 +753,56 @@ describe('AC1–AC5 + idempotência + AC7', () => {
       if (par.tipo === 'A') expect(sql.indexOf('reset role')).toBeGreaterThan(sql.indexOf('merge_contacts('));
       expect(sql).not.toMatch(/set title =/); // N1: o script não devolve título
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Story 2.64, AC15 — o 2º card de produto (D7) não é duplicata
+// ---------------------------------------------------------------------------------------------
+describe('2.64 AC15 — etapas da loja do Instituto ficam fora de "card aberto no quadro"', () => {
+  const [PRODUTOS, VENDIDO] = ETAPAS_DA_LOJA_DO_INSTITUTO;
+
+  it('os uuids são os mesmos de lib/instituto/catalogo.ts', () => {
+    expect([...ETAPAS_DA_LOJA_DO_INSTITUTO]).toEqual([...ETAPAS_DA_LOJA]);
+  });
+
+  it('a SQL de medição exclui as 2 etapas nas 4 buscas (telefone, email, dois_cards, lead_novo)', () => {
+    const sql = sqlMedicao();
+    const exclusoes = sql.match(/stage_id::text not in \('2f8091f5-90a8-4eae-bd2a-12f0d44b9517', '824878b0-2ab4-4c07-81d7-ec367b5ebd68'\)/g) ?? [];
+    expect(exclusoes).toHaveLength(4);
+  });
+
+  const comContato = (m: Mundo, p: string) =>
+    m.contatos.set(uid(p), { id: uid(p), name: 'Comprador', phone: '5541988887777', email: null, source: 'whatsapp', merged_into_id: null, deleted_at: null, organization_id: ORG });
+  const comCard = (m: Mundo, p: string, contato: string, stageId: string) =>
+    m.cards.set(uid(p), { id: uid(p), board_id: BOARD, stage_id: stageId, contact_id: uid(contato), title: 'X', created_at: '2026-11-05T12:00:00Z', deleted_at: null, is_won: false, is_lost: false, custom_fields: {}, organization_id: ORG });
+
+  it('1 card de reabilitação + 1 em "Produtos de treinamento" (e 1 em "Produto vendido") ⇒ nenhuma divergência, nenhum par novo', async () => {
+    const m = mundoDe0311();
+    comContato(m, 'cccccc01');
+    comCard(m, 'cccccc02', 'cccccc01', ETAPAS[2].id);
+    comCard(m, 'cccccc03', 'cccccc01', PRODUTOS);
+    comCard(m, 'cccccc04', 'cccccc01', VENDIDO);
+    const { q } = bancoSimulado(m);
+    const amb = ambiente();
+    const r = await executar({ q, args: lerArgs(['--excluir-perdedores']), log: amb.log, agora: amb.agora, checkIgnore: amb.checkIgnore });
+    expect(r.divergencias ?? []).toEqual([]);
+    expect(r.codigo).toBe(0);
+    expect(r.pares.some((p: any) => [p.perdedor?.id, p.sobrevivente?.id].includes(uid('cccccc03')))).toBe(false);
+    expect(r.pares).toHaveLength(29); // os 8 A + 21 B da lista de 03/11, nada a mais
+  });
+
+  it('2 cards de REABILITAÇÃO abertos do mesmo contato ⇒ o par continua sendo achado (o ajuste não cega o script)', async () => {
+    const m = mundoDe0311();
+    comContato(m, 'cccccc01');
+    comCard(m, 'cccccc02', 'cccccc01', ETAPAS[1].id);
+    comCard(m, 'cccccc05', 'cccccc01', ETAPAS[2].id);
+    comCard(m, 'cccccc03', 'cccccc01', PRODUTOS);
+    const { q } = bancoSimulado(m);
+    const amb = ambiente();
+    const r = await executar({ q, args: lerArgs(['--excluir-perdedores']), log: amb.log, agora: amb.agora, checkIgnore: amb.checkIgnore });
+    expect(r.codigo).toBe(2);
+    const msg = r.divergencias.join(' | ');
+    expect(msg).toMatch(/contato cccccc01 com 2 cards abertos, fora da lista/);
   });
 });

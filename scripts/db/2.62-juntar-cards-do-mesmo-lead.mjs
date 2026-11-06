@@ -26,6 +26,17 @@ export const REF = 'jmjhtprnxjffaqhdzfmc';
 export const BOARD_PREFIXO = '5f6bded2'; // board Acreditando
 export const LEAD_NOVO_PREFIXO = '82d1a222'; // etapa "Lead novo"
 export const EMAIL_DO_FILIPE = 'fbraintech@gmail.com'; // P4: merged_by = profiles.id dele (descoberto por SELECT)
+/**
+ * Story 2.64, AC15 — as 2 etapas da loja do Instituto ("Produtos de treinamento" e
+ * "Produto vendido"), por uuid inteiro. Card nelas NÃO é "card aberto no quadro"
+ * para esta junção: o 2º card de produto (D7 da 2.64) não é duplicata do card de
+ * reabilitação e nunca pode ser juntado a ele. Mesmos uuids de
+ * `lib/instituto/catalogo.ts` (o teste compara).
+ */
+export const ETAPAS_DA_LOJA_DO_INSTITUTO = Object.freeze([
+  '2f8091f5-90a8-4eae-bd2a-12f0d44b9517', // Produtos de treinamento
+  '824878b0-2ab4-4c07-81d7-ec367b5ebd68', // Produto vendido
+]);
 export const ORDEM_MAXIMA_DE_AVANCO = 7; // depois de 7, "order" não é avanço (Ganho/Perdido/...)
 export const TITULO_NOTA_A = 'Card da LP juntado a este';
 export const TITULO_NOTA_B = 'Card duplicado juntado a este';
@@ -304,8 +315,11 @@ order by 2, 3`;
 export function sqlMedicao(esp = ESPERADO) {
   const pc = prefixosLit(prefixosCartoes(esp));
   const pk = prefixosLit(prefixosContatos(esp));
+  // AC15 da 2.64: card nas etapas da loja do Instituto não conta como aberto (por uuid).
+  const foraDaLoja = ETAPAS_DA_LOJA_DO_INSTITUTO.map((id) => `'${id}'`).join(', ');
   const abertoNoBoard = (a) => `${a}.board_id::text like '${BOARD_PREFIXO}%' and ${a}.deleted_at is null
-      and coalesce(${a}.is_won, false) = false and coalesce(${a}.is_lost, false) = false`;
+      and coalesce(${a}.is_won, false) = false and coalesce(${a}.is_lost, false) = false
+      and (${a}.stage_id is null or ${a}.stage_id::text not in (${foraDaLoja}))`;
   const filhas = TABELAS_FILHAS.map((t) => `select '${t}' as t, deal_id as id, count(*) as n from public.${t} where deal_id in (select id from cartoes) group by deal_id`).join('\n      union all ');
   const filas = ['ai_pending_evaluations', 'ai_pending_lead_scores', 'ai_pending_stage_advances']
     .map((t) => `select '${t}' as t, x.deal_id as id, x.status from public.${t} x where x.deal_id in (select id from cartoes) and x.status in ('pending', 'processing')`)

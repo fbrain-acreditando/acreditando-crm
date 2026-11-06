@@ -33,6 +33,7 @@ import { getOrgAIConfig } from '../agent/agent.service';
 import type { CustomFieldDefinition, CustomFieldType } from '@/types';
 import {
   buildCustomFieldsSchema,
+  chaveForaDaExtracaoPorIa,
   coerceValueForField,
   describeField,
   isBlank,
@@ -117,15 +118,18 @@ export async function extractAndUpdateCustomFields(
       return { success: false, error: `Falha ao ler definições: ${defError.message}` };
     }
 
-    const definitions: CustomFieldDefinition[] = (defRows ?? []).map(row => ({
-      id: row.id as string,
-      key: row.key as string,
-      label: row.label as string,
-      type: row.type as CustomFieldType,
-      ...(Array.isArray(row.options) && row.options.length > 0
-        ? { options: row.options as string[] }
-        : {}),
-    }));
+    const definitions: CustomFieldDefinition[] = (defRows ?? [])
+      // Story 2.64, AC18 (E1): os campos da loja do Instituto não vão ao modelo.
+      .filter(row => !chaveForaDaExtracaoPorIa(row.key as string))
+      .map(row => ({
+        id: row.id as string,
+        key: row.key as string,
+        label: row.label as string,
+        type: row.type as CustomFieldType,
+        ...(Array.isArray(row.options) && row.options.length > 0
+          ? { options: row.options as string[] }
+          : {}),
+      }));
 
     const schema = buildCustomFieldsSchema(definitions);
     if (!schema) {
