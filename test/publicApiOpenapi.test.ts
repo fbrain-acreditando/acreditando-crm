@@ -35,5 +35,12 @@ describe('Public API OpenAPI', () => {
       expect(paths).toContain(p);
     }
   });
-});
 
+  it('2.72: move-stage por id documenta mark reopen; por identidade não', () => {
+    const doc: any = getPublicApiOpenApiDocument();
+    const porId = JSON.stringify(doc.paths['/deals/{dealId}/move-stage']);
+    expect(porId).toContain('"reopen"');
+    const porIdentidade = JSON.stringify(doc.paths['/deals/move-stage-by-identity'] ?? {});
+    expect(porIdentidade).not.toContain('"reopen"');
+  });
+});

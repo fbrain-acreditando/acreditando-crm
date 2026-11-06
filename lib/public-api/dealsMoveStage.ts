@@ -45,11 +45,51 @@ async function resolveStageIdForBoard(opts: {
   return (data[0] as any).id as string;
 }
 
+/**
+ * Story 2.72 — o que muda em `is_won` / `is_lost` / `closed_at` ao mover pela API.
+ *
+ * Sem `mark` e com `won`/`lost`, é a regra antiga (só a etapa de Ganho/Perdido ou
+ * o `mark` fecham o card). `reopen` espelha a tela (`useMoveDeal`): mover para uma
+ * coluna comum reabre. Não vale para Ganho, Perdido nem coluna de categoria
+ * (`arquiva_sem_reabrir`, story 2.40) — aí devolve erro e nada é gravado.
+ * O motivo da perda fica: é o histórico de por que foi perdido.
+ */
+export function decidirFechamentoAoMover(opts: {
+  mark: 'won' | 'lost' | 'reopen' | null | undefined;
+  stageId: string;
+  wonStageId: string | null;
+  lostStageId: string | null;
+  destinoArquivaSemReabrir: boolean;
+  agora: string;
+}): { ok: true; campos: Record<string, unknown> } | { ok: false; erro: string } {
+  const ehGanho = !!opts.wonStageId && opts.stageId === opts.wonStageId;
+  const ehPerdido = !!opts.lostStageId && opts.stageId === opts.lostStageId;
+  if (opts.mark === 'reopen') {
+    if (ehGanho || ehPerdido || opts.destinoArquivaSemReabrir) {
+      return { ok: false, erro: 'reopen is not allowed for this stage (won, lost or archive stage)' };
+    }
+    return { ok: true, campos: { is_won: false, is_lost: false, closed_at: null } };
+  }
+  const campos: Record<string, unknown> = {};
+  if (opts.mark === 'won' || ehGanho) {
+    campos.is_won = true;
+    campos.is_lost = false;
+    campos.closed_at = opts.agora;
+    campos.loss_reason = null;
+  }
+  if (opts.mark === 'lost' || ehPerdido) {
+    campos.is_lost = true;
+    campos.is_won = false;
+    campos.closed_at = opts.agora;
+  }
+  return { ok: true, campos };
+}
+
 export async function moveStageByDealId(opts: {
   organizationId: string;
   dealId: string;
   target: { to_stage_id?: string | null; to_stage_label?: string | null };
-  mark?: 'won' | 'lost' | null;
+  mark?: 'won' | 'lost' | 'reopen' | null;
 }) {
   const sb = createStaticAdminClient();
   const dealId = sanitizeUUID(opts.dealId);
@@ -94,19 +134,24 @@ export async function moveStageByDealId(opts: {
     };
   }
 
+  let destinoArquivaSemReabrir = false;
+  if (opts.mark === 'reopen') {
+    const { data: destino, error: destinoError } = await sb
+      .from('board_stages')
+      .select('arquiva_sem_reabrir')
+      .eq('organization_id', opts.organizationId)
+      .eq('id', stageId)
+      .maybeSingle();
+    if (destinoError) return { ok: false as const, status: 500, body: { error: destinoError.message, code: 'DB_ERROR' } };
+    destinoArquivaSemReabrir = (destino as any)?.arquiva_sem_reabrir === true;
+  }
+
   const now = new Date().toISOString();
-  const updates: any = { stage_id: stageId, last_stage_change_date: now, updated_at: now };
-  if (opts.mark === 'won' || (wonStageId && stageId === wonStageId)) {
-    updates.is_won = true;
-    updates.is_lost = false;
-    updates.closed_at = now;
-    updates.loss_reason = null;
-  }
-  if (opts.mark === 'lost' || (lostStageId && stageId === lostStageId)) {
-    updates.is_lost = true;
-    updates.is_won = false;
-    updates.closed_at = now;
-  }
+  const fechamento = decidirFechamentoAoMover({
+    mark: opts.mark, stageId, wonStageId, lostStageId, destinoArquivaSemReabrir, agora: now,
+  });
+  if (!fechamento.ok) return { ok: false as const, status: 422, body: { error: fechamento.erro, code: 'VALIDATION_ERROR' } };
+  const updates: any = { stage_id: stageId, last_stage_change_date: now, updated_at: now, ...fechamento.campos };
   const { data, error } = await sb
     .from('deals')
     .update(updates)
