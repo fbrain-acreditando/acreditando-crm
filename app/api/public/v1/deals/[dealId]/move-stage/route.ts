@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 const MoveStageSchema = z.object({
   to_stage_id: z.string().uuid().optional(),
   to_stage_label: z.string().min(1).optional(),
-  mark: z.enum(['won', 'lost']).optional(),
+  mark: z.enum(['won', 'lost', 'reopen']).optional(),
 }).strict().refine((v) => !!(v.to_stage_id || v.to_stage_label), {
   message: 'to_stage_id or to_stage_label is required',
 });

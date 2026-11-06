@@ -808,7 +808,7 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
                       additionalProperties: false,
                       properties: {
                         to_stage_id: { type: 'string', description: 'UUID do estágio de destino' },
-                        mark: { type: 'string', enum: ['won', 'lost'], description: 'Opcional: marca o deal como ganho/perdido independentemente da etapa' },
+                        mark: { type: 'string', enum: ['won', 'lost', 'reopen'], description: 'Opcional: won/lost marca o deal como ganho/perdido independentemente da etapa; reopen reabre um card ganho/perdido ao mover para etapa comum (422 se o destino for Ganho, Perdido ou coluna de categoria)' },
                       },
                       required: ['to_stage_id'],
                     },
@@ -817,7 +817,7 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
                       additionalProperties: false,
                       properties: {
                         to_stage_label: { type: 'string', description: 'Label do estágio de destino (case-insensitive) dentro do board do deal' },
-                        mark: { type: 'string', enum: ['won', 'lost'], description: 'Opcional: marca o deal como ganho/perdido independentemente da etapa' },
+                        mark: { type: 'string', enum: ['won', 'lost', 'reopen'], description: 'Opcional: won/lost marca o deal como ganho/perdido independentemente da etapa; reopen reabre um card ganho/perdido ao mover para etapa comum (422 se o destino for Ganho, Perdido ou coluna de categoria)' },
                       },
                       required: ['to_stage_label'],
                     },
@@ -827,6 +827,7 @@ export function getPublicApiOpenApiDocument(): OpenApiDocument {
                   byId: { value: { to_stage_id: '00000000-0000-0000-0000-000000000000' } },
                   byLabel: { value: { to_stage_label: 'Em conversa' } },
                   won: { value: { to_stage_label: 'Ganho', mark: 'won' } },
+                  reopen: { value: { to_stage_label: 'Campanha Novembro', mark: 'reopen' } },
                 },
               },
             },
