@@ -110,6 +110,12 @@ describe('moveStageByDealId — o que é gravado', () => {
     expect(updates).toHaveLength(0);
   });
 
+  it('AC4: reopen para Perdido devolve 422 e não grava nada', async () => {
+    const r = await moveStageByDealId({ organizationId: ORG, dealId: DEAL, target: { to_stage_id: PERDIDO }, mark: 'reopen' });
+    expect(r.status).toBe(422);
+    expect(updates).toHaveLength(0);
+  });
+
   it('AC5: sem mark, mover card perdido para etapa comum mantém o fechamento (como hoje)', async () => {
     const r = await moveStageByDealId({ organizationId: ORG, dealId: DEAL, target: { to_stage_id: COMUM } });
     expect(r.status).toBe(200);
