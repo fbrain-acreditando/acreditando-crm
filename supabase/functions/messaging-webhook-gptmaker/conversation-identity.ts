@@ -29,6 +29,9 @@
  * 5. Lid que resolveu e tinha conversa antiga ⇒ deixa um **ponteiro** na antiga
  *    (`sucedida_por`), para ela não emudecer sem nada apontando para a nova.
  *
+ * Story 2.73: ANTES de tudo (antes até do passo 1), chave `public-api-…` é
+ * ignorada — nenhuma porta é chamada. Ver `chave-public-api.ts`.
+ *
  * Story 2.63: no passo 2, se a chave EXATA não acha conversa e a chave é de
  * telefone, procura a chave com a OUTRA forma do número (com/sem o 9º dígito).
  * Achou por ela ⇒ reusa e alinha a chave à do fornecedor (`alinharChave`).
@@ -47,6 +50,7 @@ import { MOTIVO_AMBIGUO, MOTIVO_SEM_TELEFONE, type AliasStatus } from "./alias-m
 import { chatIdPorTelefone } from "./parser.ts";
 import { mascararTelefone, outrasFormas } from "./nono-digito.ts";
 import type { AlinhamentoResultado } from "./chave-da-conversa.ts";
+import { ehChavePublicApi, logDoEventoIgnorado } from "./chave-public-api.ts";
 
 export interface IdentityEvent {
   chatId: string;
@@ -137,6 +141,12 @@ export interface IdentityOutcome {
   identidadeNaoConfirmada: boolean;
   /** Story 2.63 — a conversa foi achada pela OUTRA forma do telefone? */
   casouPelaVariante: boolean;
+  /**
+   * Story 2.73 — a chave era `public-api-…` (nota gravada pela API pública da
+   * IA do WhatsApp). Nada foi procurado nem criado, e `conversationId` vem
+   * `null` DE PROPÓSITO: o chamador não deve tratar isso como falha.
+   */
+  ignoradoPorChavePublicApi: boolean;
 }
 
 /** Nome mostrado na conversa/card. Sem nome e sem telefone, sobra a chave. */
@@ -168,6 +178,7 @@ interface ProgressoParcial {
   reusouConversa: boolean;
   identidadeNaoConfirmada: boolean;
   casouPelaVariante: boolean;
+  ignoradoPorChavePublicApi: boolean;
 }
 
 /**
@@ -189,6 +200,7 @@ export async function garantirIdentidadeDaConversa(
     reusouConversa: false,
     identidadeNaoConfirmada: false,
     casouPelaVariante: false,
+    ignoradoPorChavePublicApi: false,
   };
 
   try {
@@ -211,6 +223,19 @@ async function decidir(
   event: IdentityEvent,
   progresso: ProgressoParcial
 ): Promise<IdentityOutcome> {
+  // ---------------------------------------------------------------------------
+  // 0. Story 2.73 — chave `public-api-…` não é conversa de ninguém
+  // ---------------------------------------------------------------------------
+  // 🔴 Fica ANTES do passo do lid de propósito: a variante `public-api-…@lid`
+  // passaria por `resolverAlias` e, sem resolver, por `marcarIdentidade` —
+  // gravando um apelido `api-…@lid` falso (8 medidos na limpeza de 10/11).
+  // Aqui nenhuma porta é chamada: nem busca, nem contato, nem conversa, nem card.
+  if (ehChavePublicApi(event.chatId)) {
+    ports.log(logDoEventoIgnorado(event.chatId));
+    progresso.ignoradoPorChavePublicApi = true;
+    return { ...progresso };
+  }
+
   // ---------------------------------------------------------------------------
   // 1. `@lid` → telefone, ANTES de procurar conversa e contato (AC2)
   // ---------------------------------------------------------------------------

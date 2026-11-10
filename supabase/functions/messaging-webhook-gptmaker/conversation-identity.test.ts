@@ -907,3 +907,180 @@ describe('2.63 AC4/AC5 — contato e card: o reuso pela variante leva a guarda j
     expect(banco.contatos).toHaveLength(2);
   });
 });
+
+// =============================================================================
+// Story 2.73 — chave `public-api-…`: nenhuma porta é chamada
+// =============================================================================
+//
+// A nota gravada pela API pública da IA do WhatsApp (`add-message`) voltava com
+// a chave `public-api-{workspace}-{canal}-{telefone}` e criava contato + conversa
+// + card falsos em "Lead novo" (160 em 10/11). Na variante `@lid`, ainda gravava
+// um apelido `api-…@lid` (8 apagados na limpeza). Estrutura medida no banco;
+// telefones e lids fictícios.
+
+const WS_273 = '3E12E22DF12D30FBB326262F356E288B';
+const CANAL_273 = '3E14B10711E1C0FE16B42EC236EAE1D6';
+const TEL_273 = '5511900001486'; // fictício
+const LID_273 = '150439900001486@lid'; // fictício
+const PUBLIC_TEL_273 = `public-api-${WS_273}-${CANAL_273}-${TEL_273}`;
+const PUBLIC_LID_273 = `public-api-${WS_273}-${CANAL_273}-${LID_273}`;
+const REAL_TEL_273 = `${CANAL_273}-${TEL_273}`;
+
+/** O que o parser de hoje produz para cada variante (ver `parser.ts`). */
+const EVENTOS_PUBLIC_API: Array<{ nome: string; evento: Parameters<typeof garantirIdentidadeDaConversa>[1] }> = [
+  {
+    nome: 'chave de telefone, sem nome e sem telefone (o caso medido)',
+    evento: { chatId: PUBLIC_TEL_273, lid: null, contactName: null, contactPhone: null },
+  },
+  {
+    nome: 'chave de telefone COM nome e telefone no evento',
+    evento: { chatId: PUBLIC_TEL_273, lid: null, contactName: 'Cliente Fictício', contactPhone: `+${TEL_273}` },
+  },
+  {
+    // `recipientFromContextId` corta no 1º hífen ⇒ o lid vira `api-…@lid`.
+    nome: 'variante @lid (lid = "api-…@lid", como o parser extrai)',
+    evento: {
+      chatId: PUBLIC_LID_273,
+      lid: `api-${WS_273}-${CANAL_273}-${LID_273}`,
+      contactName: null,
+      contactPhone: null,
+    },
+  },
+  {
+    nome: 'variante @lid COM telefone no evento',
+    evento: {
+      chatId: PUBLIC_LID_273,
+      lid: `api-${WS_273}-${CANAL_273}-${LID_273}`,
+      contactName: null,
+      contactPhone: `+${TEL_273}`,
+    },
+  },
+  {
+    nome: 'malformada (AC6): "public-api-"',
+    evento: { chatId: 'public-api-', lid: null, contactName: null, contactPhone: null },
+  },
+  {
+    nome: 'malformada (AC6): "public-api-ABC"',
+    evento: { chatId: 'public-api-ABC', lid: null, contactName: null, contactPhone: null },
+  },
+];
+
+describe('2.73 AC2 — chave public-api-… nunca cria contato, conversa, card nem apelido', () => {
+  for (const caso of EVENTOS_PUBLIC_API) {
+    it(caso.nome, async () => {
+      const m = montar({ alias: { phone: `+${TEL_273}`, status: 'resolved' } });
+      const logs: string[] = [];
+      m.ports.log = (msg) => logs.push(msg);
+
+      const r = await garantirIdentidadeDaConversa(m.ports, caso.evento);
+
+      // 🔴 Nenhuma porta: nem busca, nem alias, nem contato, nem conversa, nem card.
+      expect(m.chamadas).toEqual([]);
+      expect(m.conversasCriadas).toEqual([]);
+      expect(m.cardsPedidos).toEqual([]);
+      expect(m.marcacoes).toEqual([]);
+      expect(m.sucessoes).toEqual([]);
+      expect(m.chavesProcuradas).toEqual([]);
+
+      expect(r.ignoradoPorChavePublicApi).toBe(true);
+      expect(r.conversationId).toBeNull();
+      expect(r.contactId).toBeNull();
+      expect(r.dealId).toBeNull();
+      expect(r.reusouConversa).toBe(false);
+      expect(r.chatIdUsado).toBe(caso.evento.chatId);
+
+      // AC4 — o rastro sai no log, com telefone mascarado.
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatch(/^\[GPTMaker\] public-api — evento ignorado/);
+      expect(logs[0]).not.toContain(TEL_273);
+      expect(logs[0]).not.toContain('150439900001486');
+    });
+  }
+
+  it('o log da chave completa aponta a conversa real com os 4 últimos dígitos', async () => {
+    const m = montar();
+    const logs: string[] = [];
+    m.ports.log = (msg) => logs.push(msg);
+
+    await garantirIdentidadeDaConversa(m.ports, EVENTOS_PUBLIC_API[0].evento);
+
+    expect(logs).toEqual([
+      `[GPTMaker] public-api — evento ignorado (conversa real ${CANAL_273}-…1486)`,
+    ]);
+  });
+});
+
+describe('2.73 AC3 — também não toca a conversa real', () => {
+  it('conversa {canal}-{telefone} existe ⇒ não é procurada nem devolvida', async () => {
+    const m = montar({
+      conversas: { [REAL_TEL_273]: { conversationId: 'conv-real', contactId: 'contato-real' } },
+    });
+
+    const r = await garantirIdentidadeDaConversa(m.ports, EVENTOS_PUBLIC_API[1].evento);
+
+    // Sem conversa devolvida, o chamador não insere mensagem, não muda prévia e
+    // não move card.
+    expect(r.conversationId).toBeNull();
+    expect(r.ignoradoPorChavePublicApi).toBe(true);
+    expect(m.chavesProcuradas).toEqual([]);
+    expect(m.conversas[REAL_TEL_273]).toEqual({ conversationId: 'conv-real', contactId: 'contato-real' });
+    expect(m.alinhamentos).toEqual([]);
+  });
+});
+
+describe('2.73 AC5 — o fluxo normal não muda', () => {
+  it('chave {canal}-{telefone} nova ⇒ cria contato, conversa e card como hoje', async () => {
+    const m = montar();
+
+    const r = await garantirIdentidadeDaConversa(m.ports, {
+      chatId: REAL_TEL_273,
+      lid: null,
+      contactName: 'Cliente Fictício',
+      contactPhone: `+${TEL_273}`,
+    });
+
+    expect(r.ignoradoPorChavePublicApi).toBe(false);
+    expect(r.conversationId).toBe('conv-nova-1');
+    expect(r.dealId).toBe('deal-1');
+    expect(m.conversasCriadas).toHaveLength(1);
+    expect(m.conversasCriadas[0]).toMatchObject({ chatId: REAL_TEL_273, phone: `+${TEL_273}` });
+    expect(m.cardsPedidos).toHaveLength(1);
+    expect(m.cardsPedidos[0]).toMatchObject({ titulo: 'Cliente Fictício' });
+  });
+
+  it('chave {canal}-{n}@lid sem alias ⇒ cria conversa e card e marca identidade como hoje', async () => {
+    const m = montar();
+
+    const r = await garantirIdentidadeDaConversa(m.ports, {
+      chatId: `${CANAL_273}-${LID_273}`,
+      lid: LID_273,
+      contactName: null,
+      contactPhone: null,
+    });
+
+    expect(r.ignoradoPorChavePublicApi).toBe(false);
+    expect(r.conversationId).toBe('conv-nova-1');
+    expect(r.identidadeNaoConfirmada).toBe(true);
+    expect(m.chamadas[0]).toBe('resolverAlias');
+    expect(m.marcacoes).toHaveLength(1);
+    expect(m.marcacoes[0]).toMatchObject({ alias: LID_273, motivo: MOTIVO_SEM_TELEFONE });
+  });
+
+  it('busca pela variante do 9º dígito continua igual (12 no evento, 13 gravada)', async () => {
+    const chave13 = `${CANAL_273}-5511987651486`;
+    const chave12 = `${CANAL_273}-551187651486`;
+    const m = montar({ conversas: { [chave13]: { conversationId: 'conv-13', contactId: 'c-13' } } });
+
+    const r = await garantirIdentidadeDaConversa(m.ports, {
+      chatId: chave12,
+      lid: null,
+      contactName: null,
+      contactPhone: '+551187651486',
+    });
+
+    expect(r.ignoradoPorChavePublicApi).toBe(false);
+    expect(r.conversationId).toBe('conv-13');
+    expect(r.casouPelaVariante).toBe(true);
+    expect(m.chavesProcuradas).toEqual([chave12, chave13]);
+  });
+});

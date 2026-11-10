@@ -101,6 +101,10 @@ import {
 // Story 2.63 — conversa achada pela outra forma do telefone (com/sem o 9º
 // dígito) passa a ter a chave do fornecedor; senão o envio pelo CRM falha.
 import { alinharChaveDaConversa, type ChaveConversaClient } from "./chave-da-conversa.ts";
+// Story 2.73 — a nota gravada pela API pública da IA do WhatsApp (`add-message`)
+// volta com a chave `public-api-…` e criava contato + conversa + card falsos em
+// "Lead novo" (160 em 10/11). Evento com essa chave é registrado e ignorado.
+import { ehChavePublicApi, logDoEventoIgnorado } from "./chave-public-api.ts";
 
 // =============================================================================
 // TYPES
@@ -250,6 +254,26 @@ Deno.serve(async (req) => {
   // ---------------------------------------------------------------------------
   try {
     // -------------------------------------------------------------------------
+    // CHAVE `public-api-…` — registra e ignora (story 2.73, opção A)
+    // -------------------------------------------------------------------------
+    // 🔴 Fica ANTES do mapa de apelidos de propósito: a variante
+    // `public-api-…@lid` vira `normalized.lid = "api-…@lid"` e gravaria um par
+    // apelido → telefone falso. O evento já está em `messaging_webhook_events`
+    // (gravado acima) para auditoria; aqui só é marcado processado, sem `error`.
+    // A nota NÃO vai para a conversa real: apareceria como mensagem enviada.
+    if (ehChavePublicApi(normalized.chatId)) {
+      console.log(logDoEventoIgnorado(normalized.chatId, rawEvent || normalized.kind));
+
+      await supabase
+        .from("messaging_webhook_events")
+        .update({ processed: true, processed_at: new Date().toISOString() })
+        .eq("channel_id", channelId)
+        .eq("external_event_id", externalEventId);
+
+      return json(200, { ok: true, event: rawEvent, ignored: "public-api" });
+    }
+
+    // -------------------------------------------------------------------------
     // MAPA DE APELIDOS — grava o par `@lid → telefone` (story 2.56, AC1)
     // -------------------------------------------------------------------------
     // Antes de qualquer processamento: se este evento trouxer o lid E um
@@ -342,7 +366,11 @@ async function handleMessage(
 ) {
   const chatId = event.chatId!;
 
-  const { conversationId } = await ensureConversation(supabase, channel, event);
+  const garantida = await ensureConversation(supabase, channel, event);
+  // Story 2.73 — chave `public-api-…`: nada a inserir (o desvio do handler já
+  // cobre; esta é a segunda camada).
+  if (!garantida) return;
+  const { conversationId } = garantida;
 
   const externalMessageId =
     event.externalMessageId ?? `gptmaker:${chatId}:${event.timestamp.getTime()}`;
@@ -476,7 +504,10 @@ async function handleTransfer(
   channel: ChannelRow,
   event: NormalizedEvent
 ) {
-  const { conversationId } = await ensureConversation(supabase, channel, event);
+  const garantida = await ensureConversation(supabase, channel, event);
+  // Story 2.73 — chave `public-api-…`: não há conversa real a marcar.
+  if (!garantida) return;
+  const { conversationId } = garantida;
 
   const { data: conv, error: readErr } = await supabase
     .from("messaging_conversations")
@@ -921,12 +952,15 @@ async function findConversation(
  * Antes, a perdedora estourava e **a mensagem do cliente era perdida**; só a
  * resposta da IA aparecia. Agora a perdedora relê e segue com a conversa da
  * vencedora.
+ *
+ * Devolve `null` (sem lançar) só num caso: chave `public-api-…`, que a decisão
+ * ignora de propósito (story 2.73). Quem chama não insere nada.
  */
 async function ensureConversation(
   supabase: ReturnType<typeof createClient>,
   channel: ChannelRow,
   event: NormalizedEvent
-): Promise<{ conversationId: string; contactId: string | null }> {
+): Promise<{ conversationId: string; contactId: string | null } | null> {
   const chatIdOriginal = event.chatId!;
 
   const ports: ConversationPorts = {
@@ -1043,6 +1077,11 @@ async function ensureConversation(
     contactName: event.contactName,
     contactPhone: event.contactPhone,
   });
+
+  // Story 2.73 — chave `public-api-…`: a decisão não procurou nem criou nada, de
+  // propósito. Não é falha: devolve `null` SEM lançar, para o evento ficar
+  // `processed = true` sem `error`.
+  if (resultado.ignoradoPorChavePublicApi) return null;
 
   if (!resultado.conversationId) {
     // A decisão nunca lança; quem lança é este chamador, de propósito. O handler
