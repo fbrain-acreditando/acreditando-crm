@@ -288,7 +288,7 @@ describe('AC3 — conversa existente', () => {
   it('clique seguinte com conversa inicio_falhou e 0 mensagens ⇒ reaproveita: mesma conversa, 1 disparo, marca removida', async () => {
     banco.db.tabelas.messaging_conversations.push({
       id: 'conv-falhou', organization_id: ORG, channel_id: CANAL, contact_id: CONTATO,
-      business_unit_id: UNIDADE_DO_CANAL, external_contact_id: CHAVE,
+      business_unit_id: UNIDADE_DO_CANAL, external_contact_id: CHAVE, message_count: 0,
       metadata: { gptmaker_chat_id: CHAVE, inicio_falhou: true, inicio_falhou_em: 'ontem', iniciada_por: 'outra' },
     });
     const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá de novo' }));
@@ -471,6 +471,32 @@ describe('AC4.3 — falha no disparo', () => {
     expect(logs('erro_sem_desfazer')[0].resource_id).toBe(conversas()[0].id);
   });
 
+  it('🎯 o eco chega ENTRE a contagem e o DELETE ⇒ o DELETE condicionado não apaga (conversa e mensagem ficam)', async () => {
+    h.prov.sendMessage = falhar();
+    banco.db.antesDaProxima('messaging_conversations', 'delete', () => {
+      const c = conversas()[0];
+      banco.db.tabelas.messaging_messages.push({ id: 'eco-no-meio', conversation_id: c.id });
+      c.message_count = 1; // o trigger de messaging_messages, na mesma transação
+    });
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(200);
+    expect(conversas()).toHaveLength(1);
+    expect(conversas()[0].metadata.inicio_falhou).toBeUndefined();
+    expect(banco.db.tabelas.messaging_messages.map((m) => m.id)).toEqual(['eco-no-meio']);
+  });
+
+  it('🎯 erro do fornecedor com o telefone/chatId ⇒ log e registro só com dígitos mascarados', async () => {
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: `GPT Maker API request failed: 400 chat ${CHAVE} phone 5512997534278`, retryable: false },
+    }));
+    await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    const logado = (console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls.flat().join(' ');
+    expect(logado).toContain('5512*****4278');
+    expect(logado).not.toContain('5512997534278');
+    expect(JSON.stringify(banco.db.tabelas.audit_logs)).not.toContain('5512997534278');
+  });
+
   it('o eco chegou apesar do erro ⇒ não apaga nem marca: a conversa é real', async () => {
     h.prov.sendMessage = vi.fn(async (p: { conversationId: string }) => {
       banco.db.tabelas.messaging_messages.push({ id: 'eco', conversation_id: p.conversationId });
@@ -486,34 +512,98 @@ describe('AC4.3 — falha no disparo', () => {
 // ===========================================================================
 // AC3 — teto de 20 por dia
 // ===========================================================================
-describe('AC3 — teto de 20 conversas iniciadas por dia', () => {
-  function semear(n: number, quando: number, resultado = 'sucesso') {
+describe('AC3 — teto de 20 conversas iniciadas por dia (conta as conversas pré-gravadas)', () => {
+  /** Conversas iniciadas pelo CRM, de OUTROS contatos (não disparam o 409 deste card). */
+  function semear(n: number, quando: number, extra: Record<string, unknown> = {}) {
+    const marca = Object.keys(extra).join('-') || 'base';
     for (let i = 0; i < n; i++) {
-      banco.db.tabelas.audit_logs.push({
-        id: `log-${resultado}-${quando}-${i}`, organization_id: ORG, action: 'whatsapp_conversa_iniciada',
-        details: { resultado }, created_at: new Date(quando).toISOString(),
+      banco.db.tabelas.messaging_conversations.push({
+        id: `semente-${marca}-${quando}-${i}`,
+        organization_id: ORG,
+        channel_id: CANAL,
+        contact_id: `outro-contato-${marca}-${quando}-${i}`,
+        external_contact_id: `${CANAL_FORNECEDOR}-semente-${marca}-${quando}-${i}`,
+        message_count: 1,
+        metadata: { iniciada_pelo_crm: true, iniciada_em: new Date(quando).toISOString(), ...extra },
       });
     }
   }
 
-  it('20 sucessos hoje ⇒ a 21ª é 429 com o texto da tela, sem chamar o fornecedor', async () => {
+  /** Mais um card com contato próprio (telefone diferente). */
+  function outroCard(i: number) {
+    const deal = `d1000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const contato = `c1000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    banco.db.tabelas.deals.push({
+      id: deal, organization_id: ORG, contact_id: contato, board_id: BOARD, stage_id: STAGE_LEAD_NOVO, deleted_at: null,
+    });
+    banco.db.tabelas.contacts.push({
+      id: contato, organization_id: ORG, name: `Lead ${i}`, phone: `+55129${80000000 + i}`, deleted_at: null,
+    });
+    return deal;
+  }
+
+  it('20 iniciadas hoje ⇒ a 21ª é 429 com o texto da tela, sem chamar o fornecedor', async () => {
     semear(20, HOJE - 60_000);
-    semear(3, HOJE - 60_000, 'erro_envio'); // erro não conta
+    semear(3, HOJE - 60_000, { inicio_falhou: true }); // desfeitas não contam
     const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
     expect(res.status).toBe(429);
     expect((await res.json()).error).toBe('Limite de 20 conversas iniciadas hoje atingido. Tente amanhã.');
     expect(h.prov.sendMessage).not.toHaveBeenCalled();
-    expect(conversas()).toHaveLength(0);
+    expect(conversas().filter((c) => c.contact_id === CONTATO)).toHaveLength(0);
   });
 
-  it('19 sucessos hoje ⇒ a 20ª passa e o contador vira 20', async () => {
+  it('🎯 20 pré-gravadas EM ANDAMENTO (ainda sem registro de sucesso) barram a 21ª', async () => {
+    semear(20, HOJE - 5_000, { humano_pedido: true }); // disparos em curso: 0 linhas em audit_logs
+    expect(logs()).toHaveLength(0);
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(429);
+    expect(h.prov.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('🎯 audit_logs falhando em TODOS os envios não libera a 21ª', async () => {
+    for (let i = 0; i < 200; i++) banco.db.falharProxima('audit_logs', 'insert', { message: 'audit fora' });
+    for (let i = 1; i <= 20; i++) {
+      const r = await POST(pedirJson({ dealId: outroCard(i), text: `Olá ${i}` }));
+      expect(r.status).toBe(200);
+    }
+    expect(banco.db.tabelas.audit_logs).toHaveLength(0); // nenhum registro gravou
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(429);
+    expect(h.prov.sendMessage).toHaveBeenCalledTimes(20);
+  });
+
+  it('🎯 corrida: 19 no dia e dois cliques simultâneos em cards diferentes ⇒ no máximo 1 dispara, teto nunca passa de 20', async () => {
+    semear(19, HOJE - 60_000);
+    const [a, b] = await Promise.all([
+      POST(pedirJson({ dealId: outroCard(1), text: 'um' })),
+      POST(pedirJson({ dealId: outroCard(2), text: 'dois' })),
+    ]);
+    expect([a.status, b.status]).toContain(429);
+    expect((h.prov.sendMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1);
+    const doDia = conversas().filter((c) => c.metadata?.iniciada_pelo_crm && !c.metadata?.inicio_falhou);
+    expect(doDia.length).toBeLessThanOrEqual(20);
+  });
+
+  it('reaproveitar uma conversa inicio_falhou também ocupa a vaga', async () => {
+    semear(20, HOJE - 60_000);
+    banco.db.tabelas.messaging_conversations.push({
+      id: 'conv-falhou', organization_id: ORG, channel_id: CANAL, contact_id: CONTATO, external_contact_id: CHAVE,
+      message_count: 0,
+      metadata: { inicio_falhou: true, iniciada_pelo_crm: true, iniciada_em: new Date(HOJE).toISOString() },
+    });
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(429);
+    expect(h.prov.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('19 iniciadas hoje ⇒ a 20ª passa e o contador vira 20', async () => {
     semear(19, HOJE - 60_000);
     const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
     expect(res.status).toBe(200);
     expect((await res.json()).usadasHoje).toBe(20);
   });
 
-  it('20 sucessos ONTEM (Brasília) ⇒ hoje libera', async () => {
+  it('20 iniciadas ONTEM (Brasília) ⇒ hoje libera', async () => {
     semear(20, Date.parse('2026-11-13T02:59:00Z')); // 23:59 de 12/11 em Brasília
     const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
     expect(res.status).toBe(200);
@@ -528,6 +618,7 @@ describe('AC3 — teto de 20 conversas iniciadas por dia', () => {
 
   it('GET devolve o contador do dia', async () => {
     semear(7, HOJE - 60_000);
+    semear(2, HOJE - 60_000, { inicio_falhou: true });
     const res = await GET();
     expect(await res.json()).toEqual({ usadasHoje: 7, limite: 20 });
   });

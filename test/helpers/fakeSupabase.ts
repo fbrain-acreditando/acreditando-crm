@@ -250,6 +250,8 @@ export class FakeSupabase {
       for (const bruto of entradas) {
         const nova: Linha = { ...bruto };
         if (!nova.id) nova.id = crypto.randomUUID();
+        // Story 2.52 — DEFAULT 0 da coluna (o DELETE de desfazer filtra por ele).
+        if (tabela === 'messaging_conversations' && nova.message_count === undefined) nova.message_count = 0;
         const existente = linhas.find((l) => l.id === nova.id);
         if (existente) {
           if (op === 'insert') return { data: null, error: { code: '23505', message: 'duplicate pkey' } };

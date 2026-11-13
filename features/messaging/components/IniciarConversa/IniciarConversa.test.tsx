@@ -158,7 +158,7 @@ describe('Compositor da 1ª mensagem (AC6)', () => {
     expect(onNavegar).toHaveBeenCalled();
   });
 
-  it('erro do fornecedor ⇒ toast "Não foi possível iniciar a conversa: …", sem navegar, e o botão trava 60 s', async () => {
+  it('erro do fornecedor ⇒ toast "Não foi possível iniciar a conversa: …", sem navegar, e o botão volta NA HORA', async () => {
     respostas['POST /api/messaging/conversations/start'] = {
       status: 502,
       body: { error: 'Não foi possível iniciar a conversa: o WhatsApp recusou o envio (código 400)' },
@@ -174,12 +174,87 @@ describe('Compositor da 1ª mensagem (AC6)', () => {
       )
     );
     expect(h.push).not.toHaveBeenCalled();
-    const botao = screen.getByRole('button', { name: /Aguarde 60 s/ });
-    expect(botao).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Aguarde/ })).toBeNull();
+    const botao = screen.getByRole('button', { name: 'Enviar' });
+    expect(botao).toBeEnabled();
     await act(async () => {
       await userEvent.click(botao);
     });
+    expect(posts()).toHaveLength(2);
+  });
+
+  it('422 ⇒ o botão também volta na hora', async () => {
+    respostas['POST /api/messaging/conversations/start'] = { status: 422, body: { error: 'Contato sem telefone' } };
+    await abrir();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Primeira mensagem' }), 'Olá');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+    await waitFor(() =>
+      expect(h.toast).toHaveBeenCalledWith('Não foi possível iniciar a conversa: Contato sem telefone', 'error')
+    );
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+  });
+
+  it('sucesso ⇒ trava 60 s: reabrir o compositor do mesmo card mostra "Aguarde 60 s" desabilitado', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <BotaoConversaDoCard dealId={DEAL} contact={CONTATO} onNavegar={vi.fn()} />
+      </QueryClientProvider>
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Iniciar conversa no WhatsApp/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Primeira mensagem' }), 'Olá');
+    await userEvent.click(screen.getByRole('button', { name: /Enviar/ }));
+    await waitFor(() => expect(h.push).toHaveBeenCalledWith('/messaging?id=conv-1'));
+
+    rerender(
+      <QueryClientProvider client={qc}>
+        <BotaoConversaDoCard dealId={DEAL} contact={CONTATO} onNavegar={vi.fn()} />
+      </QueryClientProvider>
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Iniciar conversa no WhatsApp/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Primeira mensagem' }), 'De novo');
+    const botao = screen.getByRole('button', { name: /Aguarde 60 s/ });
+    expect(botao).toBeDisabled();
     expect(posts()).toHaveLength(1);
+  });
+
+  it('conversão do áudio falhou ⇒ aviso em pt-BR e nada para enviar', async () => {
+    class GravadorWebm {
+      static isTypeSupported(t: string) {
+        return t === 'audio/webm';
+      }
+      state = 'inactive';
+      mimeType = 'audio/webm';
+      stream = { getTracks: () => [{ stop: vi.fn() }] };
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      onstop: (() => void | Promise<void>) | null = null;
+      start() {
+        this.state = 'recording';
+        this.ondataavailable?.({ data: new Blob([new Uint8Array(8)], { type: 'audio/webm' }) });
+      }
+      async stop() {
+        this.state = 'inactive';
+        await this.onstop?.();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', GravadorWebm);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => ({})) },
+    });
+    const erroOriginal = console.error;
+    console.error = vi.fn();
+    try {
+      await abrir();
+      await userEvent.click(screen.getByRole('button', { name: /Gravar áudio/ }));
+      await userEvent.click(await screen.findByRole('button', { name: /Parar/ }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Não deu para preparar o áudio para o WhatsApp. Grave de novo ou escreva a mensagem.'
+      );
+      expect(screen.getByRole('button', { name: /Enviar/ })).toBeDisabled();
+    } finally {
+      console.error = erroOriginal;
+    }
   });
 
   it('429 ⇒ toast com o texto do teto', async () => {
