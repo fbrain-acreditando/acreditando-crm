@@ -51,6 +51,14 @@ export function chavesDaConversa(canalDoFornecedor: string, digitos: string): st
   return chaves;
 }
 
+/**
+ * Mascara qualquer sequência de 10+ dígitos de um texto livre (mensagem de erro do
+ * fornecedor costuma trazer o telefone ou o chatId) antes de logar ou gravar.
+ */
+export function mascararDigitos(texto: string): string {
+  return texto.replace(/\d{10,}/g, (d) => mascararTelefone(d));
+}
+
 /** `5512997534278` ⇒ `5512*****4278` (AC7: o registro não guarda o número inteiro). */
 export function mascararTelefone(digitos: string): string {
   if (digitos.length <= 8) return '*'.repeat(digitos.length);

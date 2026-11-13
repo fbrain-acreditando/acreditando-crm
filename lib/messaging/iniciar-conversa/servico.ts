@@ -21,7 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SendMessageParams, SendMessageResult } from '@/lib/messaging/types';
-import { chavesDaConversa, mascararTelefone, normalizarTelefoneWhatsApp } from './telefone';
+import { chavesDaConversa, mascararDigitos, mascararTelefone, normalizarTelefoneWhatsApp } from './telefone';
 import {
   ACAO_ASSUMIR,
   ACAO_HUMANO,
@@ -100,16 +100,28 @@ export async function registrar(db: SupabaseClient, r: Registro): Promise<void> 
   }
 }
 
-/** Conversas iniciadas COM SUCESSO hoje (dia de Brasília) pela organização. */
+/**
+ * Conversas iniciadas pelo CRM hoje (dia de Brasília) pela organização — QA 2.52,
+ * achados 1 e 2.
+ *
+ * Conta as CONVERSAS pré-gravadas (`iniciada_pelo_crm` e `iniciada_em` de hoje),
+ * não o registro de sucesso em `audit_logs`: a pré-gravação é a RESERVA da vaga.
+ * Falha ao gravar o registro não libera o teto, e uma conversa em disparo (até
+ * 15 s) já ocupa a vaga. Saem da conta só as desfeitas: apagadas, ou marcadas
+ * `inicio_falhou` (o reaproveitamento remove a marca e ela volta a contar).
+ *
+ * `iniciada_em` é sempre ISO UTC (`toISOString`) ⇒ a comparação de texto com o
+ * início do dia, também em ISO UTC, é cronológica.
+ */
 export async function contarIniciadasHoje(db: SupabaseClient, orgId: string): Promise<number> {
   const desde = inicioDoDiaEmSaoPaulo(new Date(agoraMs()));
   const { count, error } = await db
-    .from('audit_logs')
+    .from('messaging_conversations')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', orgId)
-    .eq('action', ACAO_INICIAR)
-    .eq('details->>resultado', 'sucesso')
-    .gte('created_at', desde);
+    .eq('metadata->>iniciada_pelo_crm', 'true')
+    .gte('metadata->>iniciada_em', desde)
+    .is('metadata->inicio_falhou', null);
   if (error) throw new Error(`Falha ao contar conversas iniciadas hoje: ${error.message}`);
   return count ?? 0;
 }
@@ -209,7 +221,19 @@ function ehDuplicada(err: { code?: string; message?: string } | null): boolean {
 
 type Desfeito = 'apagada' | 'marcada' | 'erro_sem_desfazer' | 'mensagem_saiu';
 
-/** AC4.3 — desfaz a pré-gravação da própria rota. */
+/**
+ * AC4.3 — desfaz a pré-gravação da própria rota.
+ *
+ * QA 2.52, achado 3 — o DELETE é condicionado NO PRÓPRIO COMANDO a
+ * `message_count = 0`. O contador é mantido pelo trigger de `messaging_messages`
+ * (`20260403120000_fix_reaction_message_trigger.sql`), na MESMA transação do
+ * INSERT da mensagem: se o eco chegar entre a contagem e o DELETE, o Postgres
+ * reavalia a linha travada, vê `message_count = 1` e não apaga (o CASCADE não leva
+ * a mensagem). Sem RPC e sem migration.
+ * ⚠️ Limitação: reação não incrementa o contador; um eco que fosse só reação não
+ * protegeria — não acontece numa conversa recém-criada (o 1º eco é a mensagem).
+ * Apagou 0 linhas ⇒ reconta: há mensagem ⇒ a conversa é real; não há ⇒ marca.
+ */
 async function desfazer(
   db: SupabaseClient,
   orgId: string,
@@ -225,10 +249,22 @@ async function desfazer(
   let resultado: Desfeito;
   const apagou =
     mensagens === 0
-      ? await db.from('messaging_conversations').delete().eq('id', conversationId).eq('organization_id', orgId)
-      : { error: { message: 'contagem de mensagens indisponível' } };
+      ? await db
+          .from('messaging_conversations')
+          .delete()
+          .eq('id', conversationId)
+          .eq('organization_id', orgId)
+          .eq('message_count', 0)
+          .select('id')
+      : { data: null, error: { message: 'contagem de mensagens indisponível' } };
 
-  if (!apagou.error) {
+  if (!apagou.error && (apagou.data?.length ?? 0) === 0) {
+    // Nada apagado: o eco chegou no meio? Reconta antes de mexer em qualquer coisa.
+    const depois = await contarMensagens(db, conversationId);
+    if (depois !== null && depois > 0) return 'mensagem_saiu';
+  }
+
+  if (!apagou.error && (apagou.data?.length ?? 0) > 0) {
     resultado = 'apagada';
   } else {
     const { error } = await db
@@ -413,6 +449,29 @@ export async function iniciarConversa(args: {
     conversationId = data.id as string;
   }
 
+  // ---- 5b. A pré-gravação é a reserva da vaga: reconta COM ela (QA, achado 2) --
+  // Dois cliques simultâneos com 19 no dia passam juntos pela contagem do passo 4;
+  // aqui cada um já se enxerga na conta. Passou de 20 ⇒ desfaz a própria reserva e
+  // não dispara. Na corrida, os dois podem desistir (erra para o lado seguro: o
+  // teto nunca é ultrapassado).
+  let usadasComEsta: number | null;
+  try {
+    usadasComEsta = await contarIniciadasHoje(db, orgId);
+  } catch {
+    usadasComEsta = null;
+  }
+  if (usadasComEsta === null || usadasComEsta > LIMITE_DIARIO) {
+    const desfeito = await desfazer(db, orgId, conversationId, metadataGravado, null);
+    if (usadasComEsta === null) {
+      return { status: 500, corpo: { error: 'Falha ao conferir o limite do dia.' } };
+    }
+    await registrar(db, {
+      acao: ACAO_INICIAR, orgId, userId, conversationId, resultado: 'limite_diario', severidade: 'warning',
+      detalhes: { ...base, etapa: 'reserva', desfeito },
+    });
+    return { status: 429, corpo: { error: TEXTO_LIMITE_ATINGIDO, usadasHoje: LIMITE_DIARIO, limite: LIMITE_DIARIO } };
+  }
+
   // ---- 6. Áudio: sobe DEPOIS do INSERT (V16) ----------------------------------
   let caminhoDoAudio: string | null = null;
   let conteudoDoEnvio: SendMessageParams['content'];
@@ -423,7 +482,7 @@ export async function iniciarConversa(args: {
       .from(BUCKET_DE_MIDIA)
       .upload(caminhoDoAudio, bytes, { contentType: conteudo.mime, upsert: false });
     if (upErr) {
-      console.error('[iniciar-conversa] falha ao subir o áudio:', upErr.message);
+      console.error('[iniciar-conversa] falha ao subir o áudio:', mascararDigitos(upErr.message));
       const desfeito = await desfazer(db, orgId, conversationId, metadataGravado, null);
       await registrar(db, {
         acao: ACAO_INICIAR, orgId, userId, conversationId, resultado: desfeito === 'erro_sem_desfazer' ? 'erro_sem_desfazer' : 'erro_envio',
@@ -455,7 +514,8 @@ export async function iniciarConversa(args: {
   }
 
   if (!resultado.success) {
-    const erroTecnico = resultado.error?.message ?? 'erro desconhecido';
+    // QA 2.52, achado 4: o erro do fornecedor pode trazer telefone/chatId.
+    const erroTecnico = mascararDigitos(resultado.error?.message ?? 'erro desconhecido');
     console.error('[iniciar-conversa] envio falhou:', erroTecnico);
     const desfeito = await desfazer(db, orgId, conversationId, metadataGravado, caminhoDoAudio);
 
@@ -478,7 +538,7 @@ export async function iniciarConversa(args: {
 
   return {
     status: 200,
-    corpo: { conversationId, usadasHoje: usadas + 1, limite: LIMITE_DIARIO },
+    corpo: { conversationId, usadasHoje: usadasComEsta, limite: LIMITE_DIARIO },
     confirmarHumano: { conversationId, canal },
   };
 }
@@ -548,7 +608,7 @@ export async function confirmarHumano(args: {
   try {
     provedor = await args.criarProvedor(args.canal);
   } catch (e) {
-    console.error('[iniciar-conversa] provider indisponível:', e instanceof Error ? e.message : e);
+    console.error('[iniciar-conversa] provider indisponível:', mascararDigitos(e instanceof Error ? e.message : String(e)));
   }
 
   const r = provedor
@@ -620,7 +680,7 @@ export async function assumirConversa(args: {
     const provedor = await args.criarProvedor(canal as CanalDoInicio);
     confirmado = await umCiclo(db, provedor, orgId, conversationId);
   } catch (e) {
-    console.error('[assumir-conversa] ciclo falhou:', e instanceof Error ? e.message : e);
+    console.error('[assumir-conversa] ciclo falhou:', mascararDigitos(e instanceof Error ? e.message : String(e)));
   }
 
   if (confirmado) {
