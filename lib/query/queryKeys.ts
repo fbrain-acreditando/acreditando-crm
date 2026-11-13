@@ -98,6 +98,8 @@ export const queryKeys = {
         byContact: (contactId: string) => [...base.all, 'byContact', contactId] as const,
         /** Unread count */
         unreadCount: () => [...base.all, 'unreadCount'] as const,
+        /** Story 2.52 — conversas iniciadas pelo CRM hoje (teto de 20/dia) */
+        iniciadasHoje: () => [...base.all, 'iniciadasHoje'] as const,
     })),
 
     /**

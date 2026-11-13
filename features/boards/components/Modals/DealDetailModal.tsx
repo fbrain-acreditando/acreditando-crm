@@ -56,7 +56,6 @@ import {
   Bot,
   Tag as TagIcon,
   Plus,
-  MessageSquare,
   FileText,
   MapPin,
 } from 'lucide-react';
@@ -67,6 +66,7 @@ import { formatPriorityPtBr } from '@/lib/utils/priority';
 import { BriefingDrawer } from '@/features/deals/components/BriefingDrawer';
 import { AIExtractedFields } from '@/features/deals/components/AIExtractedFields';
 import { PainelDaNota } from '@/features/deals/components/PainelDaNota';
+import { BotaoConversaDoCard } from '@/features/messaging/components/IniciarConversa/BotaoConversaDoCard';
 
 interface DealDetailModalProps {
   dealId: string | null;
@@ -981,7 +981,7 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                   <h3 className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center gap-2">
                     <User size={14} /> Contato Principal
                   </h3>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-bold">
                       {(deal.contactName || '?').charAt(0)}
                     </div>
@@ -1009,33 +1009,16 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                       </p>
                       <p className="text-slate-500 text-xs">{deal.contactEmail}</p>
                     </div>
-                    {/* Abrir a conversa deste lead.
-                        Basta ter contato: o telefone deixou de ser pré-requisito
-                        porque o vínculo com a conversa é o `contact_id`, e o
-                        parser recusa `@lid` como telefone — lead vindo por `@lid`
-                        tem conversa e ficava sem o botão. */}
+                    {/* Story 2.52 — três estados: sem contato (nada), contato sem
+                        conversa ("Iniciar conversa no WhatsApp", com o compositor
+                        da 1ª mensagem) e contato com conversa ("Mensagem", o botão
+                        de antes). O vínculo com a conversa é o `contact_id`. */}
                     {contact?.id && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Abre a conversa deste lead. `/messaging` resolve
-                          // contato → conversa mais recente (um contato pode ter
-                          // conversa em mais de um canal).
-                          //
-                          // ⚠️ Antes daqui saía `newConversation=true` + nome e
-                          // telefone, parâmetros que a página de mensagens nunca
-                          // leu — o botão navegava para a tela vazia. Criar
-                          // conversa onde não existe ainda não é suportado: nesse
-                          // caso a página avisa em vez de fingir que funcionou.
-                          router.push(`/messaging?contactId=${encodeURIComponent(contact.id)}`);
-                          onClose();
-                        }}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 hover:bg-green-100 dark:hover:bg-green-500/20 rounded-lg transition-colors"
-                        title="Abrir conversa de WhatsApp deste lead"
-                      >
-                        <MessageSquare size={14} />
-                        <span className="hidden sm:inline">Mensagem</span>
-                      </button>
+                      <BotaoConversaDoCard
+                        dealId={deal.id}
+                        contact={{ id: contact.id, phone: contact.phone }}
+                        onNavegar={onClose}
+                      />
                     )}
                   </div>
                 </div>

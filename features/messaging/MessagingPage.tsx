@@ -20,6 +20,7 @@ import { ChannelIndicator } from './components/ChannelIndicator';
 import { WindowExpiryBadge } from './components/WindowExpiryBadge';
 import { MessageSearchBar } from './components/MessageSearchBar';
 import { AssignmentDropdown } from './components/AssignmentDropdown';
+import { AvisoAssumirConversa } from './components/IniciarConversa/AvisoAssumirConversa';
 import {
   useConversation,
   useMarkConversationRead,
@@ -412,6 +413,13 @@ export function MessagingPage({ initialConversationId }: MessagingPageProps = {}
                 </DropdownMenu>
               </div>
             </div>
+
+            {/* Story 2.52, AC4.6 — conversa iniciada pelo CRM que ainda não
+                passou para o humano. */}
+            <AvisoAssumirConversa
+              conversationId={selectedConversation.id}
+              metadata={selectedConversation.metadata}
+            />
 
             {/* Search Bar */}
             {showSearch && (
