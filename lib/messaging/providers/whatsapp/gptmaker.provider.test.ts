@@ -252,6 +252,87 @@ describe('GptMakerWhatsAppProvider', () => {
     });
   });
 
+  // Story 2.52, AC4.5 — o workspace é o mesmo da Livre: a busca por telefone
+  // devolve chats de OUTROS canais (provado no AC0a com `3EF9E947…`).
+  describe('lerChatHumano (2.52)', () => {
+    const CHAT_ACREDITANDO = 'chan-1-5512997534278';
+    const CHAT_LIVRE = 'livre-chan-5512997534278';
+
+    it('ignora o chat de outro canal com o mesmo telefone e lê o humanTalk do chat certo', async () => {
+      const fetchMock = mockFetchOnce([
+        { id: CHAT_LIVRE, humanTalk: true },
+        { id: CHAT_ACREDITANDO, humanTalk: false },
+      ]);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      const r = await provider.lerChatHumano('5512997534278', CHAT_ACREDITANDO);
+
+      expect(r).toEqual({ achou: true, humanTalk: false });
+      const url = String(fetchMock.mock.calls[0][0]);
+      expect(url).toContain('/v2/workspace/ws-1/chats?');
+      expect(url).toContain('query=5512997534278');
+    });
+
+    it('só o chat de outro canal na lista ⇒ achou: false (nunca usa o primeiro da lista)', async () => {
+      vi.stubGlobal('fetch', mockFetchOnce([{ id: CHAT_LIVRE, humanTalk: true }]));
+
+      await provider.initialize(BASE_CONFIG);
+      const r = await provider.lerChatHumano('5512997534278', CHAT_ACREDITANDO);
+
+      expect(r).toEqual({ achou: false, humanTalk: false });
+    });
+
+    it('id exato mas sem o prefixo do canal ⇒ não vale', async () => {
+      vi.stubGlobal('fetch', mockFetchOnce([{ id: 'outro-5512997534278', humanTalk: true }]));
+
+      await provider.initialize(BASE_CONFIG);
+      const r = await provider.lerChatHumano('5512997534278', 'outro-5512997534278');
+
+      expect(r).toEqual({ achou: false, humanTalk: false });
+    });
+
+    it('sem chat nenhum ⇒ achou: false', async () => {
+      vi.stubGlobal('fetch', mockFetchOnce([]));
+
+      await provider.initialize(BASE_CONFIG);
+      expect(await provider.lerChatHumano('5512997534278', CHAT_ACREDITANDO)).toEqual({
+        achou: false,
+        humanTalk: false,
+      });
+    });
+
+    it('aceita a lista embrulhada em { data } e humanTalk: true confirma', async () => {
+      vi.stubGlobal('fetch', mockFetchOnce({ data: [{ id: CHAT_ACREDITANDO, humanTalk: true }] }));
+
+      await provider.initialize(BASE_CONFIG);
+      expect(await provider.lerChatHumano('5512997534278', CHAT_ACREDITANDO)).toEqual({
+        achou: true,
+        humanTalk: true,
+      });
+    });
+  });
+
+  // Story 2.52, AC0a item 1b — `\uXXXX` no corpo dá 400 no fornecedor; UTF-8 cru passa.
+  describe('corpo em UTF-8 cru (2.52)', () => {
+    it('start-conversation manda acentos e travessão sem escape \\u', async () => {
+      const fetchMock = mockFetchOnce({ success: true });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await provider.initialize(BASE_CONFIG);
+      await provider.sendMessage({
+        conversationId: 'c1',
+        to: '5512997534278',
+        content: { type: 'text', text: 'Olá, ação e áudio — até já' },
+      });
+
+      const corpo = String(fetchMock.mock.calls[0][1].body);
+      expect(String(fetchMock.mock.calls[0][0])).toContain('/v2/channel/chan-1/start-conversation');
+      expect(corpo).toBe('{"message":"Olá, ação e áudio — até já","phone":"5512997534278"}');
+      expect(corpo).not.toMatch(/\\u[0-9a-fA-F]{4}/);
+    });
+  });
+
   describe('autenticação e segurança', () => {
     it('manda o token como Bearer', async () => {
       const fetchMock = mockFetchOnce({ data: [] });
