@@ -296,6 +296,14 @@ describe('DealDetailModal', () => {
     rerender(<DealDetailModal dealId="deal-1" isOpen={false} onClose={() => {}} />);
     expect(document.body.textContent).not.toContain('Application error');
   });
+
+  // Story 2.52, AC1 — 1º estado: card sem contato vinculado ⇒ nenhum botão de
+  // WhatsApp (os outros dois estados: `IniciarConversa.test.tsx`).
+  it('sem contato vinculado ⇒ nem "Mensagem" nem "Iniciar conversa no WhatsApp"', () => {
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: /Iniciar conversa no WhatsApp/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mensagem' })).toBeNull();
+  });
 });
 
 
