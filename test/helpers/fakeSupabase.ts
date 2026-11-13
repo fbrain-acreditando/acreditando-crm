@@ -208,6 +208,20 @@ export class FakeSupabase {
         if (dup) return { code: '23505', message: 'Já existe um negócio para este contato no estágio' };
       }
     }
+    // Story 2.52 — `messaging_conversations_unique UNIQUE (channel_id, external_contact_id)`.
+    if (tabela === 'messaging_conversations') {
+      const dup = this.tabelas.messaging_conversations.find(
+        (r) =>
+          r !== linha &&
+          r !== opts.ignorar &&
+          r.id !== linha.id &&
+          r.channel_id === linha.channel_id &&
+          r.external_contact_id === linha.external_contact_id
+      );
+      if (dup) {
+        return { code: '23505', message: 'duplicate key value violates unique constraint "messaging_conversations_unique"' };
+      }
+    }
     if (tabela === 'public_api_idempotency') {
       const dup = this.tabelas.public_api_idempotency.find(
         (r) =>
@@ -295,6 +309,8 @@ export class FakeQuery {
   filtros: Filtro[] = [];
   ordem: Array<[string, boolean]> = [];
   limite: number | null = null;
+  /** Story 2.52 — `select('id', { count: 'exact', head: true })`. */
+  contar: { head: boolean } | null = null;
   private querRetorno = false;
 
   constructor(
@@ -302,9 +318,10 @@ export class FakeQuery {
     public tabela: string
   ) {}
 
-  select(_cols?: string) {
+  select(_cols?: string, opts?: { count?: 'exact'; head?: boolean }) {
     if (!this.op) this.op = 'select';
     else this.querRetorno = true;
+    if (opts?.count) this.contar = { head: opts.head === true };
     return this;
   }
   insert(p: any) {
@@ -356,6 +373,10 @@ export class FakeQuery {
     });
     return this;
   }
+  gte(col: string, val: any) {
+    this.filtros.push((l) => comparar(valorDe(l, col), val) >= 0);
+    return this;
+  }
   lt(col: string, val: any) {
     this.filtros.push((l) => comparar(valorDe(l, col), val) < 0);
     return this;
@@ -396,6 +417,10 @@ export class FakeQuery {
       const r = this.executar();
       // Sem `.select()` numa escrita, o PostgREST devolve data = null.
       const data = this.op !== 'select' && !this.querRetorno ? null : r.data;
+      if (this.contar) {
+        const count = r.error ? null : ((r.data as any[]) ?? []).length;
+        return Promise.resolve({ data: this.contar.head ? null : data, count, error: r.error } as any).then(ok, fail);
+      }
       return Promise.resolve({ data, error: r.error }).then(ok, fail);
     } catch (e) {
       return Promise.reject(e).then(ok, fail);
