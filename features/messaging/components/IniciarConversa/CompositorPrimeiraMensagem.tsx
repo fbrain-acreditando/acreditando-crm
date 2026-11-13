@@ -5,8 +5,9 @@
  *
  * Abre VAZIO (sem texto pronto, V10): a Fernanda escreve ou grava na hora. Texto
  * OU áudio, nunca os dois. Cancelar não chama a rota. Mostra o teto do dia.
- * Enviar trava o botão enquanto a requisição corre e por 60 s depois (sem
- * disparo duplo), mesmo que o compositor feche e abra de novo.
+ * Enviar trava o botão enquanto a requisição corre e, depois de um envio COM
+ * SUCESSO, por mais 60 s (sem disparo duplo), mesmo que o compositor feche e abra
+ * de novo. Depois de erro (422, 429, 502…) o botão volta na hora para a correção.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -17,6 +18,8 @@ import { queryKeys } from '@/lib/query/queryKeys';
 import { useGravadorDeAudio, formatarDuracao } from '../../hooks/useGravadorDeAudio';
 
 export const TRAVA_MS = 60_000;
+export const AVISO_FALHA_NA_CONVERSAO =
+  'Não deu para preparar o áudio para o WhatsApp. Grave de novo ou escreva a mensagem.';
 const LIMITE_PADRAO = 20;
 
 /** Trava por card, fora do componente: sobrevive a fechar e abrir o compositor. */
@@ -78,10 +81,17 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
   const [audio, setAudio] = useState<File | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [agora, setAgora] = useState(() => Date.now());
+  const [falhouConversao, setFalhouConversao] = useState(false);
 
   const gravador = useGravadorDeAudio({
-    onAudioPronto: (f) => setAudio(f),
-    onFalhaNaConversao: () => setAudio(null),
+    onAudioPronto: (f) => {
+      setFalhouConversao(false);
+      setAudio(f);
+    },
+    onFalhaNaConversao: () => {
+      setAudio(null);
+      setFalhouConversao(true);
+    },
   });
 
   const { data: contador } = useQuery({
@@ -111,7 +121,8 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
     if (!podeEnviar) return;
     setEnviando(true);
     const r = await enviarPrimeiraMensagem(dealId, audio ? { audio } : { texto });
-    travas.set(dealId, Date.now() + TRAVA_MS);
+    // QA 2.52, achado 5: só o sucesso trava; erro devolve o botão na hora.
+    if (r.tipo === 'enviada') travas.set(dealId, Date.now() + TRAVA_MS);
     setAgora(Date.now());
     setEnviando(false);
     onResultado(r);
@@ -129,6 +140,12 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
       <p className="text-xs text-slate-500 dark:text-slate-400" data-testid="contador-do-dia">
         Até {limite} conversas iniciadas por dia — {usadas ?? '…'} {usadas === 1 ? 'usada' : 'usadas'} hoje
       </p>
+
+      {falhouConversao && !audio && (
+        <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+          {AVISO_FALHA_NA_CONVERSAO}
+        </p>
+      )}
 
       {audio ? (
         <div className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
@@ -173,7 +190,10 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
         {!audio && !gravador.isRecording && !gravador.isConverting && !texto.trim() ? (
           <button
             type="button"
-            onClick={gravador.startRecording}
+            onClick={() => {
+              setFalhouConversao(false);
+              void gravador.startRecording();
+            }}
             className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
           >
             <Mic size={14} aria-hidden="true" /> Gravar áudio
