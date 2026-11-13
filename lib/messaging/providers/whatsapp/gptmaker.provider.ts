@@ -458,6 +458,34 @@ export class GptMakerWhatsAppProvider extends BaseChannelProvider {
     );
   }
 
+  /**
+   * Lê se um chat está com humano (`humanTalk`) — story 2.52, AC4.5.
+   *
+   * Não existe leitura de um chat por id; a única fonte é a busca do workspace
+   * (`GET /v2/workspace/{ws}/chats?query=<telefone>`), que devolve uma LISTA.
+   *
+   * ⚠️ O workspace é compartilhado entre canais (Acreditando e Livre). Provado no
+   * AC0a (13/11): a busca pelo telefone do Filipe trouxe também o chat da Livre
+   * (`3EF9E947…`). Por isso o chat só vale se tiver o `id` exato **e** o prefixo do
+   * canal deste provider — nunca o "primeiro da lista".
+   */
+  async lerChatHumano(
+    telefone: string,
+    chatId: string
+  ): Promise<{ achou: boolean; humanTalk: boolean }> {
+    this.ensureInitialized();
+
+    const resposta = (await this.listChats({ query: telefone.replace(/\D/g, ''), pageSize: 25 })) as
+      | GptMakerChat[]
+      | { data?: GptMakerChat[] };
+    const lista = Array.isArray(resposta) ? resposta : (resposta?.data ?? []);
+    const prefixo = `${this.gptmakerChannelId}-`;
+
+    const chat = lista.find((c) => c?.id === chatId && c.id.startsWith(prefixo));
+    if (!chat) return { achou: false, humanTalk: false };
+    return { achou: true, humanTalk: chat.humanTalk === true };
+  }
+
   // ---------------------------------------------------------------------------
   // Webhooks
   // ---------------------------------------------------------------------------
