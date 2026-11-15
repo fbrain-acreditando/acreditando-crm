@@ -133,13 +133,27 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
 
   return (
     <div
-      className="mt-3 w-full basis-full rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 p-3 space-y-2"
+      className="mt-3 w-full min-w-0 basis-full rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5 p-3 space-y-2"
       role="group"
       aria-label="Primeira mensagem no WhatsApp"
     >
-      <p className="text-xs text-slate-500 dark:text-slate-400" data-testid="contador-do-dia">
-        Até {limite} conversas iniciadas por dia — {usadas ?? '…'} {usadas === 1 ? 'usada' : 'usadas'} hoje
-      </p>
+      {/* Coluna estreita do card (~230 px úteis): Cancelar sobe para o cabeçalho e o
+          rodapé fica só com Gravar áudio + Enviar, sem quebra de linha. */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 text-xs text-slate-500 dark:text-slate-400" data-testid="contador-do-dia">
+          Iniciadas hoje: {usadas ?? '…'} de {limite}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            gravador.cancelRecording();
+            onCancelar();
+          }}
+          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-xs font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10"
+        >
+          <X size={12} aria-hidden="true" /> Cancelar
+        </button>
+      </div>
 
       {falhouConversao && !audio && (
         <p role="alert" className="text-xs text-red-600 dark:text-red-400">
@@ -186,7 +200,7 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
         />
       )}
 
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         {!audio && !gravador.isRecording && !gravador.isConverting && !texto.trim() ? (
           <button
             type="button"
@@ -194,37 +208,25 @@ export function CompositorPrimeiraMensagem({ dealId, onResultado, onCancelar }: 
               setFalhouConversao(false);
               void gravador.startRecording();
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
+            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
           >
             <Mic size={14} aria-hidden="true" /> Gravar áudio
           </button>
         ) : (
           <span />
         )}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              gravador.cancelRecording();
-              onCancelar();
-            }}
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={enviar}
-            disabled={!podeEnviar}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700',
-              !podeEnviar && 'opacity-50 cursor-not-allowed'
-            )}
-          >
-            {enviando ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Send size={14} aria-hidden="true" />}
-            {segundosTravado > 0 ? `Aguarde ${segundosTravado} s` : 'Enviar'}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={enviar}
+          disabled={!podeEnviar}
+          className={cn(
+            'ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700',
+            !podeEnviar && 'opacity-50 cursor-not-allowed'
+          )}
+        >
+          {enviando ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Send size={14} aria-hidden="true" />}
+          {segundosTravado > 0 ? `Aguarde ${segundosTravado} s` : 'Enviar'}
+        </button>
       </div>
     </div>
   );

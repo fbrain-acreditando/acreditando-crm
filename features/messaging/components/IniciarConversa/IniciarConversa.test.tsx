@@ -129,7 +129,7 @@ describe('Compositor da 1ª mensagem (AC6)', () => {
     expect(screen.getByRole('button', { name: /Enviar/ })).toBeDisabled();
     await waitFor(() =>
       expect(screen.getByTestId('contador-do-dia')).toHaveTextContent(
-        'Até 20 conversas iniciadas por dia — 3 usadas hoje'
+        'Iniciadas hoje: 3 de 20'
       )
     );
   });
