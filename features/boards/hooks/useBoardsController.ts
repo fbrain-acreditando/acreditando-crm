@@ -25,6 +25,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useLifecycleStages } from '@/lib/query/hooks/useLifecycleStagesQuery';
 import { useCustomFields } from '@/lib/query/hooks/useCustomFieldsQuery';
 import { useAI } from '@/context/AIContext';
+import { useCardsDoBanco } from './useCardsDoBanco';
 
 /**
  * Função pública `isDealRotting` do projeto.
@@ -124,7 +125,11 @@ export const useBoardsController = () => {
   // Safety: if the ID is stale (board deleted), the boards effect below will correct activeBoardId
   // and we'll naturally refetch deals for the corrected board.
   const dealsBoardId = activeBoardId || '';
-  const { data: deals = [], isLoading: dealsLoading } = useDealsByBoard(dealsBoardId);
+  const {
+    data: deals = [],
+    isLoading: dealsLoading,
+    dataUpdatedAt: dealsUpdatedAt = 0,
+  } = useDealsByBoard(dealsBoardId);
   const moveDealMutation = useMoveDeal();
   const createActivityMutation = useCreateActivity();
 
@@ -318,6 +323,20 @@ export const useBoardsController = () => {
   // Interaction State
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
+
+  // Story 2.74 — cards de fora dos 1.000 carregados: busca no banco e `?deal=`.
+  const {
+    idsDaBusca,
+    estadoDaBusca,
+    textoDaBusca,
+    abrirPeloId,
+  } = useCardsDoBanco({
+    boardId: dealsBoardId,
+    searchTerm,
+    cacheAtualizadoEm: dealsUpdatedAt,
+    selectedDealId,
+    abrirJanela: setSelectedDealId,
+  });
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [openActivityMenuId, setOpenActivityMenuId] = useState<string | null>(null);
 
@@ -354,7 +373,10 @@ export const useBoardsController = () => {
     if (!dealIdFromUrl || dealIdConsumidoDaUrl.current === dealIdFromUrl) return;
 
     dealIdConsumidoDaUrl.current = dealIdFromUrl;
-    setSelectedDealId(dealIdFromUrl);
+    // Story 2.74 (AC4) — o card pode estar fora dos 1.000 carregados: o
+    // `abrirPeloId` espera a 1ª carga do quadro, busca no banco se preciso,
+    // acrescenta ao cache e só então abre a janela (ela lê só do cache).
+    abrirPeloId(dealIdFromUrl);
 
     // Limpeza da URL: `router.replace('?')` — o que sobrava quando `deal` era o
     // ÚNICO parâmetro — é justamente o caso que podia não limpar. Montar o
@@ -364,7 +386,7 @@ export const useBoardsController = () => {
     params.delete('deal');
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-  }, [searchParams, router, pathname]);
+  }, [searchParams, router, pathname, abrirPeloId]);
 
   // Fallback for drag issues
   const lastMouseDownDealId = React.useRef<string | null>(null);
@@ -411,10 +433,16 @@ export const useBoardsController = () => {
     }
 
     return deals.filter(l => {
+      // Story 2.74 (AC3, D5) — card que o BANCO devolveu para este termo bate
+      // com a busca (o termo pode estar só no nome do contato ou no telefone).
+      const achadoNoBanco = idsDaBusca.has(l.id);
+
       // Search: usa searchLower pré-computado
       const matchesSearch =
+        achadoNoBanco ||
         (l.title || '').toLowerCase().includes(searchLower) ||
-        (l.companyName || '').toLowerCase().includes(searchLower);
+        (l.companyName || '').toLowerCase().includes(searchLower) ||
+        (l.contactName || '').toLowerCase().includes(searchLower);
 
       const matchesOwner =
         ownerFilter === 'all' || l.ownerId === profile?.id;
@@ -438,8 +466,12 @@ export const useBoardsController = () => {
         matchesStatus = l.isLost;
       }
 
+      // Story 2.74 (D5) — o `matchesRecent` existe para o quadro não encher de
+      // card fechado, não para impedir que alguém ACHE um card: o achado no
+      // banco passa, mesmo ganho/perdido mexido há mais de 30 dias. Os filtros
+      // que a pessoa escolheu (status, dono, datas, onde mora) continuam valendo.
       let matchesRecent = true;
-      if (statusFilter === 'open' || statusFilter === 'all') {
+      if (!achadoNoBanco && (statusFilter === 'open' || statusFilter === 'all')) {
         if (l.isWon || l.isLost) {
           // Usa cutoffTime pré-computado
           if (new Date(l.updatedAt).getTime() < cutoffTime) {
@@ -471,6 +503,7 @@ export const useBoardsController = () => {
   }, [
     deals,
     searchTerm,
+    idsDaBusca,
     localFilter,
     ownerFilter,
     dateRange.start,      // Apenas as propriedades usadas do dateRange
@@ -914,6 +947,9 @@ export const useBoardsController = () => {
     setLocalFilter,
     // Story 2.67 (AC5, C1) — o quadro bateu no teto de cards carregados.
     quadroNoTeto: deals.length >= LIMITE_DEALS_DO_QUADRO,
+    // Story 2.74 (AC5) — estado da busca no banco e o texto para o cabeçalho.
+    estadoDaBusca,
+    textoDaBusca,
     ownerFilter,
     setOwnerFilter,
     statusFilter,

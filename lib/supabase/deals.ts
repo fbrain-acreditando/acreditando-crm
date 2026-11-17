@@ -17,6 +17,12 @@
 import { supabase } from './client';
 import { Deal, DealItem, OrganizationId } from '@/types';
 import { sanitizeUUID, requireUUID, isValidUUID } from './utils';
+import {
+  filtroDeCardsParaBusca,
+  filtroDeContatosParaBusca,
+  LIMITE_DA_BUSCA_NO_BANCO,
+  LIMITE_DE_CONTATOS_DA_BUSCA,
+} from './buscaDeCards';
 
 // =============================================================================
 // Organization inference (client-side, RLS-safe)
@@ -300,14 +306,24 @@ export const transformDealToDb = (deal: Partial<Deal>): Partial<DbDeal> => {
  */
 export const LIMITE_DEALS_DO_QUADRO = 1000;
 
+/**
+ * Story 2.74 (C1) — ordem da carga do `getAll`: por criação (padrão, o de
+ * sempre) ou pela última atividade (`updated_at`, só o cache do quadro).
+ */
+export type OrdemDaCargaDeDeals = 'criacao' | 'atividade';
+
 export const dealsService = {
   /**
    * Busca todos os deals da organização com seus itens.
    *
-   * @param options - Opções adicionais, incluindo AbortSignal para cancelar a request.
+   * @param options - Opções adicionais, incluindo AbortSignal para cancelar a request
+   *   e `ordem` (story 2.74): `'criacao'` (padrão) ou `'atividade'`.
    * @returns Promise com array de deals ou erro.
    */
-  async getAll(options?: { signal?: AbortSignal }): Promise<{ data: Deal[] | null; error: Error | null }> {
+  async getAll(options?: {
+    signal?: AbortSignal;
+    ordem?: OrdemDaCargaDeDeals;
+  }): Promise<{ data: Deal[] | null; error: Error | null }> {
     try {
       if (!supabase) {
         return { data: null, error: new Error('Supabase não configurado') };
@@ -327,9 +343,28 @@ export const dealsService = {
         // (transformDeal não mapeia, de propósito), então não há como filtrar depois.
         .is('deleted_at', null);
       if (options?.signal) dealsQuery = dealsQuery.abortSignal(options.signal);
-      const { data, error } = await dealsQuery
-        .order('created_at', { ascending: false })
-        .limit(LIMITE_DEALS_DO_QUADRO);
+
+      // Story 2.74 (AC6, D4, C1) — QUAIS 1.000 cards entram.
+      //
+      // 'atividade' (só o cache do quadro, `dealsViewQueryFn`): os 1.000 com
+      // `updated_at` mais recente, desempate pela criação. Por criação, o card de
+      // agosto que respondeu à campanha de novembro ficava de fora (um caso real:
+      // 2.140º por criação → 61º por `updated_at`; 233 dos 267 "sumidos" entram).
+      // ⚠️ Risco conhecido: `updated_at` também muda com robôs (n8n, IA, disparo).
+      // Um lote (102 cards numa hora em 13/11) pode empurrar cards para dentro e
+      // outros para fora — nenhum fica inalcançável, porque a busca do quadro
+      // procura no banco inteiro (`searchForBoard`).
+      //
+      // 'criacao' (padrão): o comportamento de antes. O `useDeals()` (painel,
+      // atividades, contagem, prefetch) filtra por `createdAt` no período — a
+      // janela por `updated_at` mudaria esses números. Por isso o padrão não muda.
+      const ordenada =
+        options?.ordem === 'atividade'
+          ? dealsQuery
+              .order('updated_at', { ascending: false })
+              .order('created_at', { ascending: false })
+          : dealsQuery.order('created_at', { ascending: false });
+      const { data, error } = await ordenada.limit(LIMITE_DEALS_DO_QUADRO);
 
       if (error) return { data: null, error };
 
@@ -388,6 +423,80 @@ export const dealsService = {
       if (error) return { data: null, error };
 
       return { data: (data as { id: string } | null)?.id ?? null, error: null };
+    } catch (e) {
+      return { data: null, error: e as Error };
+    }
+  },
+
+  /**
+   * Story 2.74 (AC2, D2, D3) — procura cards do quadro NO BANCO, em todos os
+   * cards (não só nos 1.000 carregados): título, nome do contato e telefone.
+   *
+   * Duas consultas, porque o PostgREST não junta num `.or()` uma coluna de
+   * `deals` com uma de `contacts`:
+   * 1. contatos cujo nome ou telefone (8 últimos dígitos) batem;
+   * 2. cards do quadro cujo título bate OU cujo contato veio da consulta 1.
+   *
+   * 🔒 Sempre o cliente do NAVEGADOR (sessão do usuário, RLS), nunca service
+   * role. `organization_id` entra também nas duas, como defesa extra (mesmo
+   * padrão do `getLatestIdByContact`). O termo passa por `termoSeguroParaBusca`
+   * antes de entrar no `.or()`.
+   *
+   * @returns até 50 cards (os mais recentes por `updated_at`), sem enriquecer
+   *   (a camada de query passa por `enriquecerDeals`); `data: []` quando o termo
+   *   não vai ao banco. Erro volta em `error`, nunca lança.
+   */
+  async searchForBoard(
+    boardId: string,
+    termo: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<{ data: Deal[] | null; error: Error | null }> {
+    try {
+      if (!supabase) {
+        return { data: null, error: new Error('Supabase não configurado') };
+      }
+      const safeBoardId = sanitizeUUID(boardId);
+      if (!safeBoardId) return { data: [], error: null };
+
+      const filtroDeContatos = filtroDeContatosParaBusca(termo);
+      if (!filtroDeContatos) return { data: [], error: null };
+
+      const orgId = await getCurrentOrganizationId();
+
+      // 1ª consulta — contatos
+      let contatosQuery = supabase
+        .from('contacts')
+        .select('id')
+        .is('deleted_at', null);
+      if (orgId) contatosQuery = contatosQuery.eq('organization_id', orgId);
+      if (options?.signal) contatosQuery = contatosQuery.abortSignal(options.signal);
+      const contatos = await contatosQuery
+        .or(filtroDeContatos)
+        .limit(LIMITE_DE_CONTATOS_DA_BUSCA);
+      if (contatos.error) return { data: null, error: contatos.error };
+
+      const idsDeContato = ((contatos.data || []) as Array<{ id: string }>).map(c => c.id);
+      const filtroDeCards = filtroDeCardsParaBusca(termo, idsDeContato);
+      if (!filtroDeCards) return { data: [], error: null };
+
+      // 2ª consulta — cards
+      let cardsQuery = supabase
+        .from('deals')
+        .select(`
+          *,
+          deal_items (*)
+        `)
+        .is('deleted_at', null);
+      if (orgId) cardsQuery = cardsQuery.eq('organization_id', orgId);
+      cardsQuery = cardsQuery.eq('board_id', safeBoardId);
+      if (options?.signal) cardsQuery = cardsQuery.abortSignal(options.signal);
+      const { data, error } = await cardsQuery
+        .or(filtroDeCards)
+        .order('updated_at', { ascending: false })
+        .limit(LIMITE_DA_BUSCA_NO_BANCO);
+      if (error) return { data: null, error };
+
+      return { data: (data || []).map(d => transformDeal(d as DbDealWithItems)), error: null };
     } catch (e) {
       return { data: null, error: e as Error };
     }

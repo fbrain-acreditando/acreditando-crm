@@ -48,6 +48,8 @@ interface PipelineViewProps {
   setLocalFilter?: (term: string) => void;
   /** Story 2.67 (AC5, C1) — o quadro carregou o teto de cards. */
   quadroNoTeto?: boolean;
+  /** Story 2.74 (AC5) — estado da busca no banco. */
+  textoDaBusca?: string | null;
   ownerFilter: 'all' | 'mine';
   setOwnerFilter: (filter: 'all' | 'mine') => void;
   statusFilter: 'open' | 'won' | 'lost' | 'all';
@@ -228,6 +230,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
   localFilter = '',
   setLocalFilter,
   quadroNoTeto = false,
+  textoDaBusca = null,
   ownerFilter,
   setOwnerFilter,
   statusFilter,
@@ -335,6 +338,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
             localFilter={localFilter}
             setLocalFilter={setLocalFilter}
             quadroNoTeto={quadroNoTeto}
+            textoDaBusca={textoDaBusca}
             ownerFilter={ownerFilter}
             setOwnerFilter={setOwnerFilter}
             statusFilter={statusFilter}
