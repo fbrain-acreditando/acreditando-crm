@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, DEALS_VIEW_KEY } from '../index';
 import { dealsService, contactsService, companiesService, boardStagesService } from '@/lib/supabase';
+import { enriquecerDeals } from './enriquecerDeals';
 import { useAuth } from '@/context/AuthContext';
 import type { Deal, DealView, DealItem, Contact } from '@/types';
 
@@ -36,38 +37,17 @@ export const dealsViewQueryFn = async (
   { signal }: { signal?: AbortSignal } = {}
 ): Promise<DealView[]> => {
   const [dealsResult, stagesResult] = await Promise.all([
-    dealsService.getAll({ signal }),
+    // Story 2.74 (AC6, C1) — SÓ o cache do quadro carrega pela última atividade
+    // (`updated_at`). O `getAll()` sem opção continua por criação (painel,
+    // atividades, prefetch do `useDeals()`).
+    dealsService.getAll({ signal, ordem: 'atividade' }),
     boardStagesService.getAll({ signal }),
   ]);
 
   if (dealsResult.error) throw dealsResult.error;
 
-  const deals = dealsResult.data || [];
-  const stages = stagesResult.data || [];
-
-  const contactIds = deals.map(d => d.contactId).filter(Boolean);
-  const companyIds = deals.map(d => d.clientCompanyId).filter(Boolean) as string[];
-
-  const [contactsResult, companiesResult] = await Promise.all([
-    contactsService.getByIds(contactIds, { signal }),
-    companiesService.getByIds(companyIds, { signal }),
-  ]);
-
-  const contactMap = new Map((contactsResult.data || []).map(c => [c.id, c]));
-  const companyMap = new Map((companiesResult.data || []).map(c => [c.id, c]));
-  const stageMap = new Map(stages.map(s => [s.id, s.label || s.name]));
-
-  return deals.map(deal => {
-    const contact = contactMap.get(deal.contactId);
-    const company = deal.clientCompanyId ? companyMap.get(deal.clientCompanyId) : undefined;
-    return {
-      ...deal,
-      companyName: company?.name || 'Sem empresa',
-      contactName: contact?.name || 'Sem contato',
-      contactEmail: contact?.email || '',
-      stageLabel: stageMap.get(deal.status) || 'Estágio não identificado',
-    };
-  });
+  // Story 2.74 (T2) — a mesma montagem do card achado pela busca no banco e do `?deal=`.
+  return enriquecerDeals(dealsResult.data || [], { signal, etapas: stagesResult.data || [] });
 };
 
 export interface DealsFilters {
@@ -507,6 +487,14 @@ export const useUpdateDealStatus = () => {
 };
 
 /**
+ * Story 2.74 (QA C-3) — chave da mutação de excluir card. O `useCardsDoBanco`
+ * consulta o MutationCache por ela para saber se um card que saiu do cache por
+ * `setQueryData` foi EXCLUÍDO (não volta) ou saiu por rollback de outra
+ * mutação (volta).
+ */
+export const CHAVE_DA_EXCLUSAO_DE_DEAL = [...queryKeys.deals.all, 'excluir'] as const;
+
+/**
  * Hook to delete a deal
  * Usa DEALS_VIEW_KEY como única fonte de verdade
  */
@@ -514,6 +502,7 @@ export const useDeleteDeal = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: CHAVE_DA_EXCLUSAO_DE_DEAL,
     mutationFn: async (id: string) => {
       const { error } = await dealsService.delete(id);
       if (error) throw error;

@@ -95,6 +95,17 @@ vi.mock('@/lib/query/hooks/useCustomFieldsQuery', () => ({
   useCustomFields: () => ({ data: h.customFields }),
 }));
 vi.mock('@/context/AIContext', () => ({ useAI: () => h.ai }));
+// Story 2.74 — a busca no banco e o `?deal=` fora da janela têm testes próprios
+// (`useBoardsController.buscaNoBanco.test.tsx`); aqui o hook é neutro (sem
+// QueryClientProvider, como sempre foi este teste).
+vi.mock('../useCardsDoBanco', () => ({
+  useCardsDoBanco: () => ({
+    idsDaBusca: new Set<string>(),
+    estadoDaBusca: { situacao: 'ociosa', total: 0, maisAntigos: 0 },
+    textoDaBusca: null,
+    abrirPeloId: vi.fn(),
+  }),
+}));
 
 import { useBoardsController } from '../useBoardsController';
 
