@@ -149,7 +149,8 @@ describe('consultas do Inbox (story 2.76, D4)', () => {
       ['status', 'ACTIVE'],
       ['stage', 'CUSTOMER'],
     ]);
-    expect(args(c, 'or')).toEqual([[`last_interaction.is.null,last_interaction.lt.${limite}`]]);
+    // LOW-3: valor entre aspas duplas (o `:` do ISO é reservado no PostgREST)
+    expect(args(c, 'or')).toEqual([[`last_interaction.is.null,last_interaction.lt."${limite}"`]]);
     expect(args(c, 'limit')).toEqual([[1000]]);
   });
 

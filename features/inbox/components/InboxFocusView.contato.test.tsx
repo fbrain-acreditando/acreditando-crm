@@ -172,4 +172,48 @@ describe('InboxFocusView — contato antigo (story 2.76, AC6)', () => {
     expect(h.getByIds).not.toHaveBeenCalled();
     expect(h.buscarParaSelecao).not.toHaveBeenCalled();
   });
+
+  it('QA loop 2.76a (LOW-2): troca de item "por nome" não mostra o contato anterior enquanto a busca nova carrega', async () => {
+    const OUTRO: Contact = { ...ANTIGO, id: '88888888-8888-4888-8888-888888888888', name: 'Outro Nome', phone: '+5500987654321' };
+    let soltarOutro: (v: unknown) => void = () => {};
+    h.buscarParaSelecao.mockImplementation((termo: string) =>
+      termo === 'Contato Antigo'
+        ? Promise.resolve({ data: [ANTIGO], error: null })
+        : new Promise(r => (soltarOutro = r))
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const props = { totalItems: 2, onDone: vi.fn(), onSnooze: vi.fn(), onSkip: vi.fn(), onPrev: vi.fn(), onNext: vi.fn() };
+    const item1 = atividade({ description: 'Reativar cliente: Contato Antigo' });
+    const base2 = atividade({ id: 'act-2', description: 'Reativar cliente: Outro Nome' });
+    const item2 = { ...base2, id: 'act-2' } as FocusItem;
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <InboxFocusView currentItem={item1} currentIndex={0} {...props} />
+      </QueryClientProvider>
+    );
+    act(() => {
+      fireEvent.keyDown(window, { key: ' ' });
+    });
+    await waitFor(() => expect(screen.getByTestId('painel')).toHaveTextContent('Contato Antigo | +5500912345678'));
+
+    const chamadasAntes = h.painel.mock.calls.length;
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <InboxFocusView currentItem={item2} currentIndex={1} {...props} />
+      </QueryClientProvider>
+    );
+    // Durante a espera e a busca nova: nunca o contato do item anterior.
+    expect(screen.queryByText(/\+5500912345678/)).toBeNull();
+    await new Promise(r => setTimeout(r, 400));
+    expect(h.buscarParaSelecao.mock.calls.map(c => c[0])).toContain('Outro Nome');
+    expect(screen.queryByText(/\+5500912345678/)).toBeNull();
+    // Nenhuma renderização do painel depois da troca recebeu o contato anterior.
+    const depois = h.painel.mock.calls.slice(chamadasAntes).map(c => (c[0] as { contact?: Contact }).contact?.id);
+    expect(depois).not.toContain(ANTIGO.id);
+
+    await act(async () => {
+      soltarOutro({ data: [OUTRO], error: null });
+    });
+    await waitFor(() => expect(screen.getByTestId('painel')).toHaveTextContent('Outro Nome | +5500987654321'));
+  });
 });

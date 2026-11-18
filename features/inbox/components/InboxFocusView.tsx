@@ -232,7 +232,10 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
   const contextData = useMemo(() => {
     if (!currentItem || !alvo) return null;
     const { deal } = alvo;
-    const contact = contatoPeloId ?? (nomeParaBuscar ? contatoPeloNome.contatos[0] : undefined);
+    // QA loop 2.76a (LOW-2): só o resultado do nome ATUAL — nunca o contato do item anterior.
+    const contact =
+      contatoPeloId ??
+      (nomeParaBuscar && contatoPeloNome.resultadoDoTermoAtual ? contatoPeloNome.contatos[0] : undefined);
 
     const dealActivities = deal ? (activitiesByDealIdSorted.get(deal.id) ?? []) : [];
     const board = deal ? (boardsById.get(deal.boardId) ?? null) : activeBoard;
@@ -264,7 +267,7 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
       board,
       isPlaceholder: !deal && !!placeholderDeal
     };
-  }, [currentItem, alvo, contatoPeloId, nomeParaBuscar, contatoPeloNome.contatos, activitiesByDealIdSorted, boardsById, activeBoard]);
+  }, [currentItem, alvo, contatoPeloId, nomeParaBuscar, contatoPeloNome.contatos, contatoPeloNome.resultadoDoTermoAtual, activitiesByDealIdSorted, boardsById, activeBoard]);
 
   const { moveDeal } = useMoveDealSimple(contextData?.board ?? null, []);
 

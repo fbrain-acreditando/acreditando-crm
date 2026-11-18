@@ -67,7 +67,7 @@ describe('useBuscaDeContatos (story 2.76, AC3)', () => {
     const { result } = renderHook(() => useBuscaDeContatos('ab'), { wrapper });
     await new Promise(r => setTimeout(r, 400));
     expect(h.buscarParaSelecao).not.toHaveBeenCalled();
-    expect(result.current).toEqual({ contatos: [], carregando: false, erro: false, termoCurto: true });
+    expect(result.current).toEqual({ contatos: [], carregando: false, erro: false, termoCurto: true, resultadoDoTermoAtual: false });
   });
 
   it('termo vazio → nada, sem termoCurto', async () => {

@@ -193,4 +193,52 @@ describe('ContactSearchCombobox (story 2.76, AC4)', () => {
     await screen.findByRole('button', { name: /Beatriz Antiga/ });
     expect(h.useContacts).not.toHaveBeenCalled();
   });
+
+  describe('QA loop 2.76a (MEDIUM-1) — resultado do termo anterior não é selecionável', () => {
+    /** Outro contato, achado só pelo telefone (sintético). */
+    const OUTRO = contato('33333333-3333-4333-8333-333333333333', {
+      name: 'Outro Pelo Telefone',
+      phone: '+5500955556666',
+    });
+
+    beforeEach(() => {
+      h.buscarParaSelecao.mockImplementation(async (termo: string) => ({
+        data: termo.toLowerCase().includes('beat') ? [ANTIGO] : termo.includes('55556666') ? [OUTRO] : [],
+        error: null,
+      }));
+    });
+
+    it('"Beat" → Beatriz; limpa; "55556666" + Enter imediato NÃO seleciona Beatriz; depois seleciona o certo', async () => {
+      const user = userEvent.setup();
+      const { props, input } = montar();
+      await user.type(input, 'Beat');
+      await screen.findByRole('button', { name: /Beatriz Antiga/ });
+      await user.clear(input);
+      await user.type(input, '55556666');
+      // Ainda dentro da espera: "Buscando…"
+      expect(screen.getByRole('status')).toHaveTextContent(TEXTOS_DA_BUSCA_DE_CONTATO.buscando);
+      await user.keyboard('{Enter}');
+      expect(props.onSelectContact).not.toHaveBeenCalled();
+      expect(props.onCreateNew).not.toHaveBeenCalled();
+      // A busca nova volta → Enter seleciona o contato do termo ATUAL
+      await screen.findByRole('button', { name: /Outro Pelo Telefone/ });
+      expect(screen.queryByText(/Beatriz/)).toBeNull();
+      await user.keyboard('{Enter}');
+      expect(props.onSelectContact).toHaveBeenCalledTimes(1);
+      expect(props.onSelectContact.mock.calls[0][0].id).toBe(OUTRO.id);
+    });
+
+    it('clique no item do termo anterior durante a busca nova não seleciona (botão desabilitado)', async () => {
+      const user = userEvent.setup();
+      const { props, input } = montar();
+      await user.type(input, 'Beat');
+      await screen.findByRole('button', { name: /Beatriz Antiga/ });
+      await user.clear(input);
+      await user.type(input, '55556666');
+      const velho = screen.getByRole('button', { name: /Beatriz Antiga/ });
+      expect(velho).toBeDisabled();
+      await user.click(velho);
+      expect(props.onSelectContact).not.toHaveBeenCalled();
+    });
+  });
 });
