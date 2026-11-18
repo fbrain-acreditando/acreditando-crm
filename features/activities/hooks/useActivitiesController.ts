@@ -177,9 +177,13 @@ export const useActivitiesController = () => {
 
     const date = new Date(`${formData.date}T${formData.time}`);
     const selectedDeal = formData.dealId ? dealsById.get(formData.dealId) : undefined;
-    const selectedContact = selectedDeal?.contactId ? contactsById.get(selectedDeal.contactId) : undefined;
-    const clientCompanyId = selectedDeal?.clientCompanyId || selectedContact?.clientCompanyId || undefined;
-    const participantContactIds = selectedContact?.id ? [selectedContact.id] : [];
+    // Story 2.76 (D5): o id do contato já está no card — grava ele, esteja o
+    // contato na lista dos 1.000 mais novos ou não. Antes, contato antigo virava
+    // `contactId: ''` e a atividade era salva SEM contato, calada.
+    const contactId = selectedDeal?.contactId || '';
+    const contatoDaLista = contactId ? contactsById.get(contactId) : undefined;
+    const clientCompanyId = selectedDeal?.clientCompanyId || contatoDaLista?.clientCompanyId || undefined;
+    const participantContactIds = contactId ? [contactId] : [];
 
     if (editingActivity) {
       updateActivityMutation.mutate(
@@ -191,7 +195,7 @@ export const useActivitiesController = () => {
             description: formData.description,
             date: date.toISOString(),
             dealId: formData.dealId || '',
-            contactId: selectedContact?.id || '',
+            contactId,
             clientCompanyId,
             participantContactIds,
           },
@@ -212,7 +216,7 @@ export const useActivitiesController = () => {
             description: formData.description,
             date: date.toISOString(),
             dealId: formData.dealId || '',
-            contactId: selectedContact?.id || '',
+            contactId,
             clientCompanyId,
             participantContactIds,
             dealTitle: selectedDeal?.title || '',

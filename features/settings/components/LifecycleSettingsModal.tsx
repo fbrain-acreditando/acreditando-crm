@@ -1,7 +1,7 @@
 import React, { useState, useId } from 'react';
 import { X, Plus, Trash2, ArrowUp, ArrowDown, Check } from 'lucide-react';
 import { useLifecycleStages, useCreateLifecycleStage, useUpdateLifecycleStage, useDeleteLifecycleStage, useReorderLifecycleStages } from '@/lib/query/hooks/useLifecycleStagesQuery';
-import { useContacts } from '@/lib/query/hooks/useContactsQuery';
+import { useContactStageCounts } from '@/lib/query/hooks/useContactsQuery';
 import { FocusTrap, useFocusReturn } from '@/lib/a11y';
 
 interface LifecycleSettingsModalProps {
@@ -37,20 +37,14 @@ export const LifecycleSettingsModal: React.FC<LifecycleSettingsModalProps> = ({ 
     const updateStageMutation = useUpdateLifecycleStage();
     const deleteStageMutation = useDeleteLifecycleStage();
     const reorderStagesMutation = useReorderLifecycleStages();
-    const { data: contacts = [] } = useContacts();
+    // Story 2.76 (#5): contagem por estágio no BANCO (RPC `get_contact_stage_counts`).
+    // Antes contava só os 1.000 contatos mais novos: estágio só com contatos
+    // antigos mostrava 0 e o botão de excluir ficava liberado.
+    const { data: stageCounts, isSuccess: contagemPronta } = useContactStageCounts();
     const [newStageName, setNewStageName] = useState('');
     const [isAdding, setIsAdding] = useState(false);
 
-    // Calcular contagem de contatos por estágio
-    const stageCounts = React.useMemo(() => {
-        const counts: Record<string, number> = {};
-        contacts.forEach(contact => {
-            if (contact.stage) {
-                counts[contact.stage] = (counts[contact.stage] || 0) + 1;
-            }
-        });
-        return counts;
-    }, [contacts]);
+    const contagem = (stageId: string) => stageCounts?.[stageId] || 0;
 
     if (!isOpen) return null;
 
@@ -130,9 +124,9 @@ export const LifecycleSettingsModal: React.FC<LifecycleSettingsModalProps> = ({ 
                                 {/* Count Badge */}
                                 <span
                                     className="text-[10px] font-medium text-slate-500 bg-white dark:bg-slate-900 px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700"
-                                    title={`${stageCounts[stage.id] || 0} contatos neste estágio`}
+                                    title={`${contagem(stage.id)} contatos neste estágio`}
                                 >
-                                    {stageCounts[stage.id] || 0}
+                                    {contagemPronta ? contagem(stage.id) : '…'}
                                 </span>
 
                                 {/* Actions */}
@@ -156,14 +150,16 @@ export const LifecycleSettingsModal: React.FC<LifecycleSettingsModalProps> = ({ 
 
                                     <button
                                         onClick={() => deleteStageMutation.mutate(stage.id)}
-                                        disabled={stage.isDefault || (stageCounts[stage.id] || 0) > 0}
+                                        disabled={stage.isDefault || !contagemPronta || contagem(stage.id) > 0}
                                         className="p-1.5 text-slate-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed ml-1"
                                         title={
                                             stage.isDefault
                                                 ? "Estágio padrão não pode ser removido"
-                                                : (stageCounts[stage.id] || 0) > 0
-                                                    ? "Não é possível remover estágio com contatos vinculados"
-                                                    : "Remover estágio"
+                                                : !contagemPronta
+                                                    ? "Carregando a contagem de contatos…"
+                                                    : contagem(stage.id) > 0
+                                                        ? "Não é possível remover estágio com contatos vinculados"
+                                                        : "Remover estágio"
                                         }
                                     >
                                         <Trash2 size={14} />

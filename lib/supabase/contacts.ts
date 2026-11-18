@@ -16,6 +16,7 @@ import { supabase } from './client';
 import { Contact, CRMCompany, OrganizationId, PaginationState, PaginatedResponse, ContactsServerFilters } from '@/types';
 import { sanitizeUUID, sanitizeText, sanitizeNumber } from './utils';
 import { filtroDeBuscaDeContato } from './buscaDeContato';
+import { filtroDeContatosParaSelecao, LIMITE_DA_SELECAO_DE_CONTATOS } from './buscaDeContatosNoBanco';
 import { normalizePhoneE164 } from '@/lib/phone';
 
 async function getCurrentOrganizationId(): Promise<string | null> {
@@ -221,6 +222,42 @@ const transformContactToDb = (contact: Partial<Contact>): Partial<DbContact> => 
 };
 
 /**
+ * Story 2.76 (D4) — teto de linhas das consultas do Inbox. É o mesmo teto do
+ * PostgREST deste projeto (medido no T0: 1.000). Se a consulta voltar cheia,
+ * pode haver contato de fora: registra (só a contagem) para virar RPC.
+ */
+export const LIMITE_DAS_CONSULTAS_DO_INBOX = 1000;
+
+/** Consulta de contatos do Inbox: org + `deleted_at` + o filtro próprio, até o teto. */
+async function consultarParaInbox(
+  qual: 'aniversario' | 'resgate',
+  signal: AbortSignal | undefined,
+  filtrar: (q: any) => any
+): Promise<{ data: Contact[] | null; error: Error | null }> {
+  try {
+    if (!supabase) return { data: null, error: new Error('Supabase não configurado') };
+    const orgId = await getCurrentOrganizationId();
+    if (!orgId) return { data: null, error: new Error('Organização não encontrada') };
+
+    let consulta = filtrar(
+      supabase.from('contacts').select('*').is('deleted_at', null).eq('organization_id', orgId)
+    ).limit(LIMITE_DAS_CONSULTAS_DO_INBOX);
+    if (signal) consulta = consulta.abortSignal(signal);
+
+    const { data, error } = await consulta;
+    if (error) return { data: null, error };
+    const linhas = (data || []) as DbContact[];
+    if (linhas.length >= LIMITE_DAS_CONSULTAS_DO_INBOX) {
+      // Lista branca: só o nome da consulta e a contagem.
+      console.error(`[inbox] consulta de contatos "${qual}" atingiu o teto`, { linhas: linhas.length });
+    }
+    return { data: linhas.map(transformContact), error: null };
+  } catch (e) {
+    return { data: null, error: e as Error };
+  }
+}
+
+/**
  * Serviço de contatos do Supabase.
  * 
  * Fornece operações CRUD para a tabela `contacts`.
@@ -306,6 +343,70 @@ export const contactsService = {
     } catch (e) {
       return { data: null, error: e as Error };
     }
+  },
+
+  /**
+   * Story 2.76 (D2) — busca de contato no BANCO para a seleção ("Novo card") e
+   * para o contato do Inbox achado pelo nome. Nome, telefone e e-mail; até 8.
+   *
+   * Cliente do navegador (sessão do usuário → RLS) e, além do RLS, filtro de
+   * organização. Nunca lança: `{ data, error }`.
+   */
+  async buscarParaSelecao(
+    termo: string,
+    options?: { signal?: AbortSignal; limite?: number }
+  ): Promise<{ data: Contact[] | null; error: Error | null }> {
+    try {
+      if (!supabase) {
+        return { data: null, error: new Error('Supabase não configurado') };
+      }
+      const filtro = filtroDeContatosParaSelecao(termo);
+      if (!filtro) return { data: [], error: null };
+
+      const orgId = await getCurrentOrganizationId();
+      if (!orgId) return { data: null, error: new Error('Organização não encontrada') };
+
+      let consulta = supabase
+        .from('contacts')
+        .select('*')
+        .is('deleted_at', null)
+        .eq('organization_id', orgId)
+        .or(filtro)
+        .order('updated_at', { ascending: false })
+        .limit(options?.limite ?? LIMITE_DA_SELECAO_DE_CONTATOS);
+      if (options?.signal) consulta = consulta.abortSignal(options.signal);
+
+      const { data, error } = await consulta;
+      if (error) return { data: null, error };
+      return { data: (data || []).map(c => transformContact(c as DbContact)), error: null };
+    } catch (e) {
+      return { data: null, error: e as Error };
+    }
+  },
+
+  /**
+   * Story 2.76 (D4) — contatos com data de aniversário, para o Inbox.
+   * O PostgREST não filtra "mês de uma data": o mês é filtrado no navegador.
+   */
+  async getComAniversario(options?: { signal?: AbortSignal }): Promise<{ data: Contact[] | null; error: Error | null }> {
+    return consultarParaInbox('aniversario', options?.signal, q => q.not('birth_date', 'is', null));
+  },
+
+  /**
+   * Story 2.76 (D4) — clientes ativos sem interação desde `limiteIso` (ou sem
+   * interação nenhuma), para o "resgate" do Inbox. A regra fina (compra,
+   * carência de 30 dias após a criação) fica no navegador (`ehClienteParaResgate`).
+   */
+  async getClientesParaResgate(
+    limiteIso: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<{ data: Contact[] | null; error: Error | null }> {
+    return consultarParaInbox('resgate', options?.signal, q =>
+      q
+        .eq('status', 'ACTIVE')
+        .eq('stage', 'CUSTOMER')
+        .or(`last_interaction.is.null,last_interaction.lt.${new Date(limiteIso).toISOString()}`)
+    );
   },
 
   /**

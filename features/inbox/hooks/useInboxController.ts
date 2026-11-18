@@ -10,7 +10,9 @@ import {
   useDeleteActivity,
 } from '@/lib/query/hooks/useActivitiesQuery';
 import { useAuth } from '@/context/AuthContext';
-import { useContacts, useCreateContact, useUpdateContact } from '@/lib/query/hooks/useContactsQuery';
+import { useCreateContact, useUpdateContact } from '@/lib/query/hooks/useContactsQuery';
+import { useContatosDoInbox } from './useContatosDoInbox';
+import { ehClienteParaResgate, fazAniversarioNoMes } from '../regrasDasSugestoes';
 import {
   useDealsView,
   useCreateDeal,
@@ -59,7 +61,6 @@ export const useInboxController = () => {
 
   // TanStack Query hooks
   const { data: activities = [], isLoading: activitiesLoading } = useActivities();
-  const { data: contacts = [], isLoading: contactsLoading } = useContacts();
   const { data: deals = [], isLoading: dealsLoading } = useDealsView();
   const { data: defaultBoard } = useDefaultBoard();
 
@@ -92,7 +93,6 @@ export const useInboxController = () => {
   const [briefing, setBriefing] = useState<string | null>(null);
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
 
-  const isLoading = activitiesLoading || contactsLoading || dealsLoading;
 
   // --- Datas de referência ---
   const today = useMemo(() => {
@@ -118,6 +118,11 @@ export const useInboxController = () => {
     d.setDate(d.getDate() - 30);
     return d;
   }, []);
+
+  // Story 2.76 (D4): aniversariantes e clientes para resgate vêm do BANCO
+  // (antes: da lista dos 1.000 contatos mais novos — o antigo nunca virava sugestão).
+  const contatosDoInbox = useContatosDoInbox(thirtyDaysAgo.toISOString());
+  const isLoading = activitiesLoading || contatosDoInbox.isLoading || dealsLoading;
 
   /**
    * Performance: avoid parsing/sorting dates three times.
@@ -167,13 +172,8 @@ export const useInboxController = () => {
 
   // Aniversariantes do mês
   const birthdaysThisMonth = useMemo(
-    () =>
-      contacts.filter(c => {
-        if (!c.birthDate) return false;
-        const birthMonth = parseInt(c.birthDate.split('-')[1]);
-        return birthMonth === currentMonth;
-      }),
-    [contacts, currentMonth]
+    () => (contatosDoInbox.comAniversario ?? []).filter(c => fazAniversarioNoMes(c, currentMonth)),
+    [contatosDoInbox.comAniversario, currentMonth]
   );
 
   // Negócios estagnados (> 7 dias sem update)
@@ -200,29 +200,8 @@ export const useInboxController = () => {
 
   // Clientes em risco de churn (inativos há > 30 dias)
   const rescueContacts = useMemo(
-    () =>
-      contacts.filter(c => {
-        // Padrão de mercado: considerar apenas clientes ativos (não leads)
-        if (c.status !== 'ACTIVE' || c.stage !== 'CUSTOMER') return false;
-
-        const createdAtTs = Date.parse(c.createdAt);
-
-        // Sem histórico: carência de 30d após criação
-        if (!c.lastInteraction && !c.lastPurchaseDate) {
-          return createdAtTs < thirtyDaysAgo.getTime();
-        }
-
-        // Com histórico: pega a data mais recente entre interação e compra
-        const lastInteractionTs = c.lastInteraction ? Date.parse(c.lastInteraction) : null;
-        const lastPurchaseTs = c.lastPurchaseDate ? Date.parse(c.lastPurchaseDate) : null;
-        const lastActivityTs =
-          lastInteractionTs != null && lastPurchaseTs != null
-            ? Math.max(lastInteractionTs, lastPurchaseTs)
-            : lastInteractionTs ?? lastPurchaseTs;
-
-        return lastActivityTs !== null && lastActivityTs < thirtyDaysAgo.getTime();
-      }),
-    [contacts, thirtyDaysAgo]
+    () => (contatosDoInbox.paraResgate ?? []).filter(c => ehClienteParaResgate(c, thirtyDaysAgo.getTime())),
+    [contatosDoInbox.paraResgate, thirtyDaysAgo]
   );
 
   // Smart Scoring: Calculate priority based on value, probability, and time
@@ -844,6 +823,8 @@ export const useInboxController = () => {
 
     // Sugestões de IA
     aiSuggestions,
+    // Story 2.76 (AC7): aniversariantes do mês (vindos do banco)
+    birthdaysThisMonth,
 
     // Focus Mode
     focusQueue,

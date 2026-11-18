@@ -24,7 +24,8 @@ import { FocusContextPanel } from './FocusContextPanel';
 import { useUIState } from '@/store/uiState';
 import {
   useDealsView,
-  useContacts,
+  useContatosPorIds,
+  useBuscaDeContatos,
   useBoards,
   useActivities,
   useUpdateDeal,
@@ -109,7 +110,6 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
   const [manualDealId, setManualDealId] = useState('');
   const [contextSearch, setContextSearch] = useState('');
   const { data: deals = [] } = useDealsView();
-  const { data: contacts = [] } = useContacts();
   const { data: boards = [] } = useBoards();
   const { data: activities = [] } = useActivities();
   const { activeBoardId } = useUIState();
@@ -144,7 +144,6 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
     }
     return map;
   }, [deals]);
-  const contactsById = useMemo(() => new Map(contacts.map(c => [c.id, c])), [contacts]);
   const boardsById = useMemo(() => new Map(boards.map(b => [b.id, b])), [boards]);
 
   /**
@@ -166,8 +165,11 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
     return map;
   }, [activities]);
 
-  // Context data for Cockpit
-  const contextData = useMemo(() => {
+  // Story 2.76 (D3, AC6) — 1º resolve QUEM é o item (card, contato, nome
+  // citado); depois o contato vem do banco pelo id (`useContatosPorIds`) ou,
+  // sem id, pelo nome (`useBuscaDeContatos`, 1 resultado). Antes procurava na
+  // lista dos 1.000 contatos mais novos: contato antigo deixava o foco sem contato.
+  const alvo = useMemo(() => {
     if (!currentItem) return null;
 
     let dealId = manualDealId || '';
@@ -205,14 +207,32 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
     }
 
     const deal = dealId ? dealsById.get(dealId) : undefined;
-
-    // Busca contato por ID, por contactId do deal, ou pelo nome extraído
+    const contatoDaSugestao = currentItem.type === 'suggestion'
+      ? ((currentItem.data as AISuggestion).data.contact ?? null)
+      : null;
     const primaryContactId = contactId || deal?.contactId || '';
-    let contact = primaryContactId ? contactsById.get(primaryContactId) : undefined;
-    if (!contact && extractedContactName) {
-      const needle = extractedContactName.toLowerCase();
-      contact = contacts.find(c => c.name?.toLowerCase().includes(needle));
-    }
+    return { deal, primaryContactId, extractedContactName, contatoDaSugestao };
+  }, [currentItem, manualDealId, dealsById, dealsByTitleKey]);
+
+  // A sugestão de resgate já traz o contato inteiro: serve de "lista" (sem consulta).
+  const contatoDaSugestao = alvo?.contatoDaSugestao ?? null;
+  const contatosJaCarregados = useMemo(
+    () => ({ data: contatoDaSugestao ? [contatoDaSugestao] : [], isFetched: true, isError: false }),
+    [contatoDaSugestao]
+  );
+  const idsDoFoco = useMemo(() => (alvo?.primaryContactId ? [alvo.primaryContactId] : []), [alvo?.primaryContactId]);
+  const contatosPorId = useContatosPorIds(idsDoFoco, contatosJaCarregados);
+  const contatoPeloId = alvo?.primaryContactId ? contatosPorId.porId.get(alvo.primaryContactId) : undefined;
+  // Como antes: sem contato pelo id (sem id, ou o id não existe mais) → tenta o nome citado.
+  const semContatoPeloId = !alvo?.primaryContactId || (!contatosPorId.carregando && !contatoPeloId);
+  const nomeParaBuscar = semContatoPeloId ? (alvo?.extractedContactName ?? '') : '';
+  const contatoPeloNome = useBuscaDeContatos(nomeParaBuscar, { limite: 1, enabled: !!nomeParaBuscar });
+
+  // Context data for Cockpit
+  const contextData = useMemo(() => {
+    if (!currentItem || !alvo) return null;
+    const { deal } = alvo;
+    const contact = contatoPeloId ?? (nomeParaBuscar ? contatoPeloNome.contatos[0] : undefined);
 
     const dealActivities = deal ? (activitiesByDealIdSorted.get(deal.id) ?? []) : [];
     const board = deal ? (boardsById.get(deal.boardId) ?? null) : activeBoard;
@@ -244,7 +264,7 @@ export const InboxFocusView: React.FC<InboxFocusViewProps> = ({
       board,
       isPlaceholder: !deal && !!placeholderDeal
     };
-  }, [currentItem, manualDealId, dealsById, dealsByTitleKey, contactsById, contacts, activitiesByDealIdSorted, boardsById, activeBoard]);
+  }, [currentItem, alvo, contatoPeloId, nomeParaBuscar, contatoPeloNome.contatos, activitiesByDealIdSorted, boardsById, activeBoard]);
 
   const { moveDeal } = useMoveDealSimple(contextData?.board ?? null, []);
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Search, User, Plus, Building2 } from 'lucide-react';
-import { useContacts, useCompanies } from '@/lib/query/hooks';
+import { useBuscaDeContatos, useCompanies } from '@/lib/query/hooks';
 import type { Contact, Company } from '@/types';
 
 interface ContactSearchComboboxProps {
@@ -14,9 +14,20 @@ interface ContactSearchComboboxProps {
   placeholder?: string;
 }
 
+/** Textos da busca (story 2.76, AC4) — os testes afirmam estes literais. */
+export const TEXTOS_DA_BUSCA_DE_CONTATO = {
+  termoCurto: 'Digite ao menos 3 letras ou 4 números.',
+  buscando: 'Buscando…',
+  erro: 'Não foi possível buscar contatos. Tente de novo.',
+  nenhum: 'Nenhum contato encontrado',
+} as const;
+
 /**
  * Combobox de busca unificada de contatos
- * Busca por nome, telefone ou email
+ * Busca por nome, telefone ou email.
+ *
+ * Story 2.76 (D1): a busca vai ao BANCO (`useBuscaDeContatos`), não à lista
+ * dos 1.000 contatos mais novos — contato antigo aparece e não é recadastrado.
  */
 export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
   onSelectContact,
@@ -32,7 +43,7 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { data: contacts = [] } = useContacts();
+  const busca = useBuscaDeContatos(searchTerm);
   const { data: companies = [] } = useCompanies();
 
   // Criar mapa de empresas para lookup rápido
@@ -40,21 +51,8 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
     return new Map(companies.map(c => [c.id, c]));
   }, [companies]);
 
-  // Filtrar contatos baseado no termo de busca
-  const filteredContacts = useMemo(() => {
-    if (!searchTerm.trim()) return [];
-    
-    const term = searchTerm.toLowerCase().trim();
-    
-    return contacts
-      .filter(contact => {
-        const nameMatch = contact.name?.toLowerCase().includes(term);
-        const emailMatch = contact.email?.toLowerCase().includes(term);
-        const phoneMatch = contact.phone?.replace(/\D/g, '').includes(term.replace(/\D/g, ''));
-        return nameMatch || emailMatch || phoneMatch;
-      })
-      .slice(0, 8); // Limitar a 8 resultados
-  }, [contacts, searchTerm]);
+  // Contatos que o banco devolveu para o termo (até 8, mais recentes primeiro)
+  const filteredContacts = busca.contatos;
 
   // Resetar highlight quando resultados mudam
   useEffect(() => {
@@ -161,6 +159,18 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
           ref={listRef}
           className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150"
         >
+          {(busca.termoCurto || busca.carregando || busca.erro) && (
+            <div
+              role="status"
+              className="px-3 pt-3 pb-1 text-sm text-slate-500 dark:text-slate-400 text-center"
+            >
+              {busca.termoCurto
+                ? TEXTOS_DA_BUSCA_DE_CONTATO.termoCurto
+                : busca.erro
+                  ? TEXTOS_DA_BUSCA_DE_CONTATO.erro
+                  : TEXTOS_DA_BUSCA_DE_CONTATO.buscando}
+            </div>
+          )}
           {filteredContacts.length > 0 ? (
             <div className="max-h-64 overflow-y-auto">
               {filteredContacts.map((contact, index) => {
@@ -199,9 +209,9 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
                 );
               })}
             </div>
-          ) : (
+          ) : busca.termoCurto || busca.carregando || busca.erro ? null : (
             <div className="p-3 text-sm text-slate-500 dark:text-slate-400 text-center">
-              Nenhum contato encontrado
+              {TEXTOS_DA_BUSCA_DE_CONTATO.nenhum}
             </div>
           )}
           
