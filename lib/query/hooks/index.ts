@@ -40,6 +40,14 @@ export {
   type ContactsFilters,
 } from './useContactsQuery';
 
+// Story 2.75 — o contato do card, mesmo fora da lista dos 1.000 mais novos
+export {
+  useContatoDoCard,
+  chaveDoContatoDoCard,
+  type ContatoDoCard,
+  type ContatosCarregados,
+} from './useContatoDoCard';
+
 // Companies
 export {
   useCompanies,
