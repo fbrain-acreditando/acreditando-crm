@@ -48,6 +48,19 @@ export {
   type ContatosCarregados,
 } from './useContatoDoCard';
 
+// Story 2.76 — contatos pelo id (vários) e busca de contato no banco
+export {
+  useContatosPorIds,
+  chaveDosContatosPorIds,
+  type ContatosPorIds,
+} from './useContatosPorIds';
+export {
+  useBuscaDeContatos,
+  chaveDaBuscaDeContatos,
+  ESPERA_DA_BUSCA_DE_CONTATOS_MS,
+  type BuscaDeContatos,
+} from './useBuscaDeContatos';
+
 // Companies
 export {
   useCompanies,
