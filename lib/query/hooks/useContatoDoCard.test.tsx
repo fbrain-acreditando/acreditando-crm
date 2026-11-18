@@ -113,6 +113,19 @@ describe('useContatoDoCard (story 2.75)', () => {
     expect(result.current).toEqual({ contato: null, carregando: false, erro: true });
   });
 
+  it('QA LOW-1: nova busca falha com contato já carregado → mantém o contato, sem erro', async () => {
+    h.getByIds.mockResolvedValueOnce({ data: [ANTIGO], error: null });
+    const { result } = renderHook(
+      () => useContatoDoCard(ANTIGO.id, { data: [], isFetched: true, isError: false }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.contato).toEqual(ANTIGO));
+    h.getByIds.mockResolvedValueOnce({ data: null, error: new Error('falha simulada') });
+    await queryClient.refetchQueries({ queryKey: chaveDoContatoDoCard(ANTIGO.id) });
+    await waitFor(() => expect(h.getByIds).toHaveBeenCalledTimes(2));
+    expect(result.current).toEqual({ contato: ANTIGO, carregando: false, erro: false });
+  });
+
   it('lista com erro e sem dados: cai na busca por id', async () => {
     h.getByIds.mockResolvedValue({ data: [ANTIGO], error: null });
     const { result } = renderHook(
