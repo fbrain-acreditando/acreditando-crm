@@ -194,6 +194,26 @@ describe('ContactSearchCombobox (story 2.76, AC4)', () => {
     expect(h.useContacts).not.toHaveBeenCalled();
   });
 
+  it('LOW-4: Enter durante a 1ª busca não abre "Criar novo"; quando a busca volta, Enter seleciona o contato existente', async () => {
+    let soltar: (v: unknown) => void = () => {};
+    h.buscarParaSelecao.mockImplementation(() => new Promise(r => (soltar = r)));
+    const user = userEvent.setup();
+    const { props, input } = montar();
+    await user.type(input, 'Beat');
+    expect(screen.getByRole('status')).toHaveTextContent(TEXTOS_DA_BUSCA_DE_CONTATO.buscando);
+    await user.keyboard('{Enter}'); // ainda na espera de 300 ms
+    expect(props.onCreateNew).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.buscarParaSelecao).toHaveBeenCalled());
+    await user.keyboard('{Enter}'); // consulta no ar, sem resposta
+    expect(props.onCreateNew).not.toHaveBeenCalled();
+    expect(props.onSelectContact).not.toHaveBeenCalled();
+    soltar({ data: [ANTIGO], error: null });
+    await screen.findByRole('button', { name: /Beatriz Antiga/ });
+    await user.keyboard('{Enter}');
+    expect(props.onCreateNew).not.toHaveBeenCalled();
+    expect(props.onSelectContact.mock.calls[0][0].id).toBe(ANTIGO.id);
+  });
+
   describe('QA loop 2.76a (MEDIUM-1) — resultado do termo anterior não é selecionável', () => {
     /** Outro contato, achado só pelo telefone (sintético). */
     const OUTRO = contato('33333333-3333-4333-8333-333333333333', {

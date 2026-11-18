@@ -123,7 +123,10 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
         if (highlightedIndex < filteredContacts.length) {
           // Resultado do termo anterior: o Enter espera a busca nova (não seleciona outro contato).
           if (podeSelecionar) handleSelect(filteredContacts[highlightedIndex]);
-        } else {
+        } else if (!busca.carregando) {
+          // LOW-4 (QA 2.76a): Enter durante "Buscando…" não abre "Criar novo" —
+          // o contato pode existir e ainda não ter voltado (era o caminho do gêmeo).
+          // O clique explícito em "Criar novo" continua valendo.
           handleCreateNew();
         }
         break;
