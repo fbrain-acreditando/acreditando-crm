@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   useContacts,
+  useContatoDoCard,
   useActivities,
   useBoards,
   useLifecycleStages,
@@ -102,7 +103,9 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
   const addItemToDeal = (dealId: string, item: Omit<import('@/types').DealItem, 'id'>) => addDealItemMutation.mutateAsync({ dealId, item });
   const removeItemFromDeal = (dealId: string, itemId: string) => removeDealItemMutation.mutateAsync({ dealId, itemId });
 
-  const { data: contacts = [] } = useContacts();
+  // Story 2.75 — a lista dos 1.000 contatos mais novos continua sendo a 1ª fonte
+  // (sem consulta extra); quem não está nela é buscado pelo id no `useContatoDoCard`.
+  const contatosDaLista = useContacts();
   const { data: activities = [] } = useActivities();
   const { data: boards = [] } = useBoards();
   const { activeBoardId } = useUIState();
@@ -140,14 +143,21 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
 
   // Performance: avoid repeated `find(...)` on large arrays.
   const dealsById = useMemo(() => new Map(allDeals.map((d) => [d.id, d])), [allDeals]);
-  const contactsById = useMemo(() => new Map(contacts.map((c) => [c.id, c])), [contacts]);
   const boardsById = useMemo(() => new Map(boards.map((b) => [b.id, b])), [boards]);
   const lifecycleStageById = useMemo(() => new Map(lifecycleStages.map((s) => [s.id, s])), [lifecycleStages]);
   const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const activitiesById = useMemo(() => new Map(activities.map((a) => [a.id, a])), [activities]);
 
   const deal = dealId ? dealsById.get(dealId) : undefined;
-  const contact = deal ? (contactsById.get(deal.contactId) ?? null) : null;
+  const {
+    contato: contact,
+    carregando: carregandoContato,
+    erro: erroDoContato,
+  } = useContatoDoCard(deal?.contactId, {
+    data: contatosDaLista.data,
+    isFetched: contatosDaLista.isFetched,
+    isError: contatosDaLista.isError,
+  });
 
   // Determine the correct board for this deal
   const dealBoard = deal ? (boardsById.get(deal.boardId) ?? activeBoard) : activeBoard;
@@ -1013,13 +1023,22 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                         conversa ("Iniciar conversa no WhatsApp", com o compositor
                         da 1ª mensagem) e contato com conversa ("Mensagem", o botão
                         de antes). O vínculo com a conversa é o `contact_id`. */}
-                    {contact?.id && (
+                    {contact?.id ? (
                       <BotaoConversaDoCard
                         dealId={deal.id}
                         contact={{ id: contact.id, phone: contact.phone }}
                         onNavegar={onClose}
                       />
-                    )}
+                    ) : carregandoContato ? (
+                      // Story 2.75 (D2) — contato fora da lista, buscado pelo id.
+                      <p role="status" className="text-xs text-slate-500 dark:text-slate-400">
+                        Carregando contato…
+                      </p>
+                    ) : erroDoContato ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Não deu para carregar o contato. Feche e abra o card de novo.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 

@@ -86,6 +86,8 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 vi.mock('@/lib/query/hooks', () => ({
   useMoveDealSimple: () => ({ moveDeal: vi.fn() }),
   useContacts: () => ({ data: [], isLoading: false }),
+  // Story 2.75 — o modal lê o contato do card por este hook (sem contato aqui).
+  useContatoDoCard: () => ({ contato: null, carregando: false, erro: false }),
   useActivities: () => ({ data: [], isLoading: false }),
   useBoards: () => ({ data: [], isLoading: false }),
   useLifecycleStages: () => ({ data: [], isLoading: false }),

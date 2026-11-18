@@ -44,6 +44,19 @@ export async function enriquecerDeals(
     companiesService.getByIds(companyIds, { signal }),
   ]);
 
+  // Story 2.75 (AC8): o erro não é mais engolido em silêncio. O quadro mantém o
+  // fallback ('Sem contato' / 'Sem empresa') para não ficar em branco por uma
+  // falha passageira, mas a falha fica registrada. Lista branca: só a mensagem
+  // (nada de ids, nomes ou telefones). Cancelamento (`signal` abortado) não é
+  // falha: o React Query descarta esse resultado.
+  const cancelado = signal?.aborted === true;
+  if (contactsResult.error && !cancelado) {
+    console.error('[enriquecerDeals] falha ao buscar contatos dos cards:', contactsResult.error.message);
+  }
+  if (companiesResult.error && !cancelado) {
+    console.error('[enriquecerDeals] falha ao buscar empresas dos cards:', companiesResult.error.message);
+  }
+
   const contactMap = new Map((contactsResult.data || []).map(c => [c.id, c]));
   const companyMap = new Map((companiesResult.data || []).map(c => [c.id, c]));
   const stageMap = new Map(stages.map(s => [s.id, s.label || s.name]));

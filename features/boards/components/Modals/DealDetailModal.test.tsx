@@ -61,6 +61,9 @@ vi.mock('@/hooks/useResponsiveMode', () => ({
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
     profile: { id: 'user-1', role: 'admin', email: 'test@example.com', organization_id: 'org-1' },
+    // Story 2.75 — o `useContatoDoCard` real (modo 'real') só liga a consulta com usuário.
+    user: { id: 'user-1' },
+    loading: false,
   }),
 }));
 
@@ -70,12 +73,18 @@ vi.mock('@/context/ToastContext', () => ({
   }),
 }));
 
+const { consultasLigadas } = vi.hoisted(() => ({ consultasLigadas: { chaves: [] as Array<readonly unknown[]> } }));
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
   // Return the deal fixture for DEALS_VIEW_KEY (identified by enabled:false in DealDetailModal)
   return {
     ...actual,
-    useQuery: (options: { enabled?: boolean }) => {
+    useQuery: (options: { enabled?: boolean; queryKey?: readonly unknown[] }) => {
+      // Story 2.75 — este mock não roda `queryFn`; por isso registra quais
+      // consultas pediram para ser LIGADAS (o espião do `getByIds` sozinho
+      // não provaria nada aqui).
+      if (options.enabled !== false && options.queryKey) consultasLigadas.chaves.push(options.queryKey);
       if (options.enabled === false) {
         return {
           data: [{
@@ -123,20 +132,65 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   };
 });
 
-vi.mock('@/lib/query/hooks', () => ({
-  useMoveDealSimple: () => ({ moveDeal: moveDealSpy }),
-  useContacts: () => ({ data: [], isLoading: false }),
-  useActivities: () => ({ data: [], isLoading: false }),
-  useBoards: () => ({ data: boardsDoTeste.atual, isLoading: false }),
-  useLifecycleStages: () => ({ data: [], isLoading: false }),
-  useUpdateDeal: () => ({ mutate: vi.fn(), mutateAsync: mutateUpdateDeal, isPending: false }),
-  useDeleteDeal: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useAddDealItem: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useRemoveDealItem: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useCreateActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useUpdateActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useDeleteActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+// Story 2.75 — o contato do card. `modo: 'fixo'` (padrão) devolve `atual`, que
+// por padrão é "sem contato" (igual a antes da story); `modo: 'real'` roda o hook
+// de verdade (para afirmar que contato da lista NÃO consulta o banco).
+type ContatoDoCardDeTeste = {
+  contato: { id: string; phone: string; stage: string } | null;
+  carregando: boolean;
+  erro: boolean;
+};
+const { contatoDoCard, listaDeContatos, etapasDoCiclo, botaoConversa, getByIdsSpy } = vi.hoisted(() => ({
+  contatoDoCard: {
+    modo: 'fixo' as 'fixo' | 'real',
+    atual: { contato: null, carregando: false, erro: false } as ContatoDoCardDeTeste,
+    chamadas: [] as unknown[][],
+  },
+  listaDeContatos: { atual: { data: [] as unknown[], isLoading: false, isFetched: true, isError: false } },
+  etapasDoCiclo: { atual: [] as unknown[] },
+  botaoConversa: { props: [] as Array<{ contact: { id: string; phone: string } }> },
+  getByIdsSpy: vi.fn(async () => ({ data: [], error: null })),
 }));
+
+vi.mock('@/lib/supabase', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase')>();
+  return {
+    ...actual,
+    contactsService: { ...actual.contactsService, getByIds: getByIdsSpy },
+  };
+});
+
+vi.mock('@/features/messaging/components/IniciarConversa/BotaoConversaDoCard', () => ({
+  BotaoConversaDoCard: (p: { contact: { id: string; phone: string } }) => {
+    botaoConversa.props.push(p);
+    return <button type="button">Mensagem</button>;
+  },
+}));
+
+vi.mock('@/lib/query/hooks', async () => {
+  const real = await vi.importActual<typeof import('@/lib/query/hooks/useContatoDoCard')>(
+    '@/lib/query/hooks/useContatoDoCard'
+  );
+  return {
+    useContatoDoCard: (...args: Parameters<typeof real.useContatoDoCard>) => {
+      contatoDoCard.chamadas.push(args);
+      if (contatoDoCard.modo === 'real') return real.useContatoDoCard(...args);
+      return contatoDoCard.atual;
+    },
+    useMoveDealSimple: () => ({ moveDeal: moveDealSpy }),
+    useContacts: () => listaDeContatos.atual,
+    useActivities: () => ({ data: [], isLoading: false }),
+    useBoards: () => ({ data: boardsDoTeste.atual, isLoading: false }),
+    useLifecycleStages: () => ({ data: etapasDoCiclo.atual, isLoading: false }),
+    useUpdateDeal: () => ({ mutate: vi.fn(), mutateAsync: mutateUpdateDeal, isPending: false }),
+    useDeleteDeal: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+    useAddDealItem: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+    useRemoveDealItem: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+    useCreateActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+    useUpdateActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+    useDeleteActivity: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  };
+});
 
 vi.mock('@/lib/query/hooks/useProductsQuery', () => ({
   useActiveProducts: () => ({ data: [] }),
@@ -280,6 +334,14 @@ beforeEach(() => {
   cardExtra.atual = {};
   definicoes.atual = DEFINICOES_PADRAO;
   valoresDoCard.atual = {};
+  contatoDoCard.modo = 'fixo';
+  contatoDoCard.atual = { contato: null, carregando: false, erro: false };
+  contatoDoCard.chamadas = [];
+  listaDeContatos.atual = { data: [], isLoading: false, isFetched: true, isError: false };
+  etapasDoCiclo.atual = [];
+  botaoConversa.props = [];
+  getByIdsSpy.mockClear();
+  consultasLigadas.chaves = [];
 });
 
 describe('DealDetailModal', () => {
@@ -306,6 +368,79 @@ describe('DealDetailModal', () => {
   });
 });
 
+
+
+/**
+ * Story 2.75 — o contato do card antigo (fora da lista dos 1.000 mais novos).
+ * O `useContatoDoCard` é simulado (`modo: 'fixo'`) ou real (`modo: 'real'`).
+ */
+describe('DealDetailModal — o contato do card antigo (story 2.75)', () => {
+  const CONTATO_ANTIGO = { id: 'contact-1', phone: '+5500000000000', stage: 'lc-1' };
+  const ETAPA = { id: 'lc-1', name: 'Lead Qualificado', color: 'bg-blue-500', order: 0 };
+
+  it('🎯 contato fora da lista, achado pelo id ⇒ botão com { id, phone } e etiqueta da etapa', () => {
+    etapasDoCiclo.atual = [ETAPA];
+    contatoDoCard.atual = { contato: CONTATO_ANTIGO, carregando: false, erro: false };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'Mensagem' })).toBeInTheDocument();
+    expect(botaoConversa.props.at(-1)?.contact).toEqual({ id: 'contact-1', phone: '+5500000000000' });
+    expect(screen.getByText('Lead Qualificado')).toBeInTheDocument();
+
+    // o modal passa o contactId do card e o resultado do useContacts ao hook
+    const [id, carregados] = contatoDoCard.chamadas.at(-1) as [string, Record<string, unknown>];
+    expect(id).toBe('contact-1');
+    expect(carregados).toEqual({ data: [], isFetched: true, isError: false });
+  });
+
+  it('carregando ⇒ "Carregando contato…" (role=status) e nenhum botão', () => {
+    contatoDoCard.atual = { contato: null, carregando: true, erro: false };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Carregando contato…');
+    expect(screen.queryByRole('button', { name: 'Mensagem' })).toBeNull();
+  });
+
+  it('erro ⇒ texto de erro e nenhum botão', () => {
+    contatoDoCard.atual = { contato: null, carregando: false, erro: true };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.getByText('Não deu para carregar o contato. Feche e abra o card de novo.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mensagem' })).toBeNull();
+    expect(screen.queryByText('Carregando contato…')).toBeNull();
+  });
+
+  it('card sem contactId ⇒ nenhum botão e nenhum "Carregando contato…" (hook real)', () => {
+    contatoDoCard.modo = 'real';
+    cardExtra.atual = { contactId: '' };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Mensagem' })).toBeNull();
+    expect(screen.queryByText('Carregando contato…')).toBeNull();
+    expect(screen.queryByText(/Não deu para carregar o contato/)).toBeNull();
+    expect(getByIdsSpy).not.toHaveBeenCalled();
+    expect(consultasLigadas.chaves.filter(k => k.includes('do-card'))).toEqual([]);
+  });
+
+  it('hook devolvendo null (contato excluído) ⇒ nenhum botão', () => {
+    contatoDoCard.atual = { contato: null, carregando: false, erro: false };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Mensagem' })).toBeNull();
+    expect(screen.queryByText('Carregando contato…')).toBeNull();
+  });
+
+  it('🎯 sem regressão (AC5): contato NA lista ⇒ botão aparece e o banco não é consultado (hook real)', async () => {
+    contatoDoCard.modo = 'real';
+    listaDeContatos.atual = { data: [CONTATO_ANTIGO], isLoading: false, isFetched: true, isError: false };
+    etapasDoCiclo.atual = [ETAPA];
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Mensagem' })).toBeInTheDocument();
+    expect(botaoConversa.props.at(-1)?.contact).toEqual({ id: 'contact-1', phone: '+5500000000000' });
+    expect(screen.getByText('Lead Qualificado')).toBeInTheDocument();
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 20));
+    });
+    expect(getByIdsSpy).not.toHaveBeenCalled();
+    expect(consultasLigadas.chaves.filter(k => k.includes('do-card'))).toEqual([]);
+  });
+});
 
 
 /**

@@ -114,6 +114,40 @@ export interface DbCRMCompany {
  * @param db - Contato no formato do banco.
  * @returns Contato no formato da aplicação.
  */
+/**
+ * Story 2.75 (AC8) — quantos ids vão em cada `.in('id', […])`.
+ *
+ * Medido em produção: 988 ids viram uma URL de ~36,6 mil caracteres e o
+ * PostgREST responde HTTP 400; 300 ids (~11,2 mil) ainda passam. 150 deixa folga.
+ */
+export const TAMANHO_DO_LOTE_DE_IDS = 150;
+
+/**
+ * Busca por id em lotes de no máximo `TAMANHO_DO_LOTE_DE_IDS`, em paralelo.
+ * Deduplica os ids antes de fatiar e o resultado por `id`. Se UM lote falhar,
+ * devolve o erro — nunca uma lista parcial silenciosa.
+ */
+async function buscarPorIdsEmLotes<T extends { id: string }>(
+  ids: string[],
+  buscarLote: (lote: string[]) => PromiseLike<{ data: T[] | null; error: Error | null }>
+): Promise<{ data: T[]; error: null } | { data: null; error: Error }> {
+  const unicos = [...new Set(ids.filter(Boolean))];
+  if (unicos.length === 0) return { data: [], error: null };
+
+  const lotes: string[][] = [];
+  for (let i = 0; i < unicos.length; i += TAMANHO_DO_LOTE_DE_IDS) {
+    lotes.push(unicos.slice(i, i + TAMANHO_DO_LOTE_DE_IDS));
+  }
+
+  const respostas = await Promise.all(lotes.map(lote => buscarLote(lote)));
+  const falha = respostas.find(r => r.error);
+  if (falha?.error) return { data: null, error: falha.error };
+
+  const porId = new Map<string, T>();
+  for (const r of respostas) for (const item of r.data || []) porId.set(item.id, item);
+  return { data: [...porId.values()], error: null };
+}
+
 const transformContact = (db: DbContact): Contact => ({
   id: db.id,
   organizationId: db.organization_id,
@@ -257,21 +291,18 @@ export const contactsService = {
       if (!ids || ids.length === 0) {
         return { data: [], error: null };
       }
-      // Remove duplicatas e valores vazios
-      const uniqueIds = [...new Set(ids.filter(Boolean))];
-      if (uniqueIds.length === 0) {
-        return { data: [], error: null };
-      }
-
-      let contactsQuery = supabase
-        .from('contacts')
-        .select('*')
-        .is('deleted_at', null);
-      if (options?.signal) contactsQuery = contactsQuery.abortSignal(options.signal);
-      const { data, error } = await contactsQuery.in('id', uniqueIds);
-
-      if (error) return { data: null, error };
-      return { data: (data || []).map(c => transformContact(c as DbContact)), error: null };
+      const client = supabase;
+      // Story 2.75 (AC8): em lotes — 1.000 ids numa URL só dão HTTP 400.
+      return await buscarPorIdsEmLotes<Contact>(ids, async lote => {
+        let contactsQuery = client
+          .from('contacts')
+          .select('*')
+          .is('deleted_at', null);
+        if (options?.signal) contactsQuery = contactsQuery.abortSignal(options.signal);
+        const { data, error } = await contactsQuery.in('id', lote);
+        if (error) return { data: null, error };
+        return { data: (data || []).map(c => transformContact(c as DbContact)), error: null };
+      });
     } catch (e) {
       return { data: null, error: e as Error };
     }
@@ -610,20 +641,17 @@ export const companiesService = {
       if (!ids || ids.length === 0) {
         return { data: [], error: null };
       }
-      // Remove duplicatas e valores vazios
-      const uniqueIds = [...new Set(ids.filter(Boolean))];
-      if (uniqueIds.length === 0) {
-        return { data: [], error: null };
-      }
-
-      let companiesQuery = supabase
-        .from('crm_companies')
-        .select('*');
-      if (options?.signal) companiesQuery = companiesQuery.abortSignal(options.signal);
-      const { data, error } = await companiesQuery.in('id', uniqueIds);
-
-      if (error) return { data: null, error };
-      return { data: (data || []).map(c => transformCRMCompany(c as DbCRMCompany)), error: null };
+      const client = supabase;
+      // Story 2.75 (AC8): em lotes, como em `contactsService.getByIds`.
+      return await buscarPorIdsEmLotes<CRMCompany>(ids, async lote => {
+        let companiesQuery = client
+          .from('crm_companies')
+          .select('*');
+        if (options?.signal) companiesQuery = companiesQuery.abortSignal(options.signal);
+        const { data, error } = await companiesQuery.in('id', lote);
+        if (error) return { data: null, error };
+        return { data: (data || []).map(c => transformCRMCompany(c as DbCRMCompany)), error: null };
+      });
     } catch (e) {
       return { data: null, error: e as Error };
     }
