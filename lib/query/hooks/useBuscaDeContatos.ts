@@ -34,6 +34,13 @@ export interface BuscaDeContatos {
   erro: boolean;
   /** Há texto, mas curto demais para ir ao banco. */
   termoCurto: boolean;
+  /**
+   * QA loop 2.76a (MEDIUM-1): `true` só quando `contatos` é a resposta do banco
+   * para o termo ATUAL. Durante a espera/carregamento `contatos` ainda traz o
+   * resultado do termo anterior (`keepPreviousData`, só para a lista não piscar)
+   * e NÃO pode ser selecionado nem usado como "o contato" do termo.
+   */
+  resultadoDoTermoAtual: boolean;
 }
 
 /**
@@ -76,12 +83,20 @@ export function useBuscaDeContatos(
   });
 
   if (!ligado || termoAtual === '' || termoCurto) {
-    return { contatos: SEM_CONTATOS, carregando: false, erro: false, termoCurto };
+    return { contatos: SEM_CONTATOS, carregando: false, erro: false, termoCurto, resultadoDoTermoAtual: false };
   }
   const termoEmDia = termoComEspera === termoAtual;
   if (!termoEmDia || consulta.isPending || consulta.isPlaceholderData) {
-    return { contatos: consulta.data ?? SEM_CONTATOS, carregando: true, erro: false, termoCurto: false };
+    return {
+      contatos: consulta.data ?? SEM_CONTATOS,
+      carregando: true,
+      erro: false,
+      termoCurto: false,
+      resultadoDoTermoAtual: false,
+    };
   }
-  if (consulta.isError) return { contatos: SEM_CONTATOS, carregando: false, erro: true, termoCurto: false };
-  return { contatos: consulta.data ?? SEM_CONTATOS, carregando: false, erro: false, termoCurto: false };
+  if (consulta.isError) {
+    return { contatos: SEM_CONTATOS, carregando: false, erro: true, termoCurto: false, resultadoDoTermoAtual: false };
+  }
+  return { contatos: consulta.data ?? SEM_CONTATOS, carregando: false, erro: false, termoCurto: false, resultadoDoTermoAtual: true };
 }

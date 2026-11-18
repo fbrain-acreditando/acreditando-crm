@@ -405,7 +405,9 @@ export const contactsService = {
       q
         .eq('status', 'ACTIVE')
         .eq('stage', 'CUSTOMER')
-        .or(`last_interaction.is.null,last_interaction.lt.${new Date(limiteIso).toISOString()}`)
+        // QA loop 2.76a (LOW-3): dentro de `.or()` o valor vai entre aspas duplas
+        // (o `:` do horário ISO é reservado no PostgREST). Provado em produção (200).
+        .or(`last_interaction.is.null,last_interaction.lt."${new Date(limiteIso).toISOString()}"`)
     );
   },
 

@@ -53,6 +53,9 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
 
   // Contatos que o banco devolveu para o termo (até 8, mais recentes primeiro)
   const filteredContacts = busca.contatos;
+  // QA loop 2.76a (MEDIUM-1): enquanto a busca do termo atual não volta, a lista
+  // ainda é a do termo anterior — aparece (com "Buscando…"), mas não seleciona.
+  const podeSelecionar = busca.resultadoDoTermoAtual;
 
   // Resetar highlight quando resultados mudam
   useEffect(() => {
@@ -76,6 +79,7 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
   }, []);
 
   const handleSelect = (contact: Contact) => {
+    if (!podeSelecionar) return;
     onSelectContact(contact);
     
     // Auto-selecionar empresa do contato se existir
@@ -117,7 +121,8 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
       case 'Enter':
         e.preventDefault();
         if (highlightedIndex < filteredContacts.length) {
-          handleSelect(filteredContacts[highlightedIndex]);
+          // Resultado do termo anterior: o Enter espera a busca nova (não seleciona outro contato).
+          if (podeSelecionar) handleSelect(filteredContacts[highlightedIndex]);
         } else {
           handleCreateNew();
         }
@@ -179,8 +184,9 @@ export const ContactSearchCombobox: React.FC<ContactSearchComboboxProps> = ({
                   <button
                     key={contact.id}
                     type="button"
+                    disabled={!podeSelecionar}
                     onClick={() => handleSelect(contact)}
-                    className={`w-full flex items-center gap-3 p-3 text-left transition-colors ${
+                    className={`w-full flex items-center gap-3 p-3 text-left transition-colors disabled:opacity-50 disabled:cursor-wait ${
                       index === highlightedIndex
                         ? 'bg-primary-50 dark:bg-primary-900/30'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'
