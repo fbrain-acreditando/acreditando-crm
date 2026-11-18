@@ -66,8 +66,12 @@ export function useContatoDoCard(
   if (daLista) return { contato: daLista, carregando: false, erro: false };
   // Regra 3
   if (!listaPronta) return { contato: null, carregando: true, erro: false };
-  // Regras 4 e 5
-  if (consulta.isError) return { contato: null, carregando: false, erro: true };
+  // Regras 4 e 5 — QA 2.75 (LOW-1): erro só conta sem contato já carregado. Se
+  // uma nova busca em segundo plano (Realtime, renomear lead) falhar, o botão
+  // que já funcionava continua; o React Query mantém o último `data`.
+  if (consulta.isError && consulta.data === undefined) {
+    return { contato: null, carregando: false, erro: true };
+  }
   return {
     contato: consulta.data ?? null,
     carregando: consulta.isPending,

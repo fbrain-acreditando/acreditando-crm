@@ -109,12 +109,6 @@ export interface DbCRMCompany {
 }
 
 /**
- * Transforma contato do formato DB para o formato da aplicação.
- * 
- * @param db - Contato no formato do banco.
- * @returns Contato no formato da aplicação.
- */
-/**
  * Story 2.75 (AC8) — quantos ids vão em cada `.in('id', […])`.
  *
  * Medido em produção: 988 ids viram uma URL de ~36,6 mil caracteres e o
@@ -148,6 +142,12 @@ async function buscarPorIdsEmLotes<T extends { id: string }>(
   return { data: [...porId.values()], error: null };
 }
 
+/**
+ * Transforma contato do formato DB para o formato da aplicação.
+ * 
+ * @param db - Contato no formato do banco.
+ * @returns Contato no formato da aplicação.
+ */
 const transformContact = (db: DbContact): Contact => ({
   id: db.id,
   organizationId: db.organization_id,
