@@ -90,6 +90,35 @@ export function inicioDoDiaEmSaoPaulo(agora: Date): string {
   return new Date(`${partes}T00:00:00-03:00`).toISOString();
 }
 
+/** Story 2.77 (D3) — texto da tela quando o WhatsApp recusa o número (inclusive com o 9). */
+export const TEXTO_SEM_WHATSAPP = 'o telefone informado não tem WhatsApp. Confira o número com o lead.';
+
+/**
+ * Story 2.77 (QA MEDIUM-1) — o código HTTP do erro do fornecedor, lido SÓ na posição
+ * em que o provider o escreve (`GPT Maker API request failed: <status> <corpo>` e
+ * `GPT Maker: <status> <corpo>`). Número solto no corpo (`"remaining":450`, HTML de
+ * um 502 citando 404) não é código. Formato desconhecido ⇒ `null`.
+ */
+export function codigoDoErro(erro: string | null | undefined): number | null {
+  const m = String(erro ?? '').match(/(?:request failed|GPT\s*Maker):\s*(\d{3})\b/i);
+  return m ? Number(m[1]) : null;
+}
+
+/** Story 2.77 (QA MEDIUM-2) — só estes códigos querem dizer "o WhatsApp recusou o número". */
+const CODIGOS_DE_RECUSA_DO_NUMERO = new Set([400, 422]);
+
+/**
+ * Story 2.77 (D1) — o fornecedor RECUSOU o número (400/422). Timeout/abort, 5xx,
+ * 401/403 (chave), 404 (canal) e 429 (limite) não contam: ou a mensagem pode ter
+ * saído, ou o problema não é o telefone.
+ */
+export function ehRecusaDoWhatsApp(erro: string | null | undefined): boolean {
+  const msg = String(erro ?? '');
+  if (/abort|timeout|timed out/i.test(msg)) return false;
+  const codigo = codigoDoErro(msg);
+  return codigo !== null && CODIGOS_DE_RECUSA_DO_NUMERO.has(codigo);
+}
+
 /**
  * Motivo curto e sem nome de fornecedor para o toast (AC6). O detalhe técnico
  * fica no log do servidor, nunca na tela.
@@ -97,9 +126,9 @@ export function inicioDoDiaEmSaoPaulo(agora: Date): string {
 export function motivoResumido(erro: string | null | undefined): string {
   const msg = String(erro ?? '');
   if (/abort|timeout|timed out/i.test(msg)) return 'a IA do WhatsApp não respondeu a tempo';
-  const codigo = msg.match(/\b([45]\d{2})\b/)?.[1];
-  if (codigo?.startsWith('4')) return `o WhatsApp recusou o envio (código ${codigo})`;
-  if (codigo?.startsWith('5')) return `a IA do WhatsApp está fora do ar (código ${codigo})`;
+  const codigo = codigoDoErro(msg);
+  if (codigo !== null && codigo >= 400 && codigo < 500) return `o WhatsApp recusou o envio (código ${codigo})`;
+  if (codigo !== null && codigo >= 500 && codigo < 600) return `a IA do WhatsApp está fora do ar (código ${codigo})`;
   return 'falha de comunicação com a IA do WhatsApp';
 }
 

@@ -68,6 +68,7 @@ import { BriefingDrawer } from '@/features/deals/components/BriefingDrawer';
 import { AIExtractedFields } from '@/features/deals/components/AIExtractedFields';
 import { PainelDaNota } from '@/features/deals/components/PainelDaNota';
 import { BotaoConversaDoCard } from '@/features/messaging/components/IniciarConversa/BotaoConversaDoCard';
+import { formatarTelefoneParaExibir } from '@/lib/messaging/iniciar-conversa/telefone';
 
 interface DealDetailModalProps {
   dealId: string | null;
@@ -1017,7 +1018,16 @@ export const DealDetailModal: React.FC<DealDetailModalProps> = ({ dealId, isOpen
                             );
                           })()}
                       </p>
-                      <p className="text-slate-500 text-xs">{deal.contactEmail}</p>
+                      {/* Story 2.77 (D5) — o telefone do contato, para a atendente ver e ligar. */}
+                      <p className="text-slate-500 text-xs flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                        {contact?.id && (
+                          <span className="inline-flex items-center gap-1 select-all" data-testid="telefone-do-contato">
+                            <Phone size={12} aria-hidden="true" />
+                            {formatarTelefoneParaExibir(contact.phone) ?? 'Sem telefone'}
+                          </span>
+                        )}
+                        {deal.contactEmail && <span>{deal.contactEmail}</span>}
+                      </p>
                     </div>
                     {/* Story 2.52 — três estados: sem contato (nada), contato sem
                         conversa ("Iniciar conversa no WhatsApp", com o compositor

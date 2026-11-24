@@ -443,7 +443,10 @@ describe('AC4.3 — falha no disparo', () => {
     const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
     expect(res.status).toBe(502);
     const { error } = await res.json();
-    expect(error).toBe('Não foi possível iniciar a conversa: o WhatsApp recusou o envio (código 400)');
+    // Story 2.77 (D3): recusa 4xx final ⇒ "não tem WhatsApp" (antes: "código 400").
+    expect(error).toBe(
+      'Não foi possível iniciar a conversa: o telefone informado não tem WhatsApp. Confira o número com o lead.'
+    );
     expect(error).not.toMatch(/gpt\s*maker/i);
     expect(conversas()).toHaveLength(0);
     expect(logs('sucesso')).toHaveLength(0);
@@ -759,5 +762,169 @@ describe('AC4.6 — POST /conversations/[id]/assumir', () => {
     expect(meta.humano_falhou).toBe(true);
     expect(meta.assumido_em).toBe(new Date(HOJE).toISOString());
     expect(logs('nao_confirmado')).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// Story 2.77 — recusou ⇒ tenta com o 9 (8 dígitos depois do DDD) ⇒ "não tem WhatsApp"
+// ===========================================================================
+describe('Story 2.77 — telefone sem WhatsApp e a 2ª tentativa com o 9', () => {
+  const TEXTO = 'Não foi possível iniciar a conversa: o telefone informado não tem WhatsApp. Confira o número com o lead.';
+  const recusa = { success: false, error: { code: 'GPTMAKER_ERROR', message: 'GPT Maker: 400 {"error":"x"}', retryable: false } };
+  const ok = { success: true, externalMessageId: 'x', status: 'sent' };
+  const destinos = () => (h.prov.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as { to: string }).to);
+  const semNove = () => {
+    banco.db.tabelas.contacts[0].phone = '+551297534278';
+  };
+
+  it('AC2 — 8 dígitos, 1º recusado, 2º com o 9 sai ⇒ 200, mesma conversa com a chave do 9 e registro com 2 tentativas', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn().mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok);
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(200);
+    expect(destinos()).toEqual(['551297534278', '5512997534278']);
+    expect(conversas()).toHaveLength(1);
+    expect(conversas()[0].external_contact_id).toBe(CHAVE);
+    expect(conversas()[0].metadata.gptmaker_chat_id).toBe(CHAVE);
+    expect(conversas()[0].metadata.gptmaker_phone).toBe('+5512997534278');
+    expect(conversas()[0].metadata.iniciada_pelo_crm).toBe(true);
+    const [log] = logs('sucesso');
+    expect(log.details.com_nono_digito).toBe(true);
+    expect(log.details.tentativas).toEqual([
+      { telefone: '5512****4278', erro: 'o WhatsApp recusou o envio (código 400)' },
+      { telefone: '5512*****4278' },
+    ]);
+    // o startHuman do after() usa a chave nova
+    await rodarDepois();
+    expect(h.prov.startHuman).toHaveBeenCalledWith(CHAVE);
+  });
+
+  it('AC4 — 8 dígitos, as duas recusadas ⇒ 502 "não tem WhatsApp", conversa desfeita, registro mascarado', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'GPT Maker: 400 phone 551297534278 chat 5512997534278', retryable: false },
+    }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe(TEXTO);
+    expect(destinos()).toEqual(['551297534278', '5512997534278']);
+    expect(conversas()).toHaveLength(0);
+    const [log] = logs('erro_envio');
+    expect(log.details.sem_whatsapp).toBe(true);
+    expect(log.details.tentativas).toHaveLength(2);
+    expect(log.details.erro_bruto).toContain('GPT Maker: 400');
+    const registro = JSON.stringify(banco.db.tabelas.audit_logs);
+    expect(registro).not.toContain('551297534278');
+    expect(registro).not.toContain('5512997534278');
+    expect(h.depois).toHaveLength(0);
+  });
+
+  it('AC3 — já com 9 dígitos e recusado ⇒ UM envio e "não tem WhatsApp"', async () => {
+    h.prov.sendMessage = vi.fn(async () => recusa);
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe(TEXTO);
+    expect(destinos()).toEqual(['5512997534278']);
+  });
+
+  it('AC3 — 8 dígitos e TIMEOUT ⇒ um envio só, texto de hoje', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'The operation was aborted', retryable: true },
+    }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe('Não foi possível iniciar a conversa: a IA do WhatsApp não respondeu a tempo');
+    expect(destinos()).toEqual(['551297534278']);
+  });
+
+  it('AC3 — 8 dígitos e 500 ⇒ um envio só, texto de hoje', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'GPT Maker: 503 indisponível', retryable: true },
+    }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect((await res.json()).error).toBe('Não foi possível iniciar a conversa: a IA do WhatsApp está fora do ar (código 503)');
+    expect(destinos()).toEqual(['551297534278']);
+  });
+
+  it('AC6 — o UPDATE da chave falha ⇒ não há 2º envio e o texto é o motivo do 1º erro', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => recusa);
+    banco.db.falharProxima('messaging_conversations', 'update', { message: 'banco ocupado' });
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe('Não foi possível iniciar a conversa: o WhatsApp recusou o envio (código 400)');
+    expect(destinos()).toEqual(['551297534278']);
+    expect(conversas()).toHaveLength(0);
+    expect(logs('erro_envio')[0].details.sem_whatsapp).toBeUndefined();
+  });
+
+  it('o eco chegou apesar da recusa ⇒ não manda de novo: a conversa é real', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async (p: { conversationId: string }) => {
+      banco.db.tabelas.messaging_messages.push({ id: 'eco', conversation_id: p.conversationId });
+      return recusa;
+    });
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect(res.status).toBe(200);
+    expect(destinos()).toEqual(['551297534278']);
+    expect(conversas()).toHaveLength(1);
+  });
+
+  it('QA MEDIUM-2 — 429 (limite) com 8 dígitos ⇒ um envio só e NÃO diz "não tem WhatsApp"', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'GPT Maker API request failed: 429 too many', retryable: false },
+    }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect((await res.json()).error).toBe('Não foi possível iniciar a conversa: o WhatsApp recusou o envio (código 429)');
+    expect(destinos()).toEqual(['551297534278']);
+  });
+
+  it('QA MEDIUM-1 — 500 com "450" no corpo ⇒ um envio só, "fora do ar"', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'GPT Maker API request failed: 500 {"remaining":450}', retryable: true },
+    }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect((await res.json()).error).toBe('Não foi possível iniciar a conversa: a IA do WhatsApp está fora do ar (código 500)');
+    expect(destinos()).toEqual(['551297534278']);
+  });
+
+  it('QA LOW-3 — contagem de mensagens indisponível ⇒ não retenta e não afirma "não tem WhatsApp"', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn(async () => recusa);
+    banco.db.falharProxima('messaging_messages', 'select', { message: 'fora' });
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    expect((await res.json()).error).not.toBe(TEXTO);
+    expect(destinos()).toEqual(['551297534278']);
+  });
+
+  it('QA LOW-4 — telefone FORMATADO no corpo do erro sai mascarado do registro', async () => {
+    h.prov.sendMessage = vi.fn(async () => ({
+      success: false,
+      error: { code: 'X', message: 'GPT Maker: 400 número +55 (12) 99753-4278 inválido', retryable: false },
+    }));
+    await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    const bruto = logs('erro_envio')[0].details.erro_bruto as string;
+    expect(bruto).toContain('5512*****4278');
+    expect(bruto).not.toContain('99753-4278');
+    expect(bruto.length).toBeLessThanOrEqual(120);
+  });
+
+  it('AC5 — depois de sair pelo 9, novo clique no mesmo card ⇒ 409, sem disparo', async () => {
+    semNove();
+    h.prov.sendMessage = vi.fn().mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok);
+    await POST(pedirJson({ dealId: DEAL, text: 'Olá' }));
+    const res = await POST(pedirJson({ dealId: DEAL, text: 'Olá de novo' }));
+    expect(res.status).toBe(409);
+    expect(h.prov.sendMessage).toHaveBeenCalledTimes(2);
+    expect(conversas()).toHaveLength(1);
   });
 });

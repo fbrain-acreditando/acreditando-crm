@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_AUDIO_BYTES,
+  codigoDoErro,
+  ehRecusaDoWhatsApp,
   inicioDoDiaEmSaoPaulo,
   motivoResumido,
   podeComecarCiclo,
@@ -192,5 +194,32 @@ describe('tentarAteConfirmar (AC4.5)', () => {
       },
     });
     expect(res).toEqual({ confirmado: true, ciclos: 2 });
+  });
+});
+
+describe('codigoDoErro / ehRecusaDoWhatsApp (story 2.77, QA MEDIUM-1/2)', () => {
+  it('lê o código só na posição do provider (os dois formatos)', () => {
+    expect(codigoDoErro('GPT Maker API request failed: 400 {"error":"x"}')).toBe(400);
+    expect(codigoDoErro('GPT Maker: 422 bad')).toBe(422);
+    expect(codigoDoErro('algo 400 solto')).toBeNull();
+  });
+  it('🎯 5xx com número 4xx no corpo NÃO é recusa (e o motivo é "fora do ar")', () => {
+    const e1 = 'GPT Maker API request failed: 500 {"remaining":450}';
+    const e2 = 'GPT Maker: 502 <html>erro 404 no proxy</html>';
+    expect(ehRecusaDoWhatsApp(e1)).toBe(false);
+    expect(ehRecusaDoWhatsApp(e2)).toBe(false);
+    expect(motivoResumido(e1)).toBe('a IA do WhatsApp está fora do ar (código 500)');
+  });
+  it('400 e 422 são recusa do número', () => {
+    expect(ehRecusaDoWhatsApp('GPT Maker API request failed: 400 x')).toBe(true);
+    expect(ehRecusaDoWhatsApp('GPT Maker: 422 x')).toBe(true);
+  });
+  it('401, 403, 404 e 429 NÃO são recusa do número (chave, canal, limite)', () => {
+    for (const c of [401, 403, 404, 429]) {
+      expect(ehRecusaDoWhatsApp(`GPT Maker API request failed: ${c} x`)).toBe(false);
+    }
+  });
+  it('timeout nunca é recusa', () => {
+    expect(ehRecusaDoWhatsApp('GPT Maker: 400 The operation was aborted')).toBe(false);
   });
 });
