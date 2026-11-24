@@ -21,13 +21,21 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SendMessageParams, SendMessageResult } from '@/lib/messaging/types';
-import { chavesDaConversa, mascararDigitos, mascararTelefone, normalizarTelefoneWhatsApp } from './telefone';
+import {
+  chavesDaConversa,
+  mascararDigitos,
+  mascararTelefone,
+  normalizarTelefoneWhatsApp,
+  numeroComNonoDigito,
+} from './telefone';
 import {
   ACAO_ASSUMIR,
   ACAO_HUMANO,
   ACAO_INICIAR,
   LIMITE_DIARIO,
   TEXTO_LIMITE_ATINGIDO,
+  TEXTO_SEM_WHATSAPP,
+  ehRecusaDoWhatsApp,
   inicioDoDiaEmSaoPaulo,
   motivoResumido,
   tentarAteConfirmar,
@@ -124,6 +132,19 @@ export async function contarIniciadasHoje(db: SupabaseClient, orgId: string): Pr
     .is('metadata->inicio_falhou', null);
   if (error) throw new Error(`Falha ao contar conversas iniciadas hoje: ${error.message}`);
   return count ?? 0;
+}
+
+/**
+ * Story 2.77 (QA LOW-4) — o corpo do erro do fornecedor para o registro: telefone
+ * também FORMATADO (`+55 11 98765-4321`) vira máscara, e só os primeiros 120
+ * caracteres ficam (o código e o início da mensagem bastam para diagnosticar).
+ */
+export function erroBrutoParaRegistro(erro: string): string {
+  const semTelefone = erro.replace(/\+?\d[\d\s().-]{8,}\d/g, (trecho) => {
+    const digitos = trecho.replace(/\D/g, '');
+    return digitos.length >= 10 ? mascararTelefone(digitos) : trecho;
+  });
+  return mascararDigitos(semTelefone).slice(0, 120);
 }
 
 // =============================================================================
@@ -502,38 +523,113 @@ export async function iniciarConversa(args: {
   }
 
   // ---- 7. Dispara (telefone ⇒ `start-conversation`) ---------------------------
-  let resultado: SendMessageResult;
+  let provedor: ProvedorDeInicio | null = null;
+  let erroAoCriarProvedor = 'erro';
   try {
-    const provedor = await args.criarProvedor(canal);
-    resultado = await provedor.sendMessage({ conversationId, to: digitos, content: conteudoDoEnvio });
+    provedor = await args.criarProvedor(canal);
   } catch (e) {
-    resultado = {
-      success: false,
-      error: { code: 'EXCEPTION', message: e instanceof Error ? e.message : 'erro', retryable: false },
-    };
+    erroAoCriarProvedor = e instanceof Error ? e.message : 'erro';
+  }
+  const disparar = async (para: string): Promise<SendMessageResult> => {
+    if (!provedor) {
+      return { success: false, error: { code: 'EXCEPTION', message: erroAoCriarProvedor, retryable: false } };
+    }
+    try {
+      return await provedor.sendMessage({ conversationId, to: para, content: conteudoDoEnvio });
+    } catch (e) {
+      return {
+        success: false,
+        error: { code: 'EXCEPTION', message: e instanceof Error ? e.message : 'erro', retryable: false },
+      };
+    }
+  };
+  // QA 2.52, achado 4: o erro do fornecedor pode trazer telefone/chatId.
+  const erroDe = (r: SendMessageResult) => mascararDigitos(r.error?.message ?? 'erro desconhecido');
+
+  // Story 2.77 (D4) — cada envio feito, com o telefone mascarado.
+  const tentativas: Array<{ telefone: string; erro?: string }> = [];
+  let resultado = await disparar(digitos);
+  tentativas.push({
+    telefone: telefoneMascarado,
+    ...(resultado.success ? {} : { erro: motivoResumido(erroDe(resultado)) }),
+  });
+
+  // ---- 7b. Story 2.77 (D1/D2) — recusou e tem 8 dígitos depois do DDD ⇒ com o 9 --
+  let comNonoDigito = false;
+  let retentativaBarrada = false;
+  const com9 = numeroComNonoDigito(digitos);
+  if (!resultado.success && com9 && ehRecusaDoWhatsApp(resultado.error?.message)) {
+    // O eco chegou apesar do erro? Então a mensagem saiu: não manda de novo.
+    const mensagens = await contarMensagens(db, conversationId);
+    // QA LOW-3: contagem indisponível ⇒ não retenta E não afirma "sem WhatsApp".
+    if (mensagens === null) retentativaBarrada = true;
+    if (mensagens === 0) {
+      // A mesma conversa pré-gravada passa a ter a chave do número com o 9
+      // (o eco chega com o número que saiu; o passo 3 já procurou as duas formas).
+      const novaChave = `${canalDoFornecedor}-${com9}`;
+      const metadataCom9: Metadata = {
+        ...metadataGravado,
+        gptmaker_chat_id: novaChave,
+        gptmaker_phone: `+${com9}`,
+      };
+      const { data: atualizada, error: erroUpdate } = await db
+        .from('messaging_conversations')
+        .update({ external_contact_id: novaChave, metadata: metadataCom9 })
+        .eq('id', conversationId)
+        .eq('organization_id', orgId)
+        .select('id');
+      if (!erroUpdate && (atualizada?.length ?? 0) > 0) {
+        metadataGravado = metadataCom9;
+        resultado = await disparar(com9);
+        tentativas.push({
+          telefone: mascararTelefone(com9),
+          ...(resultado.success ? {} : { erro: motivoResumido(erroDe(resultado)) }),
+        });
+        comNonoDigito = resultado.success;
+      } else {
+        // AC6: sem a chave nova não dispara — falha com o motivo do 1º erro.
+        retentativaBarrada = true;
+      }
+    }
   }
 
   if (!resultado.success) {
-    // QA 2.52, achado 4: o erro do fornecedor pode trazer telefone/chatId.
-    const erroTecnico = mascararDigitos(resultado.error?.message ?? 'erro desconhecido');
+    const erroTecnico = erroDe(resultado);
     console.error('[iniciar-conversa] envio falhou:', erroTecnico);
     const desfeito = await desfazer(db, orgId, conversationId, metadataGravado, caminhoDoAudio);
 
     if (desfeito !== 'mensagem_saiu') {
+      // D3 — recusa final do WhatsApp ⇒ o número não tem WhatsApp.
+      const semWhatsapp = !retentativaBarrada && ehRecusaDoWhatsApp(resultado.error?.message);
+      const motivo = semWhatsapp ? TEXTO_SEM_WHATSAPP : motivoResumido(erroTecnico);
       await registrar(db, {
         acao: ACAO_INICIAR, orgId, userId, conversationId,
         resultado: desfeito === 'erro_sem_desfazer' ? 'erro_sem_desfazer' : 'erro_envio',
         severidade: 'error',
-        detalhes: { ...base, tipo: conteudo.tipo, desfeito, erro: motivoResumido(erroTecnico) },
+        detalhes: {
+          ...base,
+          tipo: conteudo.tipo,
+          desfeito,
+          erro: motivoResumido(erroTecnico),
+          tentativas,
+          erro_bruto: erroBrutoParaRegistro(erroTecnico),
+          ...(semWhatsapp ? { sem_whatsapp: true } : {}),
+        },
       });
-      return { status: 502, corpo: { error: `Não foi possível iniciar a conversa: ${motivoResumido(erroTecnico)}` } };
+      return { status: 502, corpo: { error: `Não foi possível iniciar a conversa: ${motivo}` } };
     }
     // O eco chegou apesar do erro: a mensagem saiu ⇒ segue como sucesso (AC4.3).
   }
 
   await registrar(db, {
     acao: ACAO_INICIAR, orgId, userId, conversationId, resultado: 'sucesso',
-    detalhes: { ...base, tipo: conteudo.tipo, ...(resultado.success ? {} : { erro_do_fornecedor_com_eco: true }) },
+    detalhes: {
+      ...base,
+      tipo: conteudo.tipo,
+      tentativas,
+      ...(comNonoDigito ? { com_nono_digito: true } : {}),
+      ...(resultado.success ? {} : { erro_do_fornecedor_com_eco: true }),
+    },
   });
 
   return {

@@ -37,6 +37,41 @@ export function normalizarTelefoneWhatsApp(entrada: string | null | undefined): 
 }
 
 /**
+ * Story 2.77 (D1) — a forma com o 9º dígito de um número brasileiro que veio com
+ * **8 dígitos depois do DDD** (`55` + DDD + 8 = 12 dígitos). Devolve `55` + DDD +
+ * `9` + os 8; qualquer outro formato ⇒ `null`.
+ *
+ * É só uma 2ª tentativa de envio (decisão do Filipe, 24/11): fora de SP o WhatsApp
+ * guarda muitos números antigos sem o 9, então o número de 8 dígitos pode estar
+ * certo — por isso o CRM só tenta esta forma depois de o WhatsApp recusar a original.
+ */
+export function numeroComNonoDigito(digitos: string | null | undefined): string | null {
+  const d = String(digitos ?? '').replace(/\D/g, '');
+  if (d.length !== 12 || !d.startsWith('55')) return null;
+  return `${d.slice(0, 4)}9${d.slice(4)}`;
+}
+
+/**
+ * Story 2.77 (D5) — telefone do contato para LER no card.
+ * `+5511999998888` ⇒ `+55 (11) 99999-8888` · 12 dígitos ⇒ `+55 (11) 9999-8888` ·
+ * 10/11 dígitos sem país ⇒ assume Brasil · outro formato ⇒ `+` e os dígitos ·
+ * vazio ⇒ `null`. Não altera nada gravado.
+ */
+export function formatarTelefoneParaExibir(entrada: string | null | undefined): string | null {
+  const bruto = String(entrada ?? '').trim();
+  let d = bruto.replace(/\D/g, '');
+  if (!d) return null;
+  if (!bruto.startsWith('+') && (d.length === 10 || d.length === 11)) d = `55${d}`;
+  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
+    const ddd = d.slice(2, 4);
+    const local = d.slice(4);
+    const corte = local.length - 4;
+    return `+55 (${ddd}) ${local.slice(0, corte)}-${local.slice(corte)}`;
+  }
+  return `+${d}`;
+}
+
+/**
  * Chaves da conversa (`<canal do fornecedor>-<dígitos>`) nas duas formas do mesmo
  * celular — com e sem o 9º dígito. Mesma regra da 2.63 (`variantesDoTelefone`).
  * A primeira é a forma do próprio número.

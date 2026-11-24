@@ -453,6 +453,29 @@ describe('DealDetailModal — o contato do card antigo (story 2.75)', () => {
  * O mock de `useCustomFields` vive aqui em cima (hoisted pelo Vitest) porque o
  * modal só renderiza a seção de campos personalizados quando há definição.
  */
+describe('DealDetailModal — o telefone do contato no card (story 2.77, AC7)', () => {
+  const casos: Array<[string, string]> = [
+    ['+5511987654321', '+55 (11) 98765-4321'],
+    ['+551187654321', '+55 (11) 8765-4321'],
+    ['+351912345678', '+351912345678'],
+    ['', 'Sem telefone'],
+  ];
+  for (const [gravado, visto] of casos) {
+    it(`telefone gravado "${gravado}" ⇒ o card mostra "${visto}", ao lado do e-mail`, () => {
+      contatoDoCard.atual = { contato: { id: 'contact-1', phone: gravado, stage: '' }, carregando: false, erro: false };
+      render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+      expect(screen.getByTestId('telefone-do-contato')).toHaveTextContent(visto);
+      expect(screen.getByText('fulano@example.com')).toBeInTheDocument();
+    });
+  }
+
+  it('sem contato carregado ⇒ nenhuma linha de telefone (nada de "Sem telefone" enganoso)', () => {
+    contatoDoCard.atual = { contato: null, carregando: true, erro: false };
+    render(<DealDetailModal dealId="deal-1" isOpen onClose={() => {}} />);
+    expect(screen.queryByTestId('telefone-do-contato')).toBeNull();
+  });
+});
+
 describe('DealDetailModal — Salvar explícito (story 2.27)', () => {
   it('digitar não grava, e a barra de Salvar aparece só quando há alteração', async () => {
     const user = userEvent.setup();
